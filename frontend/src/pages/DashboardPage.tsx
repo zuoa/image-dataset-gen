@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, LayoutGrid, List, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { listTasks } from "../api/tasks";
+import { listTasks, retryTask } from "../api/tasks";
 import { TaskFilters } from "../components/TaskFilters";
 import { TaskTable } from "../components/TaskTable";
 import { Badge } from "../components/ui/Badge";
@@ -180,12 +180,11 @@ export function DashboardPage() {
         <div className="mt-4 space-y-3">
           {viewMode === "cards"
             ? filteredTasks.map((task) => (
-                <Link
+                <div
                   key={task.id}
-                  to={`/tasks/${task.id}`}
                   className="flex flex-col gap-4 rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 transition hover:border-neutral-300 hover:bg-neutral-200 dark:border-white/12 dark:bg-neutral-900 dark:hover:border-white/20 dark:hover:bg-neutral-800 lg:flex-row lg:items-center lg:justify-between"
                 >
-                  <div>
+                  <Link to={`/tasks/${task.id}`} className="min-w-0 flex-1">
                     <div className="text-lg text-neutral-900 dark:text-white">{task.subject}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge>{formatProviderLabel(task.apiProvider)}</Badge>
@@ -193,8 +192,8 @@ export function DashboardPage() {
                         <Badge key={category}>{category}</Badge>
                       ))}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-8 text-sm text-neutral-500 dark:text-neutral-400">
+                  </Link>
+                  <div className="flex items-center gap-6 text-sm text-neutral-500 dark:text-neutral-400 lg:gap-8">
                     <div>
                       <div>当前样本数</div>
                       <div className="mt-1 text-neutral-900 dark:text-white">{task.sampleCount} 张</div>
@@ -211,9 +210,28 @@ export function DashboardPage() {
                       <div>更新</div>
                       <div className="mt-1 text-neutral-900 dark:text-white">{formatDate(task.updatedAt)}</div>
                     </div>
-                    <ArrowRight className="h-4 w-4 text-neutral-400 dark:text-neutral-500" />
+                    {task.status !== "completed" && task.progressPercent < 100 ? (
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          if (!token) return;
+                          void retryTask(task.id, token).then(() => {
+                            void listTasks(token).then((taskList) => {
+                              setSummary(taskList.summary);
+                              setTasks(taskList.tasks);
+                            });
+                          });
+                        }}
+                      >
+                        {task.status === "running" ? "重新开始" : "继续生成"}
+                      </Button>
+                    ) : (
+                      <Link to={`/tasks/${task.id}`}>
+                        <ArrowRight className="h-4 w-4 text-neutral-400 dark:text-neutral-500" />
+                      </Link>
+                    )}
                   </div>
-                </Link>
+                </div>
               ))
             : null}
 

@@ -695,6 +695,28 @@ export function TaskDetailPage() {
               <div>已消耗 {formatCurrency(task.spentCost)}</div>
               <div>开始于 {formatDate(task.startedAt)}</div>
             </div>
+            {task.status !== "completed" && task.imagesGenerated < task.imageCount ? (
+              <div className="mt-5">
+                <Button
+                  onClick={() => {
+                    if (!token || !taskId) return;
+                    void retryTask(taskId, token)
+                      .then((data) => {
+                        setTask(data.task);
+                        setActionError(null);
+                      })
+                      .catch((error) => setActionError((error as Error).message));
+                  }}
+                >
+                  {task.status === "running" ? "强制重新开始" : "继续生成"}
+                </Button>
+                <p className="mt-2 text-xs text-neutral-400">
+                  {task.status === "running"
+                    ? "任务显示进行中但长时间未更新，可强制重新触发后台生成。"
+                    : "从当前进度继续生成剩余图片。"}
+                </p>
+              </div>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
