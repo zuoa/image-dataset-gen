@@ -323,6 +323,21 @@ def annotate_task(task_id: str):
     action = TaskActionSchema().load(request.get_json() or {})
     task = sync_task_progress(_task_for_user(task_id, user_id))
 
+    # Detect stale running state and reset it so the user can retry
+    annotation = (task.config_json or {}).get("annotation") or {}
+    if annotation.get("status") == "running":
+        updated_at_raw = annotation.get("updatedAt")
+        if updated_at_raw:
+            try:
+                last = datetime.fromisoformat(str(updated_at_raw))
+                if (now_utc() - last).total_seconds() > 600:
+                    annotation["status"] = "failed"
+                    annotation["error"] = "timeout_or_interrupted"
+                    task.config_json = {**(task.config_json or {}), "annotation": annotation}
+                    db.session.commit()
+            except ValueError:
+                pass
+
     vl_config = {
         "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
         "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),

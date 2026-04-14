@@ -995,6 +995,23 @@ export function TaskDetailPage() {
               >
                 {task.config.annotation?.status === "running" ? "标注中..." : "生成 YOLO 标注"}
               </Button>
+              {task.config.annotation?.status === "running" ? (
+                <button
+                  type="button"
+                  className="text-sm text-neutral-500 underline hover:text-neutral-900 dark:hover:text-white"
+                  onClick={() => {
+                    if (!token || !taskId) return;
+                    void annotateTask(taskId, token, confidenceThreshold)
+                      .then((data) => {
+                        setTask(data.task);
+                        setActionError(null);
+                      })
+                      .catch((error) => setActionError((error as Error).message));
+                  }}
+                >
+                  强制重试
+                </button>
+              ) : null}
             </div>
             {task.config.annotation?.status === "running" ? (
               <p className="mt-4 text-sm text-neutral-500">标注任务已在后台开始，完成后会自动刷新结果。</p>
