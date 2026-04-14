@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dataset_gen}
+      POSTGRES_USER: ${POSTGRES_USER:-dataset_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataset_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  annotator:
+    image: ${ANNOTATOR_IMAGE:-ghcr.io/yujian/dataset-gen-annotator:latest}
+    ports:
+      - "8100:8100"
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/yujian/dataset-gen-backend:latest}
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-change-me-please-with-at-least-32-bytes}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-too-with-at-least-32-bytes}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=}
+      DEMO_EMAIL: ${DEMO_EMAIL:-demo@dataset.local}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Dataset123!}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4173}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dataset_user:dataset_pass@db:5432/dataset_gen}
+      AUTO_CREATE_SCHEMA: ${AUTO_CREATE_SCHEMA:-true}
+      ANNOTATOR_URL: ${ANNOTATOR_URL:-http://annotator:8100}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-imagen-4.0-generate-001}
+      GEMINI_PERSON_GENERATION: ${GEMINI_PERSON_GENERATION:-allow_adult}
+      JIMENG_BASE_URL: ${JIMENG_BASE_URL:-https://operator.las.cn-beijing.volces.com/api/v1}
+      JIMENG_IMAGE_MODEL: ${JIMENG_IMAGE_MODEL:-doubao-seedream-3-0-t2i-250415}
+      JIMENG_WATERMARK: ${JIMENG_WATERMARK:-true}
+      IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
+    depends_on:
+      - db
+      - annotator
+    ports:
+      - "8000:8000"
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/yujian/dataset-gen-frontend:latest}
+    depends_on:
+      - backend
+    ports:
+      - "4173:80"
+    volumes:
+      - ./backend/storage/images:/usr/share/nginx/html/images:ro
+
+volumes:
+  postgres_data:
