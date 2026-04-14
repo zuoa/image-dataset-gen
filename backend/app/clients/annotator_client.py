@@ -34,10 +34,14 @@ def annotate_task_images(
         ],
     }
 
+    vl_config = vl_config or {}
+    if vl_config.get("api_key"):
+        return _vl_annotate(task, confidence_threshold, storage_root, vl_config)
+
     if annotator_url:
         return _remote_annotate(payload, annotator_url)
 
-    return _vl_annotate(task, confidence_threshold, storage_root, vl_config or {})
+    return _local_annotate(payload)
 
 
 def _remote_annotate(payload: dict[str, Any], annotator_url: str) -> list[dict[str, Any]]:

@@ -8,7 +8,6 @@ x-backend-env: &backend-env
   DATABASE_URL: ${DATABASE_URL:-sqlite:////app/storage/dataset_gen.db}
   AUTO_CREATE_SCHEMA: ${AUTO_CREATE_SCHEMA:-true}
   STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
-  ANNOTATOR_URL: ${ANNOTATOR_URL:-http://annotator:8100}
   VL_ANNOTATOR_PROVIDER: ${VL_ANNOTATOR_PROVIDER:-gemini}
   VL_ANNOTATOR_MODEL: ${VL_ANNOTATOR_MODEL:-gemini-2.0-flash}
   VL_ANNOTATOR_API_KEY: ${VL_ANNOTATOR_API_KEY:-}
@@ -26,25 +25,6 @@ x-backend-env: &backend-env
   IMAGE_BASE_URL: ${IMAGE_BASE_URL:-http://localhost:4173/images}
 
 services:
-  annotator:
-    image: ${ANNOTATOR_IMAGE:-ghcr.io/zuoa/dataset-gen-annotator:latest}
-    build:
-      context: ./annotator
-    init: true
-    restart: unless-stopped
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8100/health")'
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    ports:
-      - "${ANNOTATOR_PORT:-8100}:8100"
-
   backend:
     image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
     build:
@@ -52,9 +32,6 @@ services:
     init: true
     restart: unless-stopped
     environment: *backend-env
-    depends_on:
-      annotator:
-        condition: service_healthy
     healthcheck:
       test:
         - CMD
