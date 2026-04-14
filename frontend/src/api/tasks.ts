@@ -1,6 +1,7 @@
 import { apiRequest, apiRequestFormData } from "./client";
 import type {
   AugmentationMethod,
+  AugmentationSettings,
   DashboardSummary,
   ModelProfile,
   PromptPreview,
@@ -140,11 +141,12 @@ export function augmentTask(
   token: string,
   multiplier: number,
   methods: AugmentationMethod[],
+  settings: AugmentationSettings,
 ) {
   return apiRequest<{ summary: Record<string, unknown>; task: Task }>(`/tasks/${taskId}/augment`, {
     method: "POST",
     token,
-    body: JSON.stringify({ multiplier, augmentation_methods: methods }),
+    body: JSON.stringify({ multiplier, augmentation_methods: methods, augmentation_settings: settings }),
   });
 }
 

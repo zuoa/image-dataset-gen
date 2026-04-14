@@ -612,7 +612,7 @@ export function TaskWizardPage() {
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      const payload = { ...draft, status };
+      const payload = { ...draft, status: "draft" as const };
       let nextTaskId = taskId;
 
       if (nextTaskId) {

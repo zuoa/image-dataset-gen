@@ -47,6 +47,11 @@ docker compose up --build
 - 邮箱：`demo@dataset.local`
 - 密码：`Dataset123!`
 
+JWT 说明：
+
+- Access token 默认有效期为 7 天
+- 可通过 `JWT_ACCESS_TOKEN_EXPIRES_DAYS` 覆盖
+
 ## 后端说明
 
 - 使用应用工厂模式与 SQLAlchemy 模型层

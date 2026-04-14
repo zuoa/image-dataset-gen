@@ -6,6 +6,7 @@ from PIL import Image
 
 from app import create_app
 from app.config import TestConfig
+from tests.helpers import wait_for_task
 
 
 def _png_bytes() -> bytes:
@@ -57,7 +58,7 @@ def test_export_creates_zip_archive(tmp_path: Path):
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
     ):
         client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
-        client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+        wait_for_task(client, task_id, headers)
 
     exported = client.post(
         f"/api/v1/tasks/{task_id}/export",
@@ -120,7 +121,7 @@ def test_export_uses_manually_updated_annotations(tmp_path: Path):
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
     ):
         client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
-        task = client.get(f"/api/v1/tasks/{task_id}", headers=headers).get_json()["task"]
+        task = wait_for_task(client, task_id, headers)
 
     image_id = task["images"][0]["id"]
     client.patch(

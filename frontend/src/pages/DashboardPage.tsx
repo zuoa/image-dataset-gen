@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, LayoutGrid, List, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { getDashboard, listTasks } from "../api/tasks";
+import { listTasks } from "../api/tasks";
 import { TaskFilters } from "../components/TaskFilters";
 import { TaskTable } from "../components/TaskTable";
 import { Badge } from "../components/ui/Badge";
@@ -28,9 +28,9 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (!token) return;
-    void Promise.all([getDashboard(token), listTasks(token)])
-      .then(([dashboard, taskList]) => {
-        setSummary(dashboard.summary);
+    void listTasks(token)
+      .then((taskList) => {
+        setSummary(taskList.summary);
         setTasks(taskList.tasks);
       })
       .catch(() => {

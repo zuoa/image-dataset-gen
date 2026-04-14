@@ -6,6 +6,7 @@ from PIL import Image
 from app import create_app
 from app.config import TestConfig
 from app.services.annotation_storage import load_annotation_result
+from tests.helpers import wait_for_task
 
 
 def _png_bytes() -> bytes:
@@ -58,8 +59,8 @@ def test_annotation_flow_persists_annotation_files(tmp_path: Path):
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
     ):
         client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
-        task_response = client.get(f"/api/v1/tasks/{task_id}", headers=headers)
-    image_id = task_response.get_json()["task"]["images"][0]["id"]
+        task = wait_for_task(client, task_id, headers)
+    image_id = task["images"][0]["id"]
 
     annotate = client.post(
         f"/api/v1/tasks/{task_id}/annotate",
@@ -120,8 +121,8 @@ def test_manual_annotation_update_persists_to_task_payload(tmp_path: Path):
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
     ):
         client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
-        task_response = client.get(f"/api/v1/tasks/{task_id}", headers=headers)
-    image_id = task_response.get_json()["task"]["images"][0]["id"]
+        task = wait_for_task(client, task_id, headers)
+    image_id = task["images"][0]["id"]
 
     update_response = client.patch(
         f"/api/v1/tasks/{task_id}/images/{image_id}/annotations",

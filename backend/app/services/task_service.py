@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from threading import Lock, Thread
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from flask import current_app
+from flask import Flask, current_app
+from sqlalchemy import case, func, select
 
 from app.clients.gemini_client import (
     GeminiGenerationError,
@@ -104,6 +106,9 @@ PROVIDER_CATALOG = [
     },
 ]
 
+_active_generation_tasks: set[str] = set()
+_active_generation_lock = Lock()
+
 
 def now_utc() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
@@ -113,15 +118,21 @@ class ImageGenerationError(RuntimeError):
     pass
 
 
-def build_task_payload(task: Task) -> dict[str, Any]:
+def build_task_payload(
+    task: Task,
+    *,
+    include_images: bool = True,
+    include_exports: bool = True,
+) -> dict[str, Any]:
     config = task.config_json or {}
     prompt = task.prompt_json or {}
+    sample_count = len(task.images) if include_images else int(task.images_generated or 0)
     return {
         "id": task.id,
         "subject": task.subject,
         "categories": task.categories,
         "imageCount": task.image_count,
-        "sampleCount": len(task.images),
+        "sampleCount": sample_count,
         "status": task.status,
         "progressPercent": task.progress_percent,
         "imagesGenerated": task.images_generated,
@@ -136,9 +147,13 @@ def build_task_payload(task: Task) -> dict[str, Any]:
         "config": config,
         "prompt": prompt,
         "runtime": (config or {}).get("runtime", {}),
-        "images": [build_image_payload(task, image) for image in task.images],
-        "exports": [build_export_payload(export_job) for export_job in task.exports],
+        "images": [build_image_payload(task, image) for image in task.images] if include_images else [],
+        "exports": [build_export_payload(export_job) for export_job in task.exports] if include_exports else [],
     }
+
+
+def build_task_list_payload(task: Task) -> dict[str, Any]:
+    return build_task_payload(task, include_images=False, include_exports=False)
 
 
 def build_image_payload(task: Task, image: TaskImage) -> dict[str, Any]:
@@ -190,6 +205,8 @@ def build_export_payload(export_job: TaskExport) -> dict[str, Any]:
         "summary": export_job.summary_json,
         "createdAt": export_job.created_at.isoformat() if export_job.created_at else None,
     }
+
+
 def build_demo_svg(task: Task, ordinal: int, category: str, variant: dict[str, Any]) -> str:
     label = category.upper()
     subtitle = task.subject[:36]
@@ -213,67 +230,27 @@ def build_demo_svg(task: Task, ordinal: int, category: str, variant: dict[str, A
     return f"data:image/svg+xml;utf8,{quote(svg)}"
 
 
+def enqueue_task_generation(app: Flask, task_id: str) -> bool:
+    with _active_generation_lock:
+        if task_id in _active_generation_tasks:
+            return False
+        _active_generation_tasks.add(task_id)
+
+    thread = Thread(
+        target=_run_task_generation,
+        args=(app, task_id),
+        daemon=True,
+        name=f"task-generation-{task_id}",
+    )
+    thread.start()
+    return True
+
+
 def sync_task_progress(task: Task) -> Task:
-    if task.status != "running" or not task.started_at:
-        return _sync_augmentation_progress(task)
-
-    elapsed_seconds = max(0.0, (now_utc() - task.started_at).total_seconds())
-    existing_count = len(task.images)
-    target_generated = min(task.image_count, max(int(elapsed_seconds / 0.9) + 1, existing_count))
-    generation_limit = max(1, int(task.config_json.get("concurrency", 1)))
-    target_generated = min(target_generated, existing_count + generation_limit)
-
-    if target_generated > existing_count:
-        variants = (task.prompt_json or {}).get("variants") or []
-        categories = task.categories or ["default"]
-        for ordinal in range(existing_count + 1, target_generated + 1):
-            variant = variants[(ordinal - 1) % max(1, len(variants))] if variants else {
-                "seed": 100000 + ordinal,
-                "prompt": (task.prompt_json or {}).get("positive_prompt", task.subject),
-                "diversity_vars": {"composition": "centered composition"},
-            }
-            category = categories[(ordinal - 1) % len(categories)]
-            try:
-                preview, latency_ms = _generate_preview_asset(task, variant, ordinal, category)
-            except ImageGenerationError as exc:
-                task.status = "paused"
-                runtime = {**((task.config_json or {}).get("runtime") or {})}
-                runtime["generationError"] = str(exc)
-                runtime["lastErrorAt"] = now_utc().isoformat()
-                task.config_json = {**(task.config_json or {}), "runtime": runtime}
-                target_generated = len(task.images)
-                break
-            image = TaskImage(
-                task_id=task.id,
-                ordinal=ordinal,
-                seed=variant["seed"],
-                prompt_text=variant["prompt"],
-                diversity_vars=variant["diversity_vars"],
-                latency_ms=latency_ms,
-                preview_svg=preview,
-                annotation_status="pending",
-                confidence_score=round(0.66 + ((ordinal % 8) * 0.03), 2),
-            )
-            db.session.add(image)
-
-    _sync_augmentation_progress_inplace(task)
-    task.images_generated = len(task.images)
-    task.selected_count = sum(1 for image in task.images if image.selected)
-    task.progress_percent = round(target_generated / task.image_count * 100)
-    task.spent_cost = round(estimate_cost(task.config_json) * (target_generated / task.image_count), 2)
-    task.last_synced_at = now_utc()
-
-    if target_generated >= task.image_count:
-        task.status = "completed"
-        task.completed_at = now_utc()
-        task.progress_percent = 100
-
-    db.session.commit()
-    db.session.refresh(task)
-    return task
+    return sync_task_augmentation_progress(task)
 
 
-def _sync_augmentation_progress(task: Task) -> Task:
+def sync_task_augmentation_progress(task: Task) -> Task:
     if not _sync_augmentation_progress_inplace(task):
         return task
 
@@ -323,6 +300,7 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
 
     next_ordinal = max((image.ordinal for image in task.images), default=0) + 1
     methods = [str(method) for method in augmentation.get("methods", [])]
+    settings = augmentation.get("settings") if isinstance(augmentation.get("settings"), dict) else {}
     storage_root = current_app.config["STORAGE_ROOT"]
 
     while completed_images < target_completed:
@@ -335,6 +313,7 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
             f"ordinal-{next_ordinal:06d}",
             methods,
             augmentation_seed,
+            settings,
         )
         if augmented is None:
             augmentation["status"] = "failed"
@@ -373,6 +352,110 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
         augmentation["completedAt"] = now_utc().isoformat()
     task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
     return True
+
+
+def _run_task_generation(app: Flask, task_id: str) -> None:
+    try:
+        with app.app_context():
+            while True:
+                task = db.session.get(Task, task_id)
+                if task is None or task.status != "running":
+                    return
+
+                if len(task.images) >= task.image_count:
+                    _update_generation_metrics(task, len(task.images))
+                    db.session.commit()
+                    return
+
+                try:
+                    _generate_next_task_image(task)
+                    db.session.commit()
+                except ImageGenerationError as exc:
+                    _pause_task_generation(task, str(exc))
+                    db.session.commit()
+                    return
+
+                db.session.remove()
+    except Exception:
+        with app.app_context():
+            app.logger.exception("Background generation failed for task %s", task_id)
+            task = db.session.get(Task, task_id)
+            if task is not None and task.status == "running":
+                _pause_task_generation(task, "background_generation_failed")
+                db.session.commit()
+            db.session.remove()
+    finally:
+        with _active_generation_lock:
+            _active_generation_tasks.discard(task_id)
+
+
+def _generate_next_task_image(task: Task) -> None:
+    existing_count = len(task.images)
+    if existing_count >= task.image_count:
+        _update_generation_metrics(task, existing_count)
+        return
+
+    ordinal = existing_count + 1
+    variant = _variant_for_ordinal(task, ordinal)
+    category = _category_for_ordinal(task, ordinal)
+    preview, latency_ms = _generate_preview_asset(task, variant, ordinal, category)
+    image = TaskImage(
+        task_id=task.id,
+        ordinal=ordinal,
+        seed=variant["seed"],
+        prompt_text=variant["prompt"],
+        diversity_vars=variant["diversity_vars"],
+        latency_ms=latency_ms,
+        preview_svg=preview,
+        annotation_status="pending",
+        confidence_score=round(0.66 + ((ordinal % 8) * 0.03), 2),
+    )
+    db.session.add(image)
+    task.images.append(image)
+    _update_generation_metrics(task, ordinal)
+
+
+def _variant_for_ordinal(task: Task, ordinal: int) -> dict[str, Any]:
+    variants = (task.prompt_json or {}).get("variants") or []
+    if variants:
+        return variants[(ordinal - 1) % max(1, len(variants))]
+    return {
+        "seed": 100000 + ordinal,
+        "prompt": (task.prompt_json or {}).get("positive_prompt", task.subject),
+        "diversity_vars": {"composition": "centered composition"},
+    }
+
+
+def _category_for_ordinal(task: Task, ordinal: int) -> str:
+    categories = task.categories or ["default"]
+    return categories[(ordinal - 1) % len(categories)]
+
+
+def _update_generation_metrics(task: Task, generated_count: int) -> None:
+    effective_image_count = max(int(task.image_count or 0), 1)
+    ratio = min(generated_count, effective_image_count) / effective_image_count
+    task.images_generated = generated_count
+    task.selected_count = sum(1 for image in task.images if image.selected)
+    task.progress_percent = round(ratio * 100)
+    task.spent_cost = round(estimate_cost(task.config_json) * ratio, 2)
+    task.last_synced_at = now_utc()
+
+    if generated_count >= task.image_count:
+        task.status = "completed"
+        task.completed_at = now_utc()
+        task.progress_percent = 100
+    else:
+        task.completed_at = None
+
+
+def _pause_task_generation(task: Task, error_message: str) -> None:
+    runtime = {**((task.config_json or {}).get("runtime") or {})}
+    runtime["generationError"] = error_message
+    runtime["lastErrorAt"] = now_utc().isoformat()
+    task.config_json = {**(task.config_json or {}), "runtime": runtime}
+    task.status = "paused"
+    task.completed_at = None
+    _update_generation_metrics(task, len(task.images))
 
 
 def _generate_preview_asset(task: Task, variant: dict[str, Any], ordinal: int, category: str) -> tuple[str, int]:
@@ -431,16 +514,58 @@ def _generate_jimeng_asset(task: Task, variant: dict[str, Any], ordinal: int) ->
 
 
 def build_dashboard_summary(tasks: list[Task]) -> dict[str, Any]:
-    completed = [task for task in tasks if task.status == "completed"]
-    running = [task for task in tasks if task.status == "running"]
-    total_images = sum(len(task.images) for task in tasks)
+    completed = sum(1 for task in tasks if task.status == "completed")
+    running = sum(1 for task in tasks if task.status == "running")
+    draft = sum(1 for task in tasks if task.status == "draft")
+    total_images = sum(int(task.images_generated or 0) for task in tasks)
+    cost_to_date = round(sum(float(task.spent_cost or 0.0) for task in tasks), 2)
+    return _build_dashboard_summary_payload(
+        total_tasks=len(tasks),
+        running_tasks=running,
+        completed_tasks=completed,
+        draft_tasks=draft,
+        total_images=total_images,
+        cost_to_date=cost_to_date,
+    )
+
+
+def build_dashboard_summary_for_user(user_id: str) -> dict[str, Any]:
+    summary = db.session.execute(
+        select(
+            func.count(Task.id),
+            func.coalesce(func.sum(case((Task.status == "running", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Task.status == "completed", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Task.status == "draft", 1), else_=0)), 0),
+            func.coalesce(func.sum(Task.images_generated), 0),
+            func.coalesce(func.sum(Task.spent_cost), 0.0),
+        ).where(Task.user_id == user_id)
+    ).one()
+    return _build_dashboard_summary_payload(
+        total_tasks=int(summary[0] or 0),
+        running_tasks=int(summary[1] or 0),
+        completed_tasks=int(summary[2] or 0),
+        draft_tasks=int(summary[3] or 0),
+        total_images=int(summary[4] or 0),
+        cost_to_date=round(float(summary[5] or 0.0), 2),
+    )
+
+
+def _build_dashboard_summary_payload(
+    *,
+    total_tasks: int,
+    running_tasks: int,
+    completed_tasks: int,
+    draft_tasks: int,
+    total_images: int,
+    cost_to_date: float,
+) -> dict[str, Any]:
     return {
-        "totalTasks": len(tasks),
-        "runningTasks": len(running),
-        "completedTasks": len(completed),
-        "draftTasks": len([task for task in tasks if task.status == "draft"]),
+        "totalTasks": total_tasks,
+        "runningTasks": running_tasks,
+        "completedTasks": completed_tasks,
+        "draftTasks": draft_tasks,
         "totalImages": total_images,
         "avgCompletionMinutes": 27,
         "successRate": 98.7,
-        "costToDate": round(sum(task.spent_cost for task in tasks), 2),
+        "costToDate": cost_to_date,
     }

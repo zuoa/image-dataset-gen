@@ -27,6 +27,8 @@ from app.services.task_service import (
     build_dashboard_summary,
     build_export_payload,
     build_task_payload,
+    build_task_list_payload,
+    enqueue_task_generation,
     now_utc,
     sync_task_progress,
 )
@@ -72,7 +74,7 @@ def assist_subject():
 def list_tasks():
     user_id = get_jwt_identity()
     tasks = Task.query.filter_by(user_id=user_id).order_by(Task.created_at.desc()).all()
-    hydrated_tasks = [build_task_payload(sync_task_progress(task)) for task in tasks]
+    hydrated_tasks = [build_task_list_payload(task) for task in tasks]
     return jsonify({"tasks": hydrated_tasks, "summary": build_dashboard_summary(tasks)})
 
 
@@ -144,10 +146,15 @@ def update_task(task_id: str):
 def start_task(task_id: str):
     user_id = get_jwt_identity()
     task = _task_for_user(task_id, user_id)
+    runtime = {**((task.config_json or {}).get("runtime") or {})}
+    runtime.pop("generationError", None)
+    runtime["startedAt"] = now_utc().isoformat()
+    task.config_json = {**(task.config_json or {}), "runtime": runtime}
     task.status = "running"
     task.started_at = now_utc()
+    task.completed_at = None
     db.session.commit()
-    task = sync_task_progress(task)
+    enqueue_task_generation(current_app._get_current_object(), task.id)
     return jsonify({"task": build_task_payload(task)})
 
 
@@ -162,8 +169,9 @@ def retry_task(task_id: str):
     task.config_json = {**(task.config_json or {}), "runtime": runtime}
     task.status = "running"
     task.started_at = now_utc()
+    task.completed_at = None
     db.session.commit()
-    task = sync_task_progress(task)
+    enqueue_task_generation(current_app._get_current_object(), task.id)
     return jsonify({"task": build_task_payload(task)})
 
 
@@ -192,6 +200,7 @@ def augment_task(task_id: str):
         "augmentation": {
             "multiplier": action["multiplier"],
             "methods": action["augmentation_methods"],
+            "settings": action["augmentation_settings"],
             "sourceCount": source_count,
             "sourceImageIds": [image.id for image in source_images],
             "estimatedAddedImages": estimated_added_images,

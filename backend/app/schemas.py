@@ -15,9 +15,20 @@ AUGMENTATION_METHODS = (
     "perspective",
 )
 
+
 def _validate_aspect_ratio(value: str) -> None:
     if value not in SUPPORTED_ASPECT_RATIOS:
         raise ValidationError("aspect_ratio must be one of 1:1, 4:3, 3:4, 16:9, 9:16")
+
+
+def _ensure_number(settings: dict[str, object], key: str, min_value: float, max_value: float) -> float:
+    value = settings.get(key)
+    if not isinstance(value, (int, float)):
+        raise ValidationError({key: [f"{key} must be a number"]})
+    value = float(value)
+    if value < min_value or value > max_value:
+        raise ValidationError({key: [f"{key} must be between {min_value} and {max_value}"]})
+    return value
 
 
 class RegisterSchema(Schema):
@@ -105,6 +116,7 @@ class TaskActionSchema(Schema):
         load_default=["flip", "color_jitter", "blur"],
         validate=validate.Length(min=1, max=8),
     )
+    augmentation_settings = fields.Dict(keys=fields.String(), values=fields.Dict(), load_default=dict)
     confidence_threshold = fields.Float(
         load_default=0.6, validate=validate.Range(min=0.3, max=0.95)
     )
@@ -115,6 +127,55 @@ class TaskActionSchema(Schema):
         load_default="keep", validate=validate.OneOf(["keep", "jpg", "png"])
     )
     include_readme = fields.Boolean(load_default=True)
+
+    @validates_schema
+    def validate_augmentation_settings(self, data: dict, **_: object) -> None:
+        settings = data.get("augmentation_settings") or {}
+        if not isinstance(settings, dict):
+            raise ValidationError({"augmentation_settings": ["augmentation_settings must be an object"]})
+
+        errors: dict[str, dict[str, list[str]]] = {}
+        selected_methods = set(data.get("augmentation_methods") or [])
+        for method, method_settings in settings.items():
+            if method not in AUGMENTATION_METHODS:
+                errors[method] = {"_schema": ["unsupported augmentation method"]}
+                continue
+            if method not in selected_methods:
+                continue
+            if not isinstance(method_settings, dict):
+                errors[method] = {"_schema": ["method settings must be an object"]}
+                continue
+
+            try:
+                if method == "flip":
+                    mode = method_settings.get("mode")
+                    if mode is not None and mode not in {"random", "horizontal", "vertical"}:
+                        raise ValidationError({"mode": ["mode must be random, horizontal or vertical"]})
+                elif method == "rotate":
+                    _ensure_number(method_settings, "max_angle", 0, 20)
+                elif method == "crop":
+                    min_scale = _ensure_number(method_settings, "min_scale", 0.6, 0.98)
+                    max_scale = _ensure_number(method_settings, "max_scale", 0.6, 0.99)
+                    if min_scale > max_scale:
+                        raise ValidationError({"max_scale": ["max_scale must be greater than or equal to min_scale"]})
+                elif method == "color_jitter":
+                    _ensure_number(method_settings, "strength", 0, 0.4)
+                elif method == "blur":
+                    _ensure_number(method_settings, "max_radius", 0, 4)
+                elif method == "noise":
+                    _ensure_number(method_settings, "max_sigma", 0, 40)
+                elif method == "occlusion":
+                    min_ratio = _ensure_number(method_settings, "min_ratio", 0.05, 0.35)
+                    max_ratio = _ensure_number(method_settings, "max_ratio", 0.05, 0.4)
+                    if min_ratio > max_ratio:
+                        raise ValidationError({"max_ratio": ["max_ratio must be greater than or equal to min_ratio"]})
+                elif method == "perspective":
+                    _ensure_number(method_settings, "max_warp", 0, 0.15)
+            except ValidationError as exc:
+                errors[method] = exc.normalized_messages()
+
+        if errors:
+            raise ValidationError({"augmentation_settings": errors})
 
 
 class SubjectAssistSchema(Schema):

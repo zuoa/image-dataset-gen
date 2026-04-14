@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 
@@ -25,6 +26,9 @@ def _default_encryption_key() -> str:
 class Config:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-please-change-123456")
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-please-change-123456")
+    JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
+        days=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
+    )
     SQLALCHEMY_DATABASE_URI: str = os.getenv("DATABASE_URL", _default_sqlite_uri())
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:4173")

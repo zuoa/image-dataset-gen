@@ -10,6 +10,21 @@ export type AugmentationMethod =
   | "occlusion"
   | "perspective";
 
+export type AugmentationSettings = {
+  flip: { mode: "random" | "horizontal" | "vertical" };
+  rotate: { max_angle: number };
+  crop: { min_scale: number; max_scale: number };
+  color_jitter: { strength: number };
+  blur: { max_radius: number };
+  noise: { max_sigma: number };
+  occlusion: { min_ratio: number; max_ratio: number };
+  perspective: { max_warp: number };
+};
+
+export type AugmentationSettingsPatch = {
+  [K in keyof AugmentationSettings]?: Partial<AugmentationSettings[K]>;
+};
+
 export type TaskConfig = {
   model_profile_id?: string;
   llm_profile_id?: string;
@@ -135,6 +150,7 @@ export type Task = {
     augmentation?: {
       multiplier: number;
       methods: AugmentationMethod[];
+      settings?: AugmentationSettingsPatch;
       sourceCount: number;
       estimatedAddedImages: number;
       simulatedOutput: number;

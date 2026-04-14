@@ -19,16 +19,32 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
 import { SectionCard } from "../components/ui/SectionCard";
-import type { AugmentationMethod, Task, TaskImage } from "../lib/types";
+import type {
+  AugmentationMethod,
+  AugmentationSettings,
+  AugmentationSettingsPatch,
+  Task,
+  TaskImage,
+} from "../lib/types";
 import { formatCurrency, formatDate, formatProviderLabel } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
 const DEFAULT_BOX_SIZE = 0.22;
 const MIN_BOX_SIZE = 0.04;
 const defaultAugmentationMethods: AugmentationMethod[] = ["flip", "color_jitter", "blur"];
+const defaultAugmentationSettings: AugmentationSettings = {
+  flip: { mode: "random" },
+  rotate: { max_angle: 8 },
+  crop: { min_scale: 0.82, max_scale: 0.94 },
+  color_jitter: { strength: 0.18 },
+  blur: { max_radius: 2.4 },
+  noise: { max_sigma: 28 },
+  occlusion: { min_ratio: 0.14, max_ratio: 0.28 },
+  perspective: { max_warp: 0.08 },
+};
 const augmentationOptions: Array<{ value: AugmentationMethod; label: string; desc: string }> = [
   { value: "flip", label: "翻转", desc: "水平或垂直镜像" },
-  { value: "rotate", label: "旋转", desc: "小角度旋转扰动" },
+  { value: "rotate", label: "旋转", desc: "±8° 以内轻微旋转" },
   { value: "crop", label: "随机裁切", desc: "保留主体的视野变化" },
   { value: "color_jitter", label: "颜色抖动", desc: "亮度饱和度微调" },
   { value: "blur", label: "模糊", desc: "模拟失焦和运动模糊" },
@@ -38,6 +54,44 @@ const augmentationOptions: Array<{ value: AugmentationMethod; label: string; des
 ];
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
+
+function mergeAugmentationSettings(settings?: AugmentationSettingsPatch): AugmentationSettings {
+  return {
+    flip: { ...defaultAugmentationSettings.flip, ...(settings?.flip ?? {}) },
+    rotate: { ...defaultAugmentationSettings.rotate, ...(settings?.rotate ?? {}) },
+    crop: { ...defaultAugmentationSettings.crop, ...(settings?.crop ?? {}) },
+    color_jitter: { ...defaultAugmentationSettings.color_jitter, ...(settings?.color_jitter ?? {}) },
+    blur: { ...defaultAugmentationSettings.blur, ...(settings?.blur ?? {}) },
+    noise: { ...defaultAugmentationSettings.noise, ...(settings?.noise ?? {}) },
+    occlusion: { ...defaultAugmentationSettings.occlusion, ...(settings?.occlusion ?? {}) },
+    perspective: { ...defaultAugmentationSettings.perspective, ...(settings?.perspective ?? {}) },
+  };
+}
+
+function augmentationSettingSummary(method: AugmentationMethod, settings: AugmentationSettings) {
+  if (method === "flip") {
+    return `方向: ${settings.flip.mode === "random" ? "随机" : settings.flip.mode === "horizontal" ? "水平" : "垂直"}`;
+  }
+  if (method === "rotate") {
+    return `最大角度 ±${settings.rotate.max_angle}°`;
+  }
+  if (method === "crop") {
+    return `裁切比例 ${settings.crop.min_scale.toFixed(2)} - ${settings.crop.max_scale.toFixed(2)}`;
+  }
+  if (method === "color_jitter") {
+    return `扰动强度 ${settings.color_jitter.strength.toFixed(2)}`;
+  }
+  if (method === "blur") {
+    return `最大半径 ${settings.blur.max_radius.toFixed(1)}`;
+  }
+  if (method === "noise") {
+    return `最大噪声 ${settings.noise.max_sigma.toFixed(0)}`;
+  }
+  if (method === "occlusion") {
+    return `遮挡比例 ${settings.occlusion.min_ratio.toFixed(2)} - ${settings.occlusion.max_ratio.toFixed(2)}`;
+  }
+  return `透视偏移 ${settings.perspective.max_warp.toFixed(2)}`;
+}
 
 function detectionStyle([xCenter, yCenter, width, height]: [number, number, number, number]) {
   return {
@@ -92,6 +146,7 @@ export function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [multiplier, setMultiplier] = useState(5);
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
+  const [augmentationSettings, setAugmentationSettings] = useState<AugmentationSettings>(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
   const [exportFormat, setExportFormat] = useState<"yolo" | "coco" | "voc" | "csv">("yolo");
   const [exportError, setExportError] = useState<string | null>(null);
@@ -189,9 +244,197 @@ export function TaskDetailPage() {
     setAugmentationMethods(defaultAugmentationMethods);
   }, [task?.config.augmentation?.methods]);
 
+  useEffect(() => {
+    setAugmentationSettings(mergeAugmentationSettings(task?.config.augmentation?.settings));
+  }, [task?.config.augmentation?.settings]);
+
   function toggleAugmentationMethod(method: AugmentationMethod) {
     setAugmentationMethods((current) =>
       current.includes(method) ? current.filter((item) => item !== method) : [...current, method],
+    );
+  }
+
+  function updateAugmentationNumber(
+    method: AugmentationMethod,
+    field: string,
+    value: number,
+  ) {
+    setAugmentationSettings((current) => ({
+      ...current,
+      [method]: {
+        ...current[method],
+        [field]: value,
+      },
+    }));
+  }
+
+  function updateAugmentationText(
+    method: AugmentationMethod,
+    field: string,
+    value: string,
+  ) {
+    setAugmentationSettings((current) => ({
+      ...current,
+      [method]: {
+        ...current[method],
+        [field]: value,
+      },
+    }));
+  }
+
+  function renderAugmentationControls(method: AugmentationMethod) {
+    if (method === "flip") {
+      return (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">翻转方向</div>
+          <Select
+            value={augmentationSettings.flip.mode}
+            onChange={(event) => updateAugmentationText("flip", "mode", event.target.value)}
+          >
+            <option value="random">随机</option>
+            <option value="horizontal">仅水平</option>
+            <option value="vertical">仅垂直</option>
+          </Select>
+        </div>
+      );
+    }
+
+    if (method === "rotate") {
+      return (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大角度</div>
+          <Input
+            type="number"
+            min={0}
+            max={20}
+            step={0.5}
+            value={augmentationSettings.rotate.max_angle}
+            onChange={(event) => updateAugmentationNumber("rotate", "max_angle", Number(event.target.value))}
+          />
+        </div>
+      );
+    }
+
+    if (method === "crop") {
+      return (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div>
+            <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最小保留比例</div>
+            <Input
+              type="number"
+              min={0.6}
+              max={0.98}
+              step={0.01}
+              value={augmentationSettings.crop.min_scale}
+              onChange={(event) => updateAugmentationNumber("crop", "min_scale", Number(event.target.value))}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大保留比例</div>
+            <Input
+              type="number"
+              min={0.6}
+              max={0.99}
+              step={0.01}
+              value={augmentationSettings.crop.max_scale}
+              onChange={(event) => updateAugmentationNumber("crop", "max_scale", Number(event.target.value))}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (method === "color_jitter") {
+      return (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">扰动强度</div>
+          <Input
+            type="number"
+            min={0}
+            max={0.4}
+            step={0.01}
+            value={augmentationSettings.color_jitter.strength}
+            onChange={(event) =>
+              updateAugmentationNumber("color_jitter", "strength", Number(event.target.value))
+            }
+          />
+        </div>
+      );
+    }
+
+    if (method === "blur") {
+      return (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大模糊半径</div>
+          <Input
+            type="number"
+            min={0}
+            max={4}
+            step={0.1}
+            value={augmentationSettings.blur.max_radius}
+            onChange={(event) => updateAugmentationNumber("blur", "max_radius", Number(event.target.value))}
+          />
+        </div>
+      );
+    }
+
+    if (method === "noise") {
+      return (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大噪声强度</div>
+          <Input
+            type="number"
+            min={0}
+            max={40}
+            step={1}
+            value={augmentationSettings.noise.max_sigma}
+            onChange={(event) => updateAugmentationNumber("noise", "max_sigma", Number(event.target.value))}
+          />
+        </div>
+      );
+    }
+
+    if (method === "occlusion") {
+      return (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div>
+            <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最小遮挡比例</div>
+            <Input
+              type="number"
+              min={0.05}
+              max={0.35}
+              step={0.01}
+              value={augmentationSettings.occlusion.min_ratio}
+              onChange={(event) => updateAugmentationNumber("occlusion", "min_ratio", Number(event.target.value))}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大遮挡比例</div>
+            <Input
+              type="number"
+              min={0.05}
+              max={0.4}
+              step={0.01}
+              value={augmentationSettings.occlusion.max_ratio}
+              onChange={(event) => updateAugmentationNumber("occlusion", "max_ratio", Number(event.target.value))}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mt-3">
+        <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-neutral-500">最大透视偏移</div>
+        <Input
+          type="number"
+          min={0}
+          max={0.15}
+          step={0.01}
+          value={augmentationSettings.perspective.max_warp}
+          onChange={(event) => updateAugmentationNumber("perspective", "max_warp", Number(event.target.value))}
+        />
+      </div>
     );
   }
 
@@ -603,7 +846,7 @@ export function TaskDetailPage() {
           <SectionCard>
             <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Augmentation</div>
             <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">数据增强</h3>
-            <p className="mt-4 text-sm text-neutral-500">先选增强方式，再设置扩增倍数。</p>
+            <p className="mt-4 text-sm text-neutral-500">先选增强方式，再设置扩增倍数和每种增强参数。</p>
             <div className="mt-4 flex flex-wrap gap-2">
               {augmentationOptions.map((option) => {
                 const active = augmentationMethods.includes(option.value);
@@ -629,6 +872,10 @@ export function TaskDetailPage() {
                   >
                     <div className="text-neutral-900 dark:text-white">{option.label}</div>
                     <div className="mt-1 text-xs text-neutral-500">{option.desc}</div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      {augmentationSettingSummary(option.value, augmentationSettings)}
+                    </div>
+                    {renderAugmentationControls(option.value)}
                   </div>
                 ))}
             </div>
@@ -644,7 +891,7 @@ export function TaskDetailPage() {
                 disabled={augmentationMethods.length === 0 || selectedOriginalCount === 0 || isAugmenting}
                 onClick={() => {
                   if (!token || !taskId) return;
-                  void augmentTask(taskId, token, multiplier, augmentationMethods)
+                  void augmentTask(taskId, token, multiplier, augmentationMethods, augmentationSettings)
                     .then((data) => {
                       setTask(data.task);
                       setActionError(null);
@@ -678,6 +925,11 @@ export function TaskDetailPage() {
                   基于 {augmentationSummary.sourceCount} 张原始图片，已选 {augmentationSummary.methods.length} 种方式，
                   预计新增 {augmentationSummary.estimatedAddedImages} 张，增强后总量 {augmentationSummary.simulatedOutput} 张。
                 </div>
+                {augmentationSummary.settings ? (
+                  <div className="mt-2 text-xs text-neutral-500">
+                    已保存参数设置，可继续调整后再次运行增强。
+                  </div>
+                ) : null}
                 <div className="mt-2 text-xs text-neutral-500">
                   当前进度 {augmentationSummary.completedImages}/{augmentationSummary.totalImagesToCreate}
                   {typeof augmentationSummary.progressPercent === "number"

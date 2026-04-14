@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app import create_app
 from app.config import TestConfig
+from tests.helpers import wait_for_task
 
 
 def test_unsupported_provider_pauses_task_without_fallback(tmp_path: Path):
@@ -41,7 +42,7 @@ def test_unsupported_provider_pauses_task_without_fallback(tmp_path: Path):
     )
     task_id = create.get_json()["task"]["id"]
     client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
-    task = client.get(f"/api/v1/tasks/{task_id}", headers=headers).get_json()["task"]
+    task = wait_for_task(client, task_id, headers)
 
     assert task["status"] == "paused"
     assert task["imagesGenerated"] == 0
@@ -85,7 +86,10 @@ def test_retry_task_clears_generation_error(tmp_path: Path):
     )
     task_id = create.get_json()["task"]["id"]
     client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
+    wait_for_task(client, task_id, headers)
     retried = client.post(f"/api/v1/tasks/{task_id}/retry", headers=headers, json={})
+    task = wait_for_task(client, task_id, headers)
 
     assert retried.status_code == 200
-    assert retried.get_json()["task"]["status"] == "paused"
+    assert retried.get_json()["task"]["status"] == "running"
+    assert task["status"] == "paused"

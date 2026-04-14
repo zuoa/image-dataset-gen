@@ -1,0 +1,80 @@
+from pathlib import Path
+from threading import Event
+from unittest.mock import patch
+
+from PIL import Image
+
+from app import create_app
+from app.config import TestConfig
+from tests.helpers import wait_for_task
+
+
+def _png_bytes() -> bytes:
+    from io import BytesIO
+
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), color=(255, 255, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_start_task_returns_before_background_generation_completes(tmp_path: Path):
+    class AsyncStartConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(AsyncStartConfig)
+    client = app.test_client()
+
+    register = client.post(
+        "/api/v1/auth/register",
+        json={"email": "async-start@example.com", "password": "Async123!"},
+    )
+    token = register.get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create = client.post(
+        "/api/v1/tasks",
+        headers=headers,
+        json={
+            "subject": "warehouse forklift detection",
+            "categories": ["forklift"],
+            "image_count": 5,
+            "distance": "mid",
+            "angle": "front",
+            "lighting": ["indoor"],
+            "background": ["indoor"],
+            "aspect_ratio": "1:1",
+            "format": "jpg",
+            "style": "realistic",
+            "api_provider": "gemini",
+            "api_key": "demo-api-key",
+            "concurrency": 3,
+            "batch_size": 10,
+            "extra_desc": "",
+        },
+    )
+    task_id = create.get_json()["task"]["id"]
+    first_call_started = Event()
+    release_generation = Event()
+
+    def slow_generate(*args, **kwargs):
+        first_call_started.set()
+        release_generation.wait(timeout=1.0)
+        return {"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"}
+
+    with patch("app.services.task_service.generate_gemini_image", side_effect=slow_generate):
+        started = client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
+        payload = started.get_json()["task"]
+
+        assert started.status_code == 200
+        assert payload["status"] == "running"
+        assert payload["imagesGenerated"] == 0
+
+        first_call_started.wait(timeout=1.0)
+        interim = client.get(f"/api/v1/tasks/{task_id}", headers=headers).get_json()["task"]
+        assert interim["status"] == "running"
+        assert interim["imagesGenerated"] == 0
+
+        release_generation.set()
+        completed = wait_for_task(client, task_id, headers)
+
+    assert completed["imagesGenerated"] >= 1

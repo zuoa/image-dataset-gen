@@ -4,14 +4,14 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
-from app.models import ModelProfile, Task, User
+from app.models import ModelProfile, User
 from app.schemas import ModelProfileSchema
 from app.services.model_profile_service import (
     build_model_profile_payload,
     create_model_profile,
     ensure_default_model_profiles,
 )
-from app.services.task_service import PROVIDER_CATALOG, build_dashboard_summary
+from app.services.task_service import PROVIDER_CATALOG, build_dashboard_summary_for_user
 from app.utils.crypto import encrypt_secret
 
 system_bp = Blueprint("system", __name__)
@@ -26,8 +26,7 @@ def providers():
 @jwt_required()
 def dashboard():
     user_id = get_jwt_identity()
-    tasks = Task.query.filter_by(user_id=user_id).order_by(Task.created_at.desc()).all()
-    return jsonify({"summary": build_dashboard_summary(tasks)})
+    return jsonify({"summary": build_dashboard_summary_for_user(user_id)})
 
 
 @system_bp.get("/model-profiles")
