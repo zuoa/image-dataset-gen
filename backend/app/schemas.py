@@ -105,7 +105,7 @@ class PromptPreviewSchema(Schema):
 
 
 class TaskSchema(PromptPreviewSchema):
-    api_key = fields.String(required=True, validate=validate.Length(min=8, max=255))
+    api_key = fields.String(load_default="", allow_none=True, validate=validate.Length(max=255))
     status = fields.String(load_default="draft")
 
 

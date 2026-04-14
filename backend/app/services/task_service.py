@@ -458,16 +458,33 @@ def _pause_task_generation(task: Task, error_message: str) -> None:
     _update_generation_metrics(task, len(task.images))
 
 
+def _resolve_task_api_key(task: Task, *, fallback_config_key: str = "") -> str | None:
+    if task.api_key_encrypted:
+        try:
+            task_api_key = decrypt_secret(task.api_key_encrypted, current_app.config["ENCRYPTION_KEY"]).strip()
+        except Exception:
+            task_api_key = ""
+        if task_api_key:
+            return task_api_key
+
+    if fallback_config_key:
+        fallback_api_key = str(current_app.config.get(fallback_config_key, "") or "").strip()
+        if fallback_api_key:
+            return fallback_api_key
+
+    return None
+
+
 def _generate_preview_asset(task: Task, variant: dict[str, Any], ordinal: int, category: str) -> tuple[str, int]:
     if task.api_provider == "jimeng":
         return _generate_jimeng_asset(task, variant, ordinal)
     if task.api_provider != "gemini":
         raise ImageGenerationError(f"provider_not_supported:{task.api_provider}")
-    if not task.api_key_encrypted:
+    api_key = _resolve_task_api_key(task, fallback_config_key="GEMINI_API_KEY")
+    if not api_key:
         raise ImageGenerationError("missing_api_key")
 
     try:
-        api_key = decrypt_secret(task.api_key_encrypted, current_app.config["ENCRYPTION_KEY"])
         generated = generate_gemini_image(
             api_key=api_key,
             model=task.config_json.get("provider_model") or current_app.config["GEMINI_IMAGE_MODEL"],

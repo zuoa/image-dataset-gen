@@ -83,6 +83,22 @@ DEFAULT_PROFILE_NAMES = {template["name"] for template in DEFAULT_MODEL_PROFILES
 )
 
 
+def _default_api_key_for_profile(profile_type: str, provider_id: str) -> str:
+    if profile_type == "image" and provider_id == "gemini":
+        return str(current_app.config.get("GEMINI_API_KEY", "") or "")
+    if profile_type == "llm" and provider_id == "openai_compatible":
+        return str(current_app.config.get("OPENAI_COMPAT_API_KEY", "") or "")
+    return ""
+
+
+def _resolved_profile_api_key(profile: ModelProfile) -> str:
+    try:
+        stored_api_key = decrypt_secret(profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"])
+    except Exception:
+        stored_api_key = ""
+    return stored_api_key or _default_api_key_for_profile(profile.profile_type, profile.provider_id)
+
+
 def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
     return {
         "id": profile.id,
@@ -91,7 +107,7 @@ def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
         "providerId": profile.provider_id,
         "baseUrl": profile.base_url,
         "model": profile.model,
-        "apiKey": decrypt_secret(profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"]),
+        "apiKey": _resolved_profile_api_key(profile),
         "concurrency": profile.concurrency,
         "batchSize": profile.batch_size,
         "jimengWatermark": profile.jimeng_watermark,
@@ -102,6 +118,9 @@ def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
 
 
 def create_model_profile(user_id: str, payload: dict[str, Any]) -> ModelProfile:
+    api_key = str(payload.get("api_key") or "") or _default_api_key_for_profile(
+        payload["profile_type"], payload["provider_id"]
+    )
     profile = ModelProfile(
         user_id=user_id,
         profile_type=payload["profile_type"],
@@ -109,7 +128,7 @@ def create_model_profile(user_id: str, payload: dict[str, Any]) -> ModelProfile:
         provider_id=payload["provider_id"],
         base_url=payload.get("base_url"),
         model=payload["model"],
-        api_key_encrypted=encrypt_secret(payload["api_key"], current_app.config["ENCRYPTION_KEY"]),
+        api_key_encrypted=encrypt_secret(api_key, current_app.config["ENCRYPTION_KEY"]),
         concurrency=payload["concurrency"],
         batch_size=payload["batch_size"],
         jimeng_watermark=payload["jimeng_watermark"],
@@ -126,12 +145,7 @@ def ensure_default_model_profiles(user: User) -> None:
         for profile in user.model_profiles:
             legacy_update = LEGACY_DEFAULT_PROFILE_UPDATES.get(profile.name)
             if profile.name in DEFAULT_PROFILE_NAMES:
-                try:
-                    current_api_key = decrypt_secret(
-                        profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"]
-                    )
-                except Exception:
-                    current_api_key = ""
+                current_api_key = _resolved_profile_api_key(profile)
                 if current_api_key == "demo-api-key":
                     profile.api_key_encrypted = encrypt_secret(
                         "", current_app.config["ENCRYPTION_KEY"]

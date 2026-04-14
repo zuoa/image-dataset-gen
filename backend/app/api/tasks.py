@@ -23,6 +23,7 @@ from app.services.export_service import build_export_archive, get_archive_path
 from app.services.image_storage import existing_generated_image, normalize_uploaded_image, preview_data_url, save_generated_image
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.services.subject_assist_service import suggest_subject_fields
+from app.services.model_profile_service import _resolved_profile_api_key
 from app.services.task_service import (
     build_dashboard_summary,
     build_export_payload,
@@ -62,7 +63,7 @@ def assist_subject():
 
     suggestions = suggest_subject_fields(
         base_url=llm_profile.base_url or current_app.config["OPENAI_COMPAT_BASE_URL"],
-        api_key=decrypt_secret(llm_profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"]),
+        api_key=_resolved_profile_api_key(llm_profile),
         model=llm_profile.model,
         subject=payload["subject"],
     )

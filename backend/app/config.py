@@ -39,6 +39,7 @@ class Config:
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_IMAGE_MODEL: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GEMINI_PERSON_GENERATION: str = os.getenv("GEMINI_PERSON_GENERATION", "allow_adult")
     JIMENG_BASE_URL: str = os.getenv(
@@ -46,6 +47,7 @@ class Config:
     )
     JIMENG_IMAGE_MODEL: str = os.getenv("JIMENG_IMAGE_MODEL", "doubao-seedream-3-0-t2i-250415")
     JIMENG_WATERMARK: bool = os.getenv("JIMENG_WATERMARK", "true").lower() == "true"
+    OPENAI_COMPAT_API_KEY: str = os.getenv("OPENAI_COMPAT_API_KEY", "")
     OPENAI_COMPAT_BASE_URL: str = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")
     OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "deepseek-chat")
     IMAGE_BASE_URL: str = os.getenv("IMAGE_BASE_URL", "")

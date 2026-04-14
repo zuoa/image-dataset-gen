@@ -2,18 +2,20 @@ x-backend-env: &backend-env
   SECRET_KEY: ${SECRET_KEY:-change-me-please-with-at-least-32-bytes}
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-too-with-at-least-32-bytes}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=}
-  DEMO_EMAIL: ${DEMO_EMAIL:-demo@dataset.local}
+  DEMO_EMAIL: ${DEMO_EMAIL:-demo@codvision}
   DEMO_PASSWORD: ${DEMO_PASSWORD:-Dataset123!}
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4173}
   DATABASE_URL: ${DATABASE_URL:-sqlite:////app/storage/dataset_gen.db}
   AUTO_CREATE_SCHEMA: ${AUTO_CREATE_SCHEMA:-true}
   STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
   ANNOTATOR_URL: ${ANNOTATOR_URL:-http://annotator:8100}
-  GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-imagen-4.0-generate-001}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image-preview}
   GEMINI_PERSON_GENERATION: ${GEMINI_PERSON_GENERATION:-allow_adult}
   JIMENG_BASE_URL: ${JIMENG_BASE_URL:-https://operator.las.cn-beijing.volces.com/api/v1}
   JIMENG_IMAGE_MODEL: ${JIMENG_IMAGE_MODEL:-doubao-seedream-3-0-t2i-250415}
   JIMENG_WATERMARK: ${JIMENG_WATERMARK:-true}
+  OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
   OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-https://api.deepseek.com/v1}
   OPENAI_COMPAT_MODEL: ${OPENAI_COMPAT_MODEL:-deepseek-chat}
   IMAGE_BASE_URL: ${IMAGE_BASE_URL:-http://localhost:4173/images}
