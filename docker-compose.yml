@@ -20,7 +20,7 @@ x-backend-env: &backend-env
 
 services:
   annotator:
-    image: ${ANNOTATOR_IMAGE:-ghcr.io/yujian/dataset-gen-annotator:latest}
+    image: ${ANNOTATOR_IMAGE:-ghcr.io/zuoa/dataset-gen-annotator:latest}
     build:
       context: ./annotator
     init: true
@@ -39,7 +39,7 @@ services:
       - "${ANNOTATOR_PORT:-8100}:8100"
 
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/yujian/dataset-gen-backend:latest}
+    image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
     build:
       context: ./backend
     init: true
@@ -65,7 +65,7 @@ services:
       - generated_images:/app/storage/images
 
   frontend:
-    image: ${FRONTEND_IMAGE:-ghcr.io/yujian/dataset-gen-frontend:latest}
+    image: ${FRONTEND_IMAGE:-ghcr.io/zuoa/dataset-gen-frontend:latest}
     build:
       context: ./frontend
       args:
