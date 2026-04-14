@@ -21,6 +21,13 @@ DEFAULT_PIXEL_SIZE_BY_RATIO = {
 }
 
 
+def _build_opener(proxy_url: str) -> request.OpenerDirector:
+    if proxy_url:
+        handler = request.ProxyHandler({"https": proxy_url, "http": proxy_url})
+        return request.build_opener(handler)
+    return request.build_opener()
+
+
 def generate_image(
     *,
     api_key: str,
@@ -28,6 +35,7 @@ def generate_image(
     prompt: str,
     aspect_ratio: str,
     person_generation: str,
+    proxy_url: str = "",
 ) -> dict[str, Any]:
     if model.startswith("gemini-"):
         return _generate_gemini_native_image(
@@ -35,6 +43,7 @@ def generate_image(
             model=model,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
+            proxy_url=proxy_url,
         )
 
     body = {
@@ -56,7 +65,7 @@ def generate_image(
     )
 
     try:
-        with request.urlopen(http_request, timeout=45) as response:
+        with _build_opener(proxy_url).open(http_request, timeout=45) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -87,6 +96,7 @@ def _generate_gemini_native_image(
     model: str,
     prompt: str,
     aspect_ratio: str,
+    proxy_url: str = "",
 ) -> dict[str, Any]:
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -108,7 +118,7 @@ def _generate_gemini_native_image(
     )
 
     try:
-        with request.urlopen(http_request, timeout=45) as response:
+        with _build_opener(proxy_url).open(http_request, timeout=45) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")

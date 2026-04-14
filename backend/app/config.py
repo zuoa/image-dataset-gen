@@ -54,6 +54,7 @@ class Config:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_IMAGE_MODEL: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GEMINI_PERSON_GENERATION: str = os.getenv("GEMINI_PERSON_GENERATION", "allow_adult")
+    GEMINI_HTTP_PROXY: str = os.getenv("GEMINI_HTTP_PROXY", "")
     JIMENG_BASE_URL: str = os.getenv(
         "JIMENG_BASE_URL", "https://operator.las.cn-beijing.volces.com/api/v1"
     )

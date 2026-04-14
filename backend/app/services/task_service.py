@@ -491,6 +491,7 @@ def _generate_preview_asset(task: Task, variant: dict[str, Any], ordinal: int, c
             prompt=variant["prompt"],
             aspect_ratio=normalize_aspect_ratio(task.config_json.get("aspect_ratio", "1:1")),
             person_generation=current_app.config["GEMINI_PERSON_GENERATION"],
+            proxy_url=current_app.config.get("GEMINI_HTTP_PROXY", ""),
         )
         save_generated_image(
             current_app.config["STORAGE_ROOT"],

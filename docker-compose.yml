@@ -12,6 +12,7 @@ x-backend-env: &backend-env
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image-preview}
   GEMINI_PERSON_GENERATION: ${GEMINI_PERSON_GENERATION:-allow_adult}
+  GEMINI_HTTP_PROXY: ${GEMINI_HTTP_PROXY:-}
   JIMENG_BASE_URL: ${JIMENG_BASE_URL:-https://operator.las.cn-beijing.volces.com/api/v1}
   JIMENG_IMAGE_MODEL: ${JIMENG_IMAGE_MODEL:-doubao-seedream-3-0-t2i-250415}
   JIMENG_WATERMARK: ${JIMENG_WATERMARK:-true}
