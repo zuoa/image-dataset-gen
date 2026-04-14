@@ -56,7 +56,6 @@ class ModelProfileSchema(Schema):
 
 
 class PromptPreviewSchema(Schema):
-    task_name = fields.String(load_default="")
     subject = fields.String(required=True, validate=validate.Length(min=3, max=200))
     categories = fields.List(fields.String(), required=True, validate=validate.Length(min=1))
     image_count = fields.Integer(required=True, validate=validate.Range(min=5, max=500))

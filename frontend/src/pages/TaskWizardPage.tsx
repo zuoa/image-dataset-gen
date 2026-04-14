@@ -6,6 +6,7 @@ import { assistSubject, createTask, getProviders, previewPrompt, startTask, upda
 import { PromptPreviewCard } from "../components/PromptPreviewCard";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 import { SectionCard } from "../components/ui/SectionCard";
 import { Textarea } from "../components/ui/Textarea";
 import { defaultTaskConfig, wizardSteps } from "../lib/constants";
@@ -199,7 +200,7 @@ export function TaskWizardPage() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      localStorage.setItem("image-dataset-gen-draft-timestamp", new Date().toISOString());
+      localStorage.setItem("dataset-gen-draft-timestamp", new Date().toISOString());
     }, 30000);
     return () => window.clearTimeout(timeout);
   }, [draft]);
@@ -267,7 +268,6 @@ export function TaskWizardPage() {
                         llm_profile_id: activeLlmProfile.id,
                         categories: suggestion.categories,
                         extra_desc: suggestion.extra_desc,
-                        task_name: draft.task_name || suggestion.task_name || draft.task_name,
                         llm_enhanced: true,
                       });
                     })
@@ -281,8 +281,7 @@ export function TaskWizardPage() {
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
               <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
                 <span className="text-neutral-900 dark:text-white">大语言模型配置</span>
-                <select
-                  className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+                <Select
                   value={activeLlmProfile?.id ?? ""}
                   onChange={(event) => setDraft({ llm_profile_id: event.target.value })}
                 >
@@ -291,7 +290,7 @@ export function TaskWizardPage() {
                       {profile.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <Link to="/models">
                 <Button variant="ghost" type="button">
@@ -346,20 +345,18 @@ export function TaskWizardPage() {
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
             拍摄距离
-            <select
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+            <Select
               value={draft.distance}
               onChange={(event) => setDraft({ distance: event.target.value as typeof draft.distance })}
             >
               <option value="close">近景</option>
               <option value="mid">中景</option>
               <option value="far">远景</option>
-            </select>
+            </Select>
           </label>
           <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
             视角
-            <select
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+            <Select
               value={draft.angle}
               onChange={(event) => setDraft({ angle: event.target.value as typeof draft.angle })}
             >
@@ -368,7 +365,7 @@ export function TaskWizardPage() {
               <option value="top">俯视</option>
               <option value="bottom">仰视</option>
               <option value="random">随机</option>
-            </select>
+            </Select>
           </label>
 
           <div>
@@ -380,7 +377,7 @@ export function TaskWizardPage() {
               {lightingOptions.map((option) => (
                 <button
                   key={option.value}
-                  className={`rounded-full border px-3 py-2 text-sm transition ${draft.lighting.includes(option.value) ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300"}`}
+                  className={`rounded-full border px-3 py-2 text-sm transition ${draft.lighting.includes(option.value) ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300 dark:hover:border-white/20 dark:hover:bg-white/[0.04]"}`}
                   onClick={() => setDraft({ lighting: toggleValue(draft.lighting, option.value) })}
                   type="button"
                 >
@@ -399,7 +396,7 @@ export function TaskWizardPage() {
               {backgroundOptions.map((option) => (
                 <button
                   key={option.value}
-                  className={`rounded-full border px-3 py-2 text-sm transition ${draft.background.includes(option.value) ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300"}`}
+                  className={`rounded-full border px-3 py-2 text-sm transition ${draft.background.includes(option.value) ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300 dark:hover:border-white/20 dark:hover:bg-white/[0.04]"}`}
                   onClick={() => setDraft({ background: toggleValue(draft.background, option.value) })}
                   type="button"
                 >
@@ -426,11 +423,11 @@ export function TaskWizardPage() {
                   <button
                     key={option.value}
                     type="button"
-                    className={`rounded-[22px] border px-4 py-4 text-left transition ${active ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black" : "border-neutral-200 bg-white text-neutral-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"}`}
+                    className={`rounded-[22px] border px-4 py-4 text-left transition ${active ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950" : "border-neutral-200 bg-white text-neutral-700 dark:border-white/10 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-white/20 dark:hover:bg-white/[0.04]"}`}
                     onClick={() => setDraft({ aspect_ratio: option.value })}
                   >
                     <div className="text-base font-medium">{option.label}</div>
-                    <div className={`mt-1 text-xs ${active ? "text-white/75 dark:text-black/65" : "text-neutral-500 dark:text-neutral-400"}`}>
+                    <div className={`mt-1 text-xs ${active ? "text-white/75 dark:text-neutral-700" : "text-neutral-500 dark:text-neutral-400"}`}>
                       {option.caption}
                     </div>
                   </button>
@@ -443,25 +440,23 @@ export function TaskWizardPage() {
             <span className="block text-xs leading-6 text-neutral-500">
               部分 Provider 会限制格式。
             </span>
-            <select
+            <Select
               id="format"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
               value={draft.format}
               disabled={draft.api_provider === "jimeng"}
               onChange={(event) => setDraft({ format: event.target.value as typeof draft.format })}
             >
               <option value="jpg">JPG</option>
               <option value="png">PNG</option>
-            </select>
+            </Select>
           </label>
           <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
             <span className="text-neutral-900 dark:text-white">视觉风格</span>
             <span className="block text-xs leading-6 text-neutral-500">
               会直接写入 Prompt。
             </span>
-            <select
+            <Select
               id="style"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
               value={draft.style}
               onChange={(event) => setDraft({ style: event.target.value as typeof draft.style })}
             >
@@ -470,7 +465,7 @@ export function TaskWizardPage() {
               <option value="sketch">素描</option>
               <option value="3d">3D</option>
               <option value="cartoon">卡通</option>
-            </select>
+            </Select>
           </label>
         </div>
       );
@@ -484,9 +479,8 @@ export function TaskWizardPage() {
             <span className="block text-xs leading-6 text-neutral-500">
               flow 里只做选择，Provider、模型版本、API Key 和运行参数统一在模型管理页维护。
             </span>
-            <select
+            <Select
               id="model-profile"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
               value={activeProfile?.id ?? ""}
               onChange={(event) => {
                 const nextProfile = modelProfiles.find((profile) => profile.id === event.target.value);
@@ -499,7 +493,7 @@ export function TaskWizardPage() {
                   {profile.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
 
           {activeProfile ? (
@@ -670,10 +664,10 @@ export function TaskWizardPage() {
                 onClick={() => startTransition(() => setCurrentStep(index))}
                 className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm transition ${
                   active
-                    ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black"
+                    ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950"
                     : completed
-                      ? "border-neutral-200 bg-neutral-100 text-neutral-900 dark:border-white/20 dark:bg-white/[0.08] dark:text-white"
-                      : "border-neutral-100 bg-white text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400 dark:hover:border-white/20 dark:hover:text-white"
+                      ? "border-neutral-200 bg-neutral-100 text-neutral-900 dark:border-white/12 dark:bg-neutral-900 dark:text-white"
+                      : "border-neutral-100 bg-white text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400 dark:hover:border-white/20 dark:hover:bg-white/[0.04] dark:hover:text-white"
                 }`}
               >
                 <span className="text-xs">{index + 1}</span>

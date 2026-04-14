@@ -28,8 +28,8 @@ export function TaskTable({
   onSortChange,
 }: TaskTableProps) {
   return (
-    <div className="overflow-hidden rounded-[24px] border border-neutral-200 dark:border-white/10">
-      <div className="hidden grid-cols-[1.8fr_0.9fr_0.9fr_0.8fr] gap-4 border-b border-neutral-200 bg-white px-5 py-4 text-xs uppercase tracking-[0.24em] text-neutral-500 dark:border-white/10 dark:bg-white/[0.03] lg:grid">
+    <div className="overflow-hidden rounded-[24px] border border-neutral-200 dark:border-white/12 dark:bg-neutral-900">
+      <div className="hidden grid-cols-[1.8fr_0.9fr_0.9fr_0.8fr] gap-4 border-b border-neutral-200 bg-white px-5 py-4 text-xs uppercase tracking-[0.24em] text-neutral-500 dark:border-white/12 dark:bg-neutral-900 lg:grid">
         {headers.map((header) => (
           <button
             key={header.key}
@@ -54,11 +54,11 @@ export function TaskTable({
           <Link
             key={task.id}
             to={`/tasks/${task.id}`}
-            className="grid gap-4 px-5 py-4 transition hover:bg-neutral-100 dark:hover:bg-white/[0.03] lg:grid-cols-[1.8fr_0.9fr_0.9fr_0.8fr] lg:items-center"
+            className="grid gap-4 px-5 py-4 transition hover:bg-neutral-100 dark:hover:bg-neutral-800 lg:grid-cols-[1.8fr_0.9fr_0.9fr_0.8fr] lg:items-center"
           >
             <div>
-              <div className="text-base text-neutral-900 dark:text-white">{task.taskName}</div>
-              <div className="mt-1 text-xs text-neutral-500">数据集数量 {task.imageCount} 张</div>
+              <div className="text-base text-neutral-900 dark:text-white">{task.subject}</div>
+              <div className="mt-1 text-xs text-neutral-500">当前样本数 {task.sampleCount} 张</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Badge>{formatProviderLabel(task.apiProvider)}</Badge>
                 {task.categories.slice(0, 3).map((category) => (

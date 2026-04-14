@@ -8,6 +8,7 @@ import { TaskTable } from "../components/TaskTable";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
+import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
 import type { DashboardSummary, Task } from "../lib/types";
 import { formatCurrency, formatDate, formatProviderLabel } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
@@ -54,7 +55,6 @@ export function DashboardPage() {
       const matchesStatus = statusFilter === "all" || task.status === statusFilter;
       const matchesSearch =
         needle.length === 0 ||
-        task.taskName.toLowerCase().includes(needle) ||
         task.subject.toLowerCase().includes(needle) ||
         task.categories.some((category) => category.toLowerCase().includes(needle));
       return matchesProvider && matchesStatus && matchesSearch;
@@ -102,11 +102,16 @@ export function DashboardPage() {
       <SectionCard className="overflow-hidden">
         <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
           <div>
-            <Badge>Dataset Forge</Badge>
+            <div className="text-xs uppercase tracking-[0.35em] text-neutral-400 dark:text-neutral-500">
+              Synthetic Vision Ops Platform
+            </div>
             <h2 className="mt-6 max-w-3xl text-4xl font-medium leading-tight text-neutral-900 dark:text-white">
-              把合成数据集生产变成一个可编排、可追踪、可导出的流水线。
+              Dataset Forge
             </h2>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+            <p className="mt-4 max-w-2xl text-xl leading-9 text-neutral-700 dark:text-neutral-200">
+              用结构化工作流压缩图像数据集生产周期。
+            </p>
+            <p className="mt-6 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
               当前实现覆盖任务配置、Prompt 生成、模拟图像产出、增强/标注/导出工作流，便于继续替换真实 API 与推理服务。
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -122,7 +127,10 @@ export function DashboardPage() {
 
           <div className="grid grid-cols-2 gap-3">
             {metrics.map((metric) => (
-              <div key={metric.label} className="rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
+              <div
+                key={metric.label}
+                className="rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-white/12 dark:bg-neutral-900 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+              >
                 <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">{metric.label}</div>
                 <div className="mt-3 text-3xl text-neutral-900 dark:text-white">{metric.value}</div>
               </div>
@@ -138,16 +146,16 @@ export function DashboardPage() {
             <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">最近任务</h3>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex rounded-full border border-neutral-200 bg-neutral-100 p-1 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className={segmentedGroupClasses}>
               <button
-                className={`rounded-full px-3 py-2 text-sm transition ${viewMode === "cards" ? "bg-neutral-900 text-white dark:bg-white dark:text-black" : "text-neutral-500 dark:text-neutral-400"}`}
+                className={segmentedButtonClasses(viewMode === "cards", "px-3 py-2")}
                 onClick={() => setViewMode("cards")}
                 type="button"
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
               <button
-                className={`rounded-full px-3 py-2 text-sm transition ${viewMode === "table" ? "bg-neutral-900 text-white dark:bg-white dark:text-black" : "text-neutral-500 dark:text-neutral-400"}`}
+                className={segmentedButtonClasses(viewMode === "table", "px-3 py-2")}
                 onClick={() => setViewMode("table")}
                 type="button"
               >
@@ -175,10 +183,10 @@ export function DashboardPage() {
                 <Link
                   key={task.id}
                   to={`/tasks/${task.id}`}
-                  className="flex flex-col gap-4 rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 transition hover:border-neutral-300 hover:bg-neutral-200 dark:border-white/10 dark:bg-black/30 dark:hover:border-white/20 dark:hover:bg-black/45 lg:flex-row lg:items-center lg:justify-between"
+                  className="flex flex-col gap-4 rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 transition hover:border-neutral-300 hover:bg-neutral-200 dark:border-white/12 dark:bg-neutral-900 dark:hover:border-white/20 dark:hover:bg-neutral-800 lg:flex-row lg:items-center lg:justify-between"
                 >
                   <div>
-                    <div className="text-lg text-neutral-900 dark:text-white">{task.taskName}</div>
+                    <div className="text-lg text-neutral-900 dark:text-white">{task.subject}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge>{formatProviderLabel(task.apiProvider)}</Badge>
                       {task.categories.map((category) => (
@@ -188,8 +196,8 @@ export function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-8 text-sm text-neutral-500 dark:text-neutral-400">
                     <div>
-                      <div>数据集数量</div>
-                      <div className="mt-1 text-neutral-900 dark:text-white">{task.imageCount} 张</div>
+                      <div>当前样本数</div>
+                      <div className="mt-1 text-neutral-900 dark:text-white">{task.sampleCount} 张</div>
                     </div>
                     <div>
                       <div>状态</div>
@@ -219,7 +227,7 @@ export function DashboardPage() {
           ) : null}
 
           {filteredTasks.length === 0 ? (
-            <div className="rounded-[24px] border border-dashed border-neutral-200 p-8 text-center text-sm text-neutral-500 dark:border-white/10">
+            <div className="rounded-[24px] border border-dashed border-neutral-200 p-8 text-center text-sm text-neutral-500 dark:border-white/12 dark:bg-neutral-900/60 dark:text-neutral-400">
               当前筛选条件下没有任务。
             </div>
           ) : null}

@@ -4,10 +4,13 @@ import { Link } from "react-router-dom";
 import { getProviders } from "../api/tasks";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 import { SectionCard } from "../components/ui/SectionCard";
+import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
 import { Textarea } from "../components/ui/Textarea";
 import { filterModelProfilesByType, getFallbackModelProfile } from "../lib/modelProfiles";
 import type { ModelProfile, ModelProfileType, ProviderInfo } from "../lib/types";
+import { generateLocalId } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { useModelProfilesStore } from "../store/modelProfiles";
 
@@ -21,7 +24,7 @@ function createDraftProfile(
 ): ModelProfile {
   const fallback = getFallbackModelProfile(profileType);
   return {
-    id: base?.id ?? crypto.randomUUID(),
+    id: base?.id ?? generateLocalId("model-profile"),
     profileType,
     name: base?.name ?? "",
     providerId: base?.providerId ?? fallback.providerId,
@@ -180,17 +183,17 @@ export function ModelManagementPage() {
               统一维护图像生成模型和大语言模型。任务 flow 里只做选择，不再手填底层接口参数。
             </p>
           </div>
-          <div className="flex gap-3 rounded-full border border-neutral-200 bg-neutral-100 p-1 dark:border-white/10 dark:bg-white/[0.03]">
+          <div className={segmentedGroupClasses}>
             <button
               type="button"
-              className={`rounded-full px-4 py-2 text-sm transition ${activeTab === "image" ? "bg-neutral-900 text-white dark:bg-white dark:text-black" : "text-neutral-500 dark:text-neutral-400"}`}
+              className={segmentedButtonClasses(activeTab === "image")}
               onClick={() => handleTabChange("image")}
             >
               图像生成
             </button>
             <button
               type="button"
-              className={`rounded-full px-4 py-2 text-sm transition ${activeTab === "llm" ? "bg-neutral-900 text-white dark:bg-white dark:text-black" : "text-neutral-500 dark:text-neutral-400"}`}
+              className={segmentedButtonClasses(activeTab === "llm")}
               onClick={() => handleTabChange("llm")}
             >
               大语言模型
@@ -220,12 +223,12 @@ export function ModelManagementPage() {
                   }}
                   className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
                     isActive
-                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black"
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950"
                       : "border-neutral-200 bg-neutral-100 text-neutral-700 hover:border-neutral-300 hover:bg-white dark:border-white/10 dark:bg-black/20 dark:text-neutral-200 dark:hover:border-white/20 dark:hover:bg-black/30"
                   }`}
                 >
                   <div className="text-sm">{profile.name}</div>
-                  <div className={`mt-2 text-xs ${isActive ? "text-white/75 dark:text-black/70" : "text-neutral-500 dark:text-neutral-400"}`}>
+                  <div className={`mt-2 text-xs ${isActive ? "text-white/75 dark:text-neutral-700" : "text-neutral-500 dark:text-neutral-400"}`}>
                     {profile.providerId} · {profile.model}
                   </div>
                 </button>
@@ -261,8 +264,7 @@ export function ModelManagementPage() {
 
             <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
               <span className="text-neutral-900 dark:text-white">Provider</span>
-              <select
-                className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+              <Select
                 value={draftProfile.providerId}
                 onChange={(event) => handleProviderChange(event.target.value)}
               >
@@ -271,7 +273,7 @@ export function ModelManagementPage() {
                     {provider.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
 
             {draftProfile.profileType === "llm" ? (
@@ -288,8 +290,7 @@ export function ModelManagementPage() {
             <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
               <span className="text-neutral-900 dark:text-white">模型版本</span>
               {draftProfile.profileType === "image" && activeProvider?.models.length ? (
-                <select
-                  className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+                <Select
                   value={draftProfile.model}
                   onChange={(event) => setDraftProfile((current) => ({ ...current, model: event.target.value }))}
                 >
@@ -298,7 +299,7 @@ export function ModelManagementPage() {
                       {model}
                     </option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <Input
                   value={draftProfile.model}

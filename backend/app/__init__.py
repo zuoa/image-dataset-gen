@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from flask import Flask, jsonify
 from marshmallow import ValidationError
@@ -16,9 +17,12 @@ from app.models import User
 from app.services.model_profile_service import ensure_default_model_profiles
 
 
-def create_app(config_object: type[Config] | None = None) -> Flask:
-    app = Flask(__name__)
+def create_app(
+    config_object: type[Config] | None = None, *, instance_path: str | os.PathLike[str] | None = None
+) -> Flask:
+    app = Flask(__name__, instance_path=str(instance_path) if instance_path is not None else None)
     app.config.from_object(config_object or Config)
+    _prepare_runtime_paths(app)
 
     db.init_app(app)
     jwt.init_app(app)
@@ -49,6 +53,42 @@ def create_app(config_object: type[Config] | None = None) -> Flask:
             _ensure_demo_user(app)
 
     return app
+
+
+def _prepare_runtime_paths(app: Flask) -> None:
+    os.makedirs(app.instance_path, exist_ok=True)
+    app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_sqlite_uri(
+        app.config["SQLALCHEMY_DATABASE_URI"], app.instance_path
+    )
+    sqlite_path = _sqlite_database_path(app.config["SQLALCHEMY_DATABASE_URI"])
+    if sqlite_path is not None:
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+
+    storage_root = Path(app.config["STORAGE_ROOT"]).expanduser()
+    if not storage_root.is_absolute():
+        storage_root = Path(app.root_path).parent / storage_root
+    app.config["STORAGE_ROOT"] = str(storage_root.resolve())
+
+
+def _normalize_sqlite_uri(database_uri: str, instance_path: str) -> str:
+    sqlite_prefix = "sqlite:///"
+    if not database_uri.startswith(sqlite_prefix) or database_uri == "sqlite:///:memory:":
+        return database_uri
+    if database_uri.startswith("sqlite:////"):
+        return database_uri
+
+    raw_path = database_uri[len(sqlite_prefix) :]
+    if os.path.isabs(raw_path):
+        return database_uri
+    return f"{sqlite_prefix}{(Path(instance_path) / raw_path).resolve().as_posix()}"
+
+
+def _sqlite_database_path(database_uri: str) -> Path | None:
+    if database_uri == "sqlite:///:memory:":
+        return None
+    if not database_uri.startswith("sqlite:///"):
+        return None
+    return Path(database_uri.removeprefix("sqlite:///"))
 
 
 def _ensure_demo_user(app: Flask) -> None:

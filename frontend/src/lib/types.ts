@@ -13,7 +13,6 @@ export type AugmentationMethod =
 export type TaskConfig = {
   model_profile_id?: string;
   llm_profile_id?: string;
-  task_name?: string;
   subject: string;
   categories: string[];
   image_count: number;
@@ -81,7 +80,6 @@ export type PromptPreview = {
 };
 
 export type SubjectAssistSuggestion = {
-  task_name?: string;
   categories: string[];
   extra_desc: string;
 };
@@ -118,10 +116,10 @@ export type TaskExport = {
 
 export type Task = {
   id: string;
-  taskName: string;
   subject: string;
   categories: string[];
   imageCount: number;
+  sampleCount: number;
   status: string;
   progressPercent: number;
   imagesGenerated: number;

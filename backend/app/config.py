@@ -3,19 +3,29 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _default_sqlite_uri() -> str:
+    return f"sqlite:///{(BACKEND_ROOT / 'instance' / 'dataset_gen_dev.db').resolve().as_posix()}"
+
+
+def _default_storage_root() -> str:
+    return str((BACKEND_ROOT / "storage").resolve())
 
 
 def _default_encryption_key() -> str:
-    return base64.b64encode(b"image-dataset-gen-demo-key-32-bytes!!!").decode("utf-8")
+    return base64.b64encode(b"dataset-gen-demo-key-32-bytes!!!").decode("utf-8")
 
 
 @dataclass
 class Config:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-please-change-123456")
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-please-change-123456")
-    SQLALCHEMY_DATABASE_URI: str = os.getenv(
-        "DATABASE_URL", "sqlite:///dataset_gen_dev.db"
-    )
+    SQLALCHEMY_DATABASE_URI: str = os.getenv("DATABASE_URL", _default_sqlite_uri())
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:4173")
     API_PREFIX: str = "/api/v1"
@@ -23,7 +33,7 @@ class Config:
     DEMO_PASSWORD: str = os.getenv("DEMO_PASSWORD", "Dataset123!")
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", _default_encryption_key())
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
-    STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", os.path.join(os.getcwd(), "storage"))
+    STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
     GEMINI_IMAGE_MODEL: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GEMINI_PERSON_GENERATION: str = os.getenv("GEMINI_PERSON_GENERATION", "allow_adult")

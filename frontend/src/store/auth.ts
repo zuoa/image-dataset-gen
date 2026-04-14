@@ -28,9 +28,18 @@ export const useAuthStore = create<AuthState>((set) => ({
       const data = await getMe(token);
       set({ user: data.user, isLoading: false, token });
     } catch (error) {
-      localStorage.removeItem(tokenStorageKey);
-      useModelProfilesStore.getState().clear();
-      set({ token: null, user: null, isLoading: false, error: (error as Error).message });
+      const message = (error as Error).message;
+      const hasToken = Boolean(localStorage.getItem(tokenStorageKey));
+
+      // Only clear auth state when the token was actually invalidated.
+      // Transient refresh-time failures should not force a logout.
+      if (!hasToken) {
+        useModelProfilesStore.getState().clear();
+        set({ token: null, user: null, isLoading: false, error: message });
+        return;
+      }
+
+      set({ token, user: null, isLoading: false, error: message });
     }
   },
   async signIn(email, password, mode) {

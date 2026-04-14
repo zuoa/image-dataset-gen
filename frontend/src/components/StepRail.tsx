@@ -14,14 +14,15 @@ export function StepRail({ currentStep }: { currentStep: number }) {
             key={step.id}
             className={cn(
               "flex items-center gap-3 rounded-2xl border px-3 py-3 transition",
-              active && "border-neutral-300 bg-neutral-100 dark:border-white/30 dark:bg-white/[0.06]",
-              !active && "border-neutral-100 bg-white dark:border-white/8 dark:bg-white/[0.02]",
+              active && "border-neutral-300 bg-neutral-100 dark:border-white/20 dark:bg-neutral-900",
+              !active && "border-neutral-100 bg-white dark:border-white/12 dark:bg-neutral-950",
             )}
           >
             <div
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-full border text-xs",
-                completed && "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black",
+                completed &&
+                  "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950",
                 active && !completed && "border-neutral-400 text-neutral-900 dark:border-white/40 dark:text-white",
                 !active && !completed && "border-neutral-200 text-neutral-400 dark:border-white/10 dark:text-neutral-500",
               )}

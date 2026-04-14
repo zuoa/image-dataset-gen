@@ -27,7 +27,6 @@ from app.services.task_service import (
     build_dashboard_summary,
     build_export_payload,
     build_task_payload,
-    generate_task_name,
     now_utc,
     sync_task_progress,
 )
@@ -85,7 +84,7 @@ def create_task():
     prompt = build_prompt_preview(payload)
     task = Task(
         user_id=user_id,
-        task_name=payload.get("task_name") or generate_task_name(payload["subject"]),
+        task_name=payload["subject"],
         subject=payload["subject"],
         categories=payload["categories"],
         image_count=payload["image_count"],
@@ -120,9 +119,9 @@ def update_task(task_id: str):
     merged = {**(task.config_json or {}), **payload}
     if payload:
         task.config_json = merged
-        if "subject" in merged:
+        if "subject" in payload:
             task.subject = merged["subject"]
-            task.task_name = merged.get("task_name") or generate_task_name(merged["subject"])
+            task.task_name = merged["subject"]
         if "categories" in merged:
             task.categories = merged["categories"]
         if "image_count" in merged:
@@ -470,6 +469,6 @@ def download_export(task_id: str, version: int):
     return send_file(
         archive_path,
         as_attachment=True,
-        download_name=f"{task.task_name.replace(' ', '-').lower()}-v{version}.zip",
+        download_name=f"{task.subject.replace(' ', '-').lower()}-v{version}.zip",
         mimetype="application/zip",
     )

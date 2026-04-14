@@ -19,7 +19,12 @@ from app.clients.jimeng_client import (
 from app.extensions import db
 from app.models import Task, TaskExport, TaskImage
 from app.services.annotation_storage import load_annotation_result
-from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
+from app.services.image_storage import (
+    augment_generated_image,
+    existing_generated_image,
+    preview_data_url,
+    save_generated_image,
+)
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.utils.crypto import decrypt_secret
 
@@ -113,10 +118,10 @@ def build_task_payload(task: Task) -> dict[str, Any]:
     prompt = task.prompt_json or {}
     return {
         "id": task.id,
-        "taskName": task.task_name,
         "subject": task.subject,
         "categories": task.categories,
         "imageCount": task.image_count,
+        "sampleCount": len(task.images),
         "status": task.status,
         "progressPercent": task.progress_percent,
         "imagesGenerated": task.images_generated,
@@ -185,13 +190,6 @@ def build_export_payload(export_job: TaskExport) -> dict[str, Any]:
         "summary": export_job.summary_json,
         "createdAt": export_job.created_at.isoformat() if export_job.created_at else None,
     }
-
-
-def generate_task_name(subject: str) -> str:
-    trimmed = subject.strip()[:24]
-    return f"{trimmed} Dataset"
-
-
 def build_demo_svg(task: Task, ordinal: int, category: str, variant: dict[str, Any]) -> str:
     label = category.upper()
     subtitle = task.subject[:36]
@@ -435,7 +433,7 @@ def _generate_jimeng_asset(task: Task, variant: dict[str, Any], ordinal: int) ->
 def build_dashboard_summary(tasks: list[Task]) -> dict[str, Any]:
     completed = [task for task in tasks if task.status == "completed"]
     running = [task for task in tasks if task.status == "running"]
-    total_images = sum(task.images_generated for task in tasks)
+    total_images = sum(len(task.images) for task in tasks)
     return {
         "totalTasks": len(tasks),
         "runningTasks": len(running),

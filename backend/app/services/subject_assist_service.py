@@ -12,7 +12,7 @@ class SubjectAssistError(RuntimeError):
 
 SYSTEM_PROMPT = (
     "You help build synthetic image dataset tasks. "
-    "Return strict JSON only with keys task_name, categories, extra_desc. "
+    "Return strict JSON only with keys categories, extra_desc. "
     "categories must be a 2-6 item array of concise English snake_case labels. "
     "extra_desc must be concise Simplified Chinese, focus on scene, action, occlusion, lighting, and dataset usefulness. "
     "If the subject involves people, default to Chinese human appearance and mention Chinese facial or identity features unless the user explicitly requests another ethnicity."
@@ -30,11 +30,10 @@ def suggest_subject_fields(
         f"目标对象：{subject}\n"
         "请补全适合图像生成数据集任务的字段，输出 JSON：\n"
         "{\n"
-        '  "task_name": "string",\n'
         '  "categories": ["string"],\n'
         '  "extra_desc": "string"\n'
         "}\n"
-        "要求：task_name 用中文；categories 用英文标签；extra_desc 用中文且不要超过120字；如果涉及人物，默认限定为中国人的外貌与特征。"
+        "要求：categories 用英文标签；extra_desc 用中文且不要超过120字；如果涉及人物，默认限定为中国人的外貌与特征。"
     )
 
     try:
@@ -60,7 +59,6 @@ def suggest_subject_fields(
         raise SubjectAssistError("subject_assist_empty_extra_desc")
 
     return {
-        "task_name": str(parsed.get("task_name", "")).strip(),
         "categories": cleaned_categories[:6],
         "extra_desc": extra_desc[:120],
     }

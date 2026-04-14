@@ -1,6 +1,6 @@
 import { notifyAuthExpired, sessionExpiredMessage } from "../lib/session";
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 type RequestOptions = RequestInit & {
   token?: string | null;
@@ -27,7 +27,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  const response = await fetch(buildApiUrl(path), { ...options, headers });
   if (!response.ok) {
     const errorMessage = await parseErrorMessage(response);
     if (response.status === 401) {
@@ -49,7 +49,7 @@ export async function apiRequestFormData<T>(
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(buildApiUrl(path), {
     ...options,
     method: options.method ?? "POST",
     body,
@@ -66,15 +66,32 @@ export async function apiRequestFormData<T>(
   return response.json() as Promise<T>;
 }
 
+function apiOrigin() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return window.location.origin;
+}
+
+function normalizedApiBaseUrl() {
+  if (API_BASE_URL.startsWith("http://") || API_BASE_URL.startsWith("https://")) {
+    return API_BASE_URL.replace(/\/$/, "");
+  }
+  return `${apiOrigin()}${API_BASE_URL.startsWith("/") ? "" : "/"}${API_BASE_URL}`.replace(/\/$/, "");
+}
+
+function buildApiUrl(path: string) {
+  return `${normalizedApiBaseUrl()}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
 export function resolveApiUrl(path: string) {
   if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
     return path;
   }
   if (path.startsWith("/")) {
-    const origin = new URL(API_BASE_URL).origin;
-    return `${origin}${path}`;
+    return `${apiOrigin()}${path}`;
   }
-  return `${API_BASE_URL}/${path}`;
+  return `${normalizedApiBaseUrl()}/${path}`;
 }
 
 export async function downloadWithToken(path: string, token: string, filename: string) {

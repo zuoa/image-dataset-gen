@@ -30,7 +30,7 @@ def build_export_archive(
     export_root = Path(storage_root) / "exports"
     export_root.mkdir(parents=True, exist_ok=True)
     archive_path = export_root / f"{export_job.id}.zip"
-    dataset_name = _slugify(task.task_name or task.subject or "dataset")
+    dataset_name = _slugify(task.subject or task.task_name or "dataset")
 
     selected_images = [image for image in task.images if image.selected]
 
@@ -399,7 +399,7 @@ def _write_readme(
     image_count: int,
     image_ext: str,
 ) -> None:
-    readme = f"""# {task.task_name}
+    readme = f"""# {task.subject}
 
 Export format: {export_format}
 Images: {image_count}

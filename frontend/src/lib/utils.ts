@@ -4,6 +4,22 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+export function generateLocalId(prefix = "id") {
+  if (typeof crypto !== "undefined") {
+    if (typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+
+    if (typeof crypto.getRandomValues === "function") {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      return `${prefix}-${hex}`;
+    }
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function formatCurrency(value: number) {
   return new Intl.NumberFormat("zh-CN", {
     style: "currency",

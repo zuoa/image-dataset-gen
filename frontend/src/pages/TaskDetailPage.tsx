@@ -17,6 +17,7 @@ import {
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 import { SectionCard } from "../components/ui/SectionCard";
 import type { AugmentationMethod, Task, TaskImage } from "../lib/types";
 import { formatCurrency, formatDate, formatProviderLabel } from "../lib/utils";
@@ -438,7 +439,7 @@ export function TaskDetailPage() {
               <Badge>{task.status}</Badge>
               <Badge>{formatProviderLabel(task.apiProvider)}</Badge>
             </div>
-            <h2 className="mt-4 text-4xl font-medium text-neutral-900 dark:text-white">{task.taskName}</h2>
+            <h2 className="mt-4 text-4xl font-medium text-neutral-900 dark:text-white">{task.subject}</h2>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">{task.subject}</p>
             <div className="mt-8 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
               <div
@@ -447,7 +448,7 @@ export function TaskDetailPage() {
               />
             </div>
             <div className="mt-3 flex flex-wrap gap-6 text-sm text-neutral-500 dark:text-neutral-400">
-              <div>已生成 {task.imagesGenerated}/{task.imageCount}</div>
+              <div>已生成 {task.imagesGenerated} / 目标 {task.imageCount}</div>
               <div>已消耗 {formatCurrency(task.spentCost)}</div>
               <div>开始于 {formatDate(task.startedAt)}</div>
             </div>
@@ -455,10 +456,10 @@ export function TaskDetailPage() {
 
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "已选图片", value: task.selectedCount.toString() },
-              { label: "类别数", value: task.categories.length.toString() },
+              { label: "当前样本", value: task.sampleCount.toString() },
+              { label: "保留样本", value: `${task.selectedCount}/${task.sampleCount}` },
+              { label: "目标数量", value: task.imageCount.toString() },
               { label: "预估成本", value: formatCurrency(task.estimatedCost) },
-              { label: "已导出版本", value: task.exports.length.toString() },
             ].map((metric) => (
               <div key={metric.label} className="rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
                 <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">{metric.label}</div>
@@ -610,7 +611,7 @@ export function TaskDetailPage() {
                   <button
                     key={option.value}
                     type="button"
-                    className={`rounded-full border px-3 py-2 text-sm transition ${active ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-black" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300"}`}
+                    className={`rounded-full border px-3 py-2 text-sm transition ${active ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950" : "border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300 dark:hover:border-white/20 dark:hover:bg-white/[0.04]"}`}
                     onClick={() => toggleAugmentationMethod(option.value)}
                   >
                     {option.label}
@@ -724,8 +725,7 @@ export function TaskDetailPage() {
             <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Export</div>
             <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">导出数据集</h3>
             <div className="mt-4 flex items-center gap-3">
-              <select
-                className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-neutral-900 dark:border-white/10 dark:bg-white/[0.03] dark:text-white"
+              <Select
                 value={exportFormat}
                 onChange={(event) => setExportFormat(event.target.value as typeof exportFormat)}
               >
@@ -733,7 +733,7 @@ export function TaskDetailPage() {
                 <option value="coco">COCO</option>
                 <option value="voc">Pascal VOC</option>
                 <option value="csv">CSV</option>
-              </select>
+              </Select>
               <Button
                 disabled={task.selectedCount === 0}
                 onClick={async () => {

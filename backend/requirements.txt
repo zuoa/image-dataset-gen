@@ -4,7 +4,6 @@ Flask-JWT-Extended==4.7.1
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.36
 marshmallow==3.23.1
-psycopg[binary]==3.2.3
 python-dotenv==1.0.1
 cryptography==44.0.0
 Pillow==11.1.0

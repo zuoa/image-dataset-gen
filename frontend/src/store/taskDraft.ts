@@ -12,7 +12,7 @@ type DraftState = {
   resetDraft: () => void;
 };
 
-const storageKey = "image-dataset-gen-draft";
+const storageKey = "dataset-gen-draft";
 const savedDraft = localStorage.getItem(storageKey);
 
 export const useTaskDraftStore = create<DraftState>((set) => ({

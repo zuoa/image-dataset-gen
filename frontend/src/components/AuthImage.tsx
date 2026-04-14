@@ -21,16 +21,20 @@ export function AuthImage({ src, alt, ...rest }: AuthImageProps) {
     }
 
     const url = resolveApiUrl(src);
-    // 外部直链（如 nginx 静态服务）不需要带 token fetch
-    const isApiAsset = url.startsWith(API_BASE_URL) && url.includes("/preview");
+    const isApiAsset = isProtectedPreviewUrl(url);
     if (!isApiAsset) {
       setBlobUrl(url);
       return;
     }
+    if (!token) {
+      setBlobUrl("");
+      return;
+    }
 
     let cancelled = false;
+    let objectUrl = "";
     fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load image");
@@ -38,7 +42,8 @@ export function AuthImage({ src, alt, ...rest }: AuthImageProps) {
       })
       .then((blob) => {
         if (cancelled) return;
-        setBlobUrl(URL.createObjectURL(blob));
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
       })
       .catch(() => {
         if (cancelled) return;
@@ -47,11 +52,11 @@ export function AuthImage({ src, alt, ...rest }: AuthImageProps) {
 
     return () => {
       cancelled = true;
-      if (blobUrl && blobUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(blobUrl);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [src, token, blobUrl]);
+  }, [src, token]);
 
   if (!blobUrl) {
     return (
@@ -63,4 +68,22 @@ export function AuthImage({ src, alt, ...rest }: AuthImageProps) {
   }
 
   return <img src={blobUrl} alt={alt} {...rest} />;
+}
+
+function isProtectedPreviewUrl(url: string) {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    const apiPathPrefix = apiPathPrefixFromBase();
+    return parsed.pathname.startsWith(apiPathPrefix) && parsed.pathname.includes("/preview");
+  } catch {
+    return false;
+  }
+}
+
+function apiPathPrefixFromBase() {
+  const trimmedBase = API_BASE_URL.replace(/\/$/, "");
+  if (trimmedBase.startsWith("http://") || trimmedBase.startsWith("https://")) {
+    return new URL(trimmedBase).pathname.replace(/\/$/, "") || "/";
+  }
+  return trimmedBase.startsWith("/") ? trimmedBase : `/${trimmedBase}`;
 }

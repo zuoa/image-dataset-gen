@@ -13,3 +13,4 @@ frontend/dist/
 *.sqlite3
 *.db
 /backend/storage/
+.idea

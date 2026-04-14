@@ -27,7 +27,7 @@ export function PromptPreviewCard({
 
       {preview ? (
         <div className="space-y-5">
-          <div className="rounded-3xl border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-black/40">
+          <div className="rounded-3xl border border-neutral-200 bg-neutral-100 p-4 dark:border-white/12 dark:bg-neutral-900">
             <div className="mb-3 flex flex-wrap gap-2">
               <Badge>{preview.language === "zh" ? "中文适配" : "英文适配"}</Badge>
               <Badge className={preview.token_safe ? "" : "border-amber-400/30 text-amber-700 dark:text-amber-200"}>
@@ -40,18 +40,18 @@ export function PromptPreviewCard({
             </p>
           </div>
           {compact ? (
-            <div className="rounded-3xl border border-neutral-200 bg-white p-4 text-sm text-neutral-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-400">
+            <div className="rounded-3xl border border-neutral-200 bg-white p-4 text-sm text-neutral-500 dark:border-white/12 dark:bg-neutral-900 dark:text-neutral-400">
               当前先展示核心 Prompt 和费用预估。Negative Prompt 与变体会在确认提交步骤完整展开。
             </div>
           ) : (
             <>
-              <div className="rounded-3xl border border-neutral-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="rounded-3xl border border-neutral-200 bg-white p-4 dark:border-white/12 dark:bg-neutral-900">
                 <div className="mb-2 text-xs uppercase tracking-[0.24em] text-neutral-500">Negative</div>
                 <p className="text-sm leading-7 text-neutral-500 dark:text-neutral-400">{preview.negative_prompt}</p>
               </div>
               <div className="space-y-3">
                 {preview.variants.slice(0, 3).map((variant) => (
-                  <div key={variant.seed} className="rounded-2xl border border-neutral-100 bg-white p-3 dark:border-white/8 dark:bg-white/[0.02]">
+                  <div key={variant.seed} className="rounded-2xl border border-neutral-100 bg-white p-3 dark:border-white/12 dark:bg-neutral-950">
                     <div className="mb-2 flex items-center justify-between text-xs text-neutral-500">
                       <span>Seed {variant.seed}</span>
                       <span>{variant.diversity_vars.composition}</span>
@@ -64,7 +64,7 @@ export function PromptPreviewCard({
           )}
         </div>
       ) : (
-        <div className="rounded-3xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-white/10">
+        <div className="rounded-3xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-white/12 dark:bg-neutral-900/60 dark:text-neutral-400">
           填写完整后自动生成 Prompt 预览。
         </div>
       )}

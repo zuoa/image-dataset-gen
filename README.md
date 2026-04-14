@@ -1,6 +1,6 @@
 # Dataset Forge
 
-基于 Flask + Postgres + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
+基于 Flask + SQLite + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
 
 - Token 鉴权与演示账号
 - 任务配置向导
@@ -35,6 +35,12 @@ docker compose up --build
 
 - 前端：`http://localhost:4173`
 - 后端：`http://localhost:8000/api/v1/health`
+
+数据库说明：
+
+- Docker Compose 默认使用 SQLite，数据库文件位于容器内 `/app/storage/dataset_gen.db`
+- 本地直接运行后端时，默认数据库文件位于 `backend/instance/dataset_gen_dev.db`
+- `DATABASE_URL` 仍可覆盖，但项目默认链路已经统一到 SQLite
 
 ## 演示账号
 

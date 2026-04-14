@@ -11,7 +11,8 @@ import type {
 } from "../lib/types";
 
 function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
-  const { model_profile_id, llm_profile_id, quality, size, ...payload } = config as typeof config & {
+  const { model_profile_id, llm_profile_id, task_name, quality, size, ...payload } = config as typeof config & {
+    task_name?: string;
     quality?: number;
     size?: string;
   };
