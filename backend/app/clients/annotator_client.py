@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib import error, request
 
+from PIL import Image
+
 from app.models import Task
 from app.services.image_storage import existing_generated_image
 
@@ -96,6 +98,12 @@ def _vl_annotate(
         if not path:
             return {"imageId": image.id, "detections": [], "status": "empty"}
 
+        try:
+            with Image.open(path) as pil_img:
+                img_w, img_h = pil_img.size
+        except Exception:
+            return {"imageId": image.id, "detections": [], "status": "empty"}
+
         image_bytes = path.read_bytes()
         mime_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -106,7 +114,7 @@ def _vl_annotate(
                 raw = _call_gemini_vl(api_key, model, prompt, mime_type, b64)
             else:
                 raw = _call_openai_compat_vl(base_url, api_key, model, prompt, mime_type, b64)
-            detections = _parse_vl_response(raw, confidence_threshold, allowed)
+            detections = _parse_vl_response(raw, confidence_threshold, allowed, img_w, img_h)
             return {"imageId": image.id, "detections": detections, "status": "annotated" if detections else "empty"}
         except Exception:
             return {"imageId": image.id, "detections": [], "status": "empty"}
@@ -123,7 +131,8 @@ def _build_vl_prompt(subject: str, categories: list[str]) -> str:
         f"You are an expert computer vision assistant. The image is about '{subject}'. "
         f"Detect all objects that belong to these categories: {categories_str}. "
         "For each detection, return the category name, confidence score (0-1), and bounding box "
-        "in normalized [x_center, y_center, width, height] coordinates (0-1). "
+        "in normalized [x_center, y_center, width, height] coordinates. "
+        "All four values must be strictly between 0 and 1 (floats, not pixels). "
         'Return strictly as JSON: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
         'If nothing is found, return {"detections": []}.'
     )
@@ -192,27 +201,56 @@ def _call_openai_compat_vl(base_url: str, api_key: str, model: str, prompt: str,
     return ""
 
 
-def _parse_vl_response(raw: str, threshold: float, allowed_categories: set[str]) -> list[dict[str, Any]]:
+def _parse_vl_response(
+    raw: str,
+    threshold: float,
+    allowed_categories: set[str],
+    img_w: int = 1,
+    img_h: int = 1,
+) -> list[dict[str, Any]]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return []
 
+    fallback_category = next(iter(allowed_categories), "object")
     detections: list[dict[str, Any]] = []
     for item in data.get("detections", []):
         category = str(item.get("category", "")).strip()
         confidence = float(item.get("confidence", 0))
         bbox = item.get("bbox", [])
-        if category not in allowed_categories:
+        if not category:
             continue
+        if category not in allowed_categories:
+            category = fallback_category
         if confidence < threshold:
             continue
         if not isinstance(bbox, list) or len(bbox) != 4:
             continue
+        try:
+            bbox = [float(v) for v in bbox]
+        except (ValueError, TypeError):
+            continue
+
+        # Normalize pixel coordinates to 0-1 if necessary
+        if any(v > 1.0 for v in bbox):
+            bbox = [bbox[0] / img_w, bbox[1] / img_h, bbox[2] / img_w, bbox[3] / img_h]
+
+        x_center = min(max(bbox[0], 0.0), 1.0)
+        y_center = min(max(bbox[1], 0.0), 1.0)
+        width = min(max(bbox[2], 0.0), 1.0)
+        height = min(max(bbox[3], 0.0), 1.0)
+
+        # Keep box within image bounds
+        x_center = min(x_center, 1.0 - width / 2)
+        x_center = max(x_center, width / 2)
+        y_center = min(y_center, 1.0 - height / 2)
+        y_center = max(y_center, height / 2)
+
         detections.append({
             "category": category,
             "confidence": round(confidence, 4),
-            "bbox": [round(float(v), 4) for v in bbox],
+            "bbox": [round(x_center, 4), round(y_center, 4), round(width, 4), round(height, 4)],
         })
     return detections
 
