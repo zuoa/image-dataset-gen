@@ -326,6 +326,13 @@ def annotate_task(task_id: str):
         task,
         confidence_threshold=action["confidence_threshold"],
         annotator_url=current_app.config["ANNOTATOR_URL"],
+        storage_root=current_app.config["STORAGE_ROOT"],
+        vl_config={
+            "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
+            "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
+            "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
+            "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
+        },
     )
 
     images_by_id = {image.id: image for image in task.images}

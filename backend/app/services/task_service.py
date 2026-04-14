@@ -108,6 +108,8 @@ PROVIDER_CATALOG = [
 
 _active_generation_tasks: set[str] = set()
 _active_generation_lock = Lock()
+_active_annotation_tasks: set[str] = set()
+_active_annotation_lock = Lock()
 
 
 def now_utc() -> datetime:
@@ -258,6 +260,10 @@ def sync_task_augmentation_progress(task: Task) -> Task:
     task.selected_count = sum(1 for image in task.images if image.selected)
     db.session.commit()
     db.session.refresh(task)
+
+    augmentation = (task.config_json or {}).get("augmentation", {})
+    if augmentation.get("status") == "completed":
+        _enqueue_auto_annotation(current_app._get_current_object(), task)
     return task
 
 
@@ -387,6 +393,11 @@ def _run_task_generation(app: Flask, task_id: str) -> None:
     finally:
         with _active_generation_lock:
             _active_generation_tasks.discard(task_id)
+        with app.app_context():
+            task = db.session.get(Task, task_id)
+            if task is not None and task.status == "completed":
+                _enqueue_auto_annotation(app, task)
+            db.session.remove()
 
 
 def _generate_next_task_image(task: Task) -> None:
@@ -587,3 +598,82 @@ def _build_dashboard_summary_payload(
         "successRate": 98.7,
         "costToDate": cost_to_date,
     }
+
+
+def _enqueue_auto_annotation(app: Flask, task: Task) -> None:
+    with _active_annotation_lock:
+        if task.id in _active_annotation_tasks:
+            return
+        _active_annotation_tasks.add(task.id)
+
+    def run_annotation() -> None:
+        try:
+            with app.app_context():
+                from app.clients.annotator_client import annotate_task_images
+                from app.services.annotation_storage import save_annotation_result
+
+                task_inner = db.session.get(Task, task.id)
+                if not task_inner:
+                    return
+
+                vl_config = {
+                    "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
+                    "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
+                    "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
+                    "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
+                }
+
+                try:
+                    results = annotate_task_images(
+                        task_inner,
+                        confidence_threshold=0.5,
+                        annotator_url=current_app.config["ANNOTATOR_URL"],
+                        storage_root=current_app.config["STORAGE_ROOT"],
+                        vl_config=vl_config,
+                    )
+                except Exception:
+                    app.logger.exception("Auto annotation API failed for task %s", task.id)
+                    return
+
+                images_by_id = {image.id: image for image in task_inner.images}
+                detected_images = 0
+                empty_labels = 0
+
+                for result in results:
+                    image = images_by_id.get(result["imageId"])
+                    if not image:
+                        continue
+                    detections = result.get("detections", [])
+                    save_annotation_result(
+                        current_app.config["STORAGE_ROOT"], task_inner.id, image.id, detections
+                    )
+                    image.annotation_status = "annotated" if detections else "empty"
+                    image.confidence_score = max(
+                        [float(detection["confidence"]) for detection in detections],
+                        default=None,
+                    )
+                    if detections:
+                        detected_images += 1
+                    else:
+                        empty_labels += 1
+
+                annotation_summary = {
+                    **((task_inner.config_json or {}).get("annotation") or {}),
+                    "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
+                    "confidenceThreshold": 0.5,
+                    "detectedImages": detected_images,
+                    "emptyLabels": empty_labels,
+                    "format": "yolo",
+                    "autoAnnotated": True,
+                    "updatedAt": now_utc().isoformat(),
+                }
+                task_inner.config_json = {**(task_inner.config_json or {}), "annotation": annotation_summary}
+                db.session.commit()
+        except Exception:
+            app.logger.exception("Auto annotation failed for task %s", task.id)
+        finally:
+            with _active_annotation_lock:
+                _active_annotation_tasks.discard(task.id)
+
+    thread = Thread(target=run_annotation, daemon=True, name=f"auto-annotate-{task.id}")
+    thread.start()

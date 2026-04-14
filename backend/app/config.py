@@ -51,6 +51,10 @@ class Config:
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
+    VL_ANNOTATOR_PROVIDER: str = os.getenv("VL_ANNOTATOR_PROVIDER", "gemini")
+    VL_ANNOTATOR_MODEL: str = os.getenv("VL_ANNOTATOR_MODEL", "gemini-2.0-flash")
+    VL_ANNOTATOR_API_KEY: str = os.getenv("VL_ANNOTATOR_API_KEY", "")
+    VL_ANNOTATOR_BASE_URL: str = os.getenv("VL_ANNOTATOR_BASE_URL", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_IMAGE_MODEL: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GEMINI_PERSON_GENERATION: str = os.getenv("GEMINI_PERSON_GENERATION", "allow_adult")
