@@ -189,7 +189,11 @@ export function TaskDetailPage() {
 
     void loadTask();
     const interval = window.setInterval(() => {
-      if (task?.status === "running" || task?.config.augmentation?.status === "running") {
+      if (
+        task?.status === "running" ||
+        task?.config.augmentation?.status === "running" ||
+        task?.config.annotation?.status === "running"
+      ) {
         void loadTask();
       }
     }, 2000);
@@ -975,8 +979,10 @@ export function TaskDetailPage() {
                 step={0.05}
                 value={confidenceThreshold}
                 onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+                disabled={task.config.annotation?.status === "running"}
               />
               <Button
+                disabled={task.config.annotation?.status === "running"}
                 onClick={() => {
                   if (!token || !taskId) return;
                   void annotateTask(taskId, token, confidenceThreshold)
@@ -987,12 +993,16 @@ export function TaskDetailPage() {
                     .catch((error) => setActionError((error as Error).message));
                 }}
               >
-                生成 YOLO 标注
+                {task.config.annotation?.status === "running" ? "标注中..." : "生成 YOLO 标注"}
               </Button>
             </div>
-            <p className="mt-4 text-sm text-neutral-500">
-              检测到 {String(task.config.annotation?.detectedImages ?? 0)} 张图片带有效目标。
-            </p>
+            {task.config.annotation?.status === "running" ? (
+              <p className="mt-4 text-sm text-neutral-500">标注任务已在后台开始，完成后会自动刷新结果。</p>
+            ) : (
+              <p className="mt-4 text-sm text-neutral-500">
+                检测到 {String(task.config.annotation?.detectedImages ?? 0)} 张图片带有效目标。
+              </p>
+            )}
           </SectionCard>
 
           <SectionCard>

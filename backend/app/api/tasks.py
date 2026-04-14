@@ -322,50 +322,100 @@ def annotate_task(task_id: str):
     user_id = get_jwt_identity()
     action = TaskActionSchema().load(request.get_json() or {})
     task = sync_task_progress(_task_for_user(task_id, user_id))
-    results = annotate_task_images(
+
+    vl_config = {
+        "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
+        "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
+        "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
+        "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
+    }
+
+    app = current_app._get_current_object()
+    _run_annotation_in_thread(
+        app,
         task,
-        confidence_threshold=action["confidence_threshold"],
-        annotator_url=current_app.config["ANNOTATOR_URL"],
-        storage_root=current_app.config["STORAGE_ROOT"],
-        vl_config={
-            "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
-            "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
-            "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
-            "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
-        },
+        action["confidence_threshold"],
+        vl_config,
     )
 
-    images_by_id = {image.id: image for image in task.images}
-    detected_images = 0
-    empty_labels = 0
-
-    for result in results:
-        image = images_by_id.get(result["imageId"])
-        if not image:
-            continue
-        detections = result.get("detections", [])
-        save_annotation_result(current_app.config["STORAGE_ROOT"], task.id, image.id, detections)
-        image.annotation_status = "annotated" if detections else "empty"
-        image.confidence_score = max(
-            [float(detection["confidence"]) for detection in detections],
-            default=None,
-        )
-        if detections:
-            detected_images += 1
-        else:
-            empty_labels += 1
-
     annotation_summary = {
-        "provider": "annotator-microservice" if current_app.config["ANNOTATOR_URL"] else "local-fallback",
+        **((task.config_json or {}).get("annotation") or {}),
+        "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
         "confidenceThreshold": action["confidence_threshold"],
-        "detectedImages": detected_images,
-        "emptyLabels": empty_labels,
-        "format": "yolo",
+        "status": "running",
         "updatedAt": now_utc().isoformat(),
     }
     task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
     db.session.commit()
     return jsonify({"summary": annotation_summary, "task": build_task_payload(task)})
+
+
+def _run_annotation_in_thread(
+    app: Flask,
+    task: Task,
+    confidence_threshold: float,
+    vl_config: dict[str, str],
+) -> None:
+    from threading import Thread
+
+    def worker() -> None:
+        try:
+            with app.app_context():
+                results = annotate_task_images(
+                    task,
+                    confidence_threshold=confidence_threshold,
+                    annotator_url="",
+                    storage_root=app.config["STORAGE_ROOT"],
+                    vl_config=vl_config,
+                )
+
+                images_by_id = {image.id: image for image in task.images}
+                detected_images = 0
+                empty_labels = 0
+
+                for result in results:
+                    image = images_by_id.get(result["imageId"])
+                    if not image:
+                        continue
+                    detections = result.get("detections", [])
+                    save_annotation_result(app.config["STORAGE_ROOT"], task.id, image.id, detections)
+                    image.annotation_status = "annotated" if detections else "empty"
+                    image.confidence_score = max(
+                        [float(detection["confidence"]) for detection in detections],
+                        default=None,
+                    )
+                    if detections:
+                        detected_images += 1
+                    else:
+                        empty_labels += 1
+
+                annotation_summary = {
+                    **((task.config_json or {}).get("annotation") or {}),
+                    "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
+                    "confidenceThreshold": confidence_threshold,
+                    "detectedImages": detected_images,
+                    "emptyLabels": empty_labels,
+                    "format": "yolo",
+                    "status": "completed",
+                    "updatedAt": now_utc().isoformat(),
+                }
+                task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
+                db.session.commit()
+        except Exception:
+            app.logger.exception("Manual annotation failed for task %s", task.id)
+            try:
+                with app.app_context():
+                    annotation_summary = {
+                        **((task.config_json or {}).get("annotation") or {}),
+                        "status": "failed",
+                        "updatedAt": now_utc().isoformat(),
+                    }
+                    task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
+                    db.session.commit()
+            except Exception:
+                pass
+
+    Thread(target=worker, daemon=True, name=f"manual-annotate-{task.id}").start()
 
 
 @tasks_bp.get("/<task_id>/images/<image_id>/preview")
