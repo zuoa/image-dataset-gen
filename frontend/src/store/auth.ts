@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { getMe, login, register } from "../api/auth";
+import { getMe, login } from "../api/auth";
 import type { User } from "../lib/types";
 import { tokenStorageKey } from "../lib/session";
 import { useModelProfilesStore } from "./modelProfiles";
@@ -11,7 +11,7 @@ type AuthState = {
   isLoading: boolean;
   error: string | null;
   hydrate: () => Promise<void>;
-  signIn: (email: string, password: string, mode: "login" | "register") => Promise<void>;
+  signIn: (username: string, password: string) => Promise<void>;
   signOut: (message?: string | null) => void;
 };
 
@@ -42,11 +42,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ token, user: null, isLoading: false, error: message });
     }
   },
-  async signIn(email, password, mode) {
+  async signIn(username, password) {
     set({ isLoading: true, error: null });
     try {
-      const data =
-        mode === "login" ? await login(email, password) : await register(email, password);
+      const data = await login(username, password);
       localStorage.setItem(tokenStorageKey, data.token);
       set({ token: data.token, user: data.user, isLoading: false });
     } catch (error) {

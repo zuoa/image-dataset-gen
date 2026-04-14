@@ -14,7 +14,7 @@ def test_unsupported_provider_pauses_task_without_fallback(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "strict@example.com", "password": "Strict123!"},
+        json={"username": "strict-user", "password": "Strict123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -58,7 +58,7 @@ def test_retry_task_clears_generation_error(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "retry@example.com", "password": "Strict123!"},
+        json={"username": "retry-user", "password": "Strict123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

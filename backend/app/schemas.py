@@ -31,13 +31,11 @@ def _ensure_number(settings: dict[str, object], key: str, min_value: float, max_
     return value
 
 
-class RegisterSchema(Schema):
-    email = fields.Email(required=True)
-    password = fields.String(required=True, validate=validate.Length(min=8, max=64))
+USERNAME_VALIDATOR = validate.Regexp(r"^\S+$", error="username cannot contain spaces")
 
 
-class LoginSchema(Schema):
-    email = fields.Email(required=True)
+class CredentialSchema(Schema):
+    username = fields.String(required=True, validate=[validate.Length(min=1, max=64), USERNAME_VALIDATOR])
     password = fields.String(required=True, validate=validate.Length(min=8, max=64))
 
 

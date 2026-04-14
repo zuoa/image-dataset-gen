@@ -92,13 +92,13 @@ def _sqlite_database_path(database_uri: str) -> Path | None:
 
 
 def _ensure_demo_user(app: Flask) -> None:
-    demo_email = app.config["DEMO_EMAIL"]
-    existing = User.query.filter_by(email=demo_email).first()
+    demo_username = app.config["DEMO_USERNAME"]
+    existing = User.query.filter_by(email=demo_username).first()
     if existing:
         ensure_default_model_profiles(existing)
         return
     demo_user = User(
-        email=demo_email,
+        email=demo_username,
         password_hash=generate_password_hash(app.config["DEMO_PASSWORD"]),
         plan="pro",
     )

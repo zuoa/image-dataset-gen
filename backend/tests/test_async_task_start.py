@@ -26,7 +26,7 @@ def test_start_task_returns_before_background_generation_completes(tmp_path: Pat
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "async-start@example.com", "password": "Async123!"},
+        json={"username": "async-start-user", "password": "Async123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

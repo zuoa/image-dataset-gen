@@ -25,7 +25,7 @@ def test_selection_updates_selected_count_and_blocks_empty_export(tmp_path: Path
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "select@example.com", "password": "Select123!"},
+        json={"username": "select-user", "password": "Select123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

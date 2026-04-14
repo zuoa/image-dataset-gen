@@ -7,10 +7,10 @@ from app.extensions import db
 from app.models import Task
 
 
-def _register_and_create_task(client, email: str, headers_subject: str) -> tuple[dict[str, str], str]:
+def _register_and_create_task(client, username: str, headers_subject: str) -> tuple[dict[str, str], str]:
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "Latency123!"},
+        json={"username": username, "password": "Latency123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -44,7 +44,7 @@ def test_list_tasks_uses_persisted_state_without_syncing(tmp_path: Path):
 
     app = create_app(TaskListConfig)
     client = app.test_client()
-    headers, task_id = _register_and_create_task(client, "task-list@example.com", "warehouse forklift detection")
+    headers, task_id = _register_and_create_task(client, "task-list-user", "warehouse forklift detection")
 
     with app.app_context():
         task = db.session.get(Task, task_id)
@@ -78,7 +78,7 @@ def test_dashboard_aggregates_persisted_counters(tmp_path: Path):
 
     app = create_app(DashboardConfig)
     client = app.test_client()
-    headers, task_id = _register_and_create_task(client, "dashboard@example.com", "yard vehicle detection")
+    headers, task_id = _register_and_create_task(client, "dashboard-user", "yard vehicle detection")
 
     with app.app_context():
         task = db.session.get(Task, task_id)

@@ -28,7 +28,7 @@ def test_import_images_archive_adds_uploaded_images_to_task(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "import@example.com", "password": "Import123!"},
+        json={"username": "import-user", "password": "Import123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

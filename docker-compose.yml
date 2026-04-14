@@ -2,7 +2,7 @@ x-backend-env: &backend-env
   SECRET_KEY: ${SECRET_KEY:-change-me-please-with-at-least-32-bytes}
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-too-with-at-least-32-bytes}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=}
-  DEMO_EMAIL: ${DEMO_EMAIL:-demo@codvision}
+  DEMO_USERNAME: ${DEMO_USERNAME:-dataset}
   DEMO_PASSWORD: ${DEMO_PASSWORD:-Dataset123!}
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4173}
   DATABASE_URL: ${DATABASE_URL:-sqlite:////app/storage/dataset_gen.db}
@@ -61,7 +61,7 @@ services:
       retries: 5
       start_period: 15s
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-8004}:8000"
     volumes:
       - backend_storage:/app/storage
       - generated_images:/app/storage/images

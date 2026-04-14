@@ -44,7 +44,7 @@ docker compose up --build
 
 ## 演示账号
 
-- 邮箱：`demo@dataset.local`
+- 账号：`dataset`
 - 密码：`Dataset123!`
 
 JWT 说明：
@@ -63,7 +63,6 @@ JWT 说明：
 
 主要 REST API：
 
-- `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
 - `GET /api/v1/system/providers`

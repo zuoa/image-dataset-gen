@@ -22,6 +22,18 @@ def _default_encryption_key() -> str:
     return base64.b64encode(b"dataset-gen-demo-key-32-bytes!!!").decode("utf-8")
 
 
+def _default_demo_username() -> str:
+    explicit_username = os.getenv("DEMO_USERNAME", "").strip()
+    if explicit_username:
+        return explicit_username
+
+    legacy_demo_email = os.getenv("DEMO_EMAIL", "").strip()
+    if legacy_demo_email and "@" not in legacy_demo_email:
+        return legacy_demo_email
+
+    return "dataset"
+
+
 @dataclass
 class Config:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-please-change-123456")
@@ -33,7 +45,7 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:4173")
     API_PREFIX: str = "/api/v1"
-    DEMO_EMAIL: str = os.getenv("DEMO_EMAIL", "demo@dataset.local")
+    DEMO_USERNAME: str = _default_demo_username()
     DEMO_PASSWORD: str = os.getenv("DEMO_PASSWORD", "Dataset123!")
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", _default_encryption_key())
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"

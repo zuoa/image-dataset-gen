@@ -53,7 +53,7 @@ export function AppShell() {
 
           <div className="mt-auto border-t border-neutral-200 pt-6 dark:border-white/12">
             <div className="text-xs uppercase tracking-[0.24em] text-neutral-400 dark:text-neutral-500">Workspace</div>
-            <div className="mt-3 text-sm text-neutral-900 dark:text-white">{user?.email}</div>
+            <div className="mt-3 text-sm text-neutral-900 dark:text-white">{user?.username}</div>
             <div className="mt-1 text-xs text-neutral-500">{user?.plan ?? "pro"}</div>
             <div className="mt-4 flex items-center gap-3">
               <button

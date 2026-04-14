@@ -26,7 +26,7 @@ def test_export_creates_zip_archive(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "export@example.com", "password": "Export123!"},
+        json={"username": "export-user", "password": "Export123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -89,7 +89,7 @@ def test_export_uses_manually_updated_annotations(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "export-manual@example.com", "password": "Export123!"},
+        json={"username": "export-manual-user", "password": "Export123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

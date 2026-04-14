@@ -6,17 +6,10 @@ type AuthResponse = {
   user: User;
 };
 
-export function login(email: string, password: string) {
+export function login(username: string, password: string) {
   return apiRequest<AuthResponse>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-}
-
-export function register(email: string, password: string) {
-  return apiRequest<AuthResponse>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ username, password }),
   });
 }
 

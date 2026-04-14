@@ -29,7 +29,7 @@ def test_augmentation_saves_selected_methods(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "augment@example.com", "password": "Augment123!"},
+        json={"username": "augment-user", "password": "Augment123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -99,7 +99,7 @@ def test_augmentation_rejects_when_only_augmented_images_are_selected(tmp_path: 
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "augment-original-only@example.com", "password": "Augment123!"},
+        json={"username": "augment-original-only-user", "password": "Augment123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

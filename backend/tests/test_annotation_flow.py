@@ -27,7 +27,7 @@ def test_annotation_flow_persists_annotation_files(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "annotate@example.com", "password": "Annotate123!"},
+        json={"username": "annotate-user", "password": "Annotate123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -89,7 +89,7 @@ def test_manual_annotation_update_persists_to_task_payload(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "annotate-edit@example.com", "password": "Annotate123!"},
+        json={"username": "annotate-edit-user", "password": "Annotate123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}

@@ -13,7 +13,7 @@ def test_model_profiles_are_seeded_and_support_crud(tmp_path: Path):
 
     register = client.post(
         "/api/v1/auth/register",
-        json={"email": "profiles@example.com", "password": "Profiles123!"},
+        json={"username": "profiles-user", "password": "Profiles123!"},
     )
     token = register.get_json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
