@@ -107,7 +107,7 @@ def _vl_annotate(
         image_bytes = path.read_bytes()
         mime_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt = _build_vl_prompt(task.subject, categories)
+        prompt = _build_vl_prompt(task.subject, categories, getattr(image, "prompt_text", ""))
 
         try:
             if provider == "gemini":
@@ -125,17 +125,27 @@ def _vl_annotate(
     return results
 
 
-def _build_vl_prompt(subject: str, categories: list[str]) -> str:
+def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "") -> str:
     categories_str = ", ".join(categories)
-    return (
-        f"You are an expert computer vision assistant. The image is about '{subject}'. "
-        f"Detect all objects that belong to these categories: {categories_str}. "
-        "For each detection, return the category name, confidence score (0-1), and bounding box "
-        "in normalized [x_center, y_center, width, height] coordinates. "
-        "All four values must be strictly between 0 and 1 (floats, not pixels). "
-        'Return strictly as JSON: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
+    parts = [
+        "You are an expert computer vision bounding-box annotator.",
+        f"Task subject: '{subject}'.",
+        f"Allowed categories: {categories_str}.",
+    ]
+    if prompt_text:
+        parts.append(f'The image was generated from this prompt: "{prompt_text}".')
+    parts.extend([
+        "Instructions:",
+        "1. Detect every clearly visible object that matches one of the allowed categories.",
+        "2. For each object, return: category name, confidence (0-1 float), and a tight bounding box.",
+        "3. The bounding box MUST be in normalized [x_center, y_center, width, height] format.",
+        "4. All four values must be floats strictly between 0 and 1 (not pixels).",
+        "5. The box should tightly enclose the main visible body of the object. Do not include excessive background.",
+        "6. If an object is partially cropped, estimate the full box based on visible portions.",
+        'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
         'If nothing is found, return {"detections": []}.'
-    )
+    ])
+    return " ".join(parts)
 
 
 def _call_gemini_vl(api_key: str, model: str, prompt: str, mime_type: str, b64_data: str) -> str:
