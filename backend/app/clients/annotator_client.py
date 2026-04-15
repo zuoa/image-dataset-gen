@@ -140,8 +140,9 @@ def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "")
         "2. For each object, return: category name, confidence (0-1 float), and a tight bounding box.",
         "3. The bounding box MUST be in normalized [x_center, y_center, width, height] format.",
         "4. All four values must be floats strictly between 0 and 1 (not pixels).",
-        "5. The box should tightly enclose the main visible body of the object. Do not include excessive background.",
-        "6. If an object is partially cropped, estimate the full box based on visible portions.",
+        "5. The box must be as small as possible while still containing the entire object. Touch the outermost visible pixels.",
+        "6. Do not include empty background. A tight box is better than a loose box.",
+        "7. If an object is partially cropped, estimate the full box based on visible portions.",
         'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
         'If nothing is found, return {"detections": []}.'
     ])
@@ -256,6 +257,13 @@ def _parse_vl_response(
         x_center = max(x_center, width / 2)
         y_center = min(y_center, 1.0 - height / 2)
         y_center = max(y_center, height / 2)
+
+        # Shrink slightly to counteract VL tendency to over-estimate bounding boxes
+        shrink = 0.90
+        width *= shrink
+        height *= shrink
+        x_center = min(max(x_center, width / 2), 1.0 - width / 2)
+        y_center = min(max(y_center, height / 2), 1.0 - height / 2)
 
         detections.append({
             "category": category,
