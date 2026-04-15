@@ -8,9 +8,8 @@ import zipfile
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-from app.clients.annotator_client import annotate_task_images
 from app.extensions import db
-from app.models import ModelProfile, Task, TaskExport
+from app.models import ModelProfile, Task, TaskExport, TaskImage
 from app.schemas import (
     AnnotationUpdateSchema,
     PromptPreviewSchema,
@@ -20,7 +19,7 @@ from app.schemas import (
     TaskSchema,
 )
 from app.services.annotation_storage import save_annotation_result
-from app.services.export_service import build_export_archive, get_archive_path
+from app.services.export_service import get_archive_path
 from app.services.image_storage import existing_generated_image, normalize_uploaded_image, preview_data_url, save_generated_image
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.services.subject_assist_service import suggest_subject_fields
@@ -30,7 +29,6 @@ from app.services.task_service import (
     build_export_payload,
     build_task_payload,
     build_task_list_payload,
-    enqueue_task_generation,
     now_utc,
     sync_task_progress,
 )
@@ -156,7 +154,8 @@ def start_task(task_id: str):
     task.started_at = now_utc()
     task.completed_at = None
     db.session.commit()
-    enqueue_task_generation(current_app._get_current_object(), task.id)
+    from app.worker_tasks import generate_task_images
+    generate_task_images.delay(task.id)
     return jsonify({"task": build_task_payload(task)})
 
 
@@ -173,7 +172,9 @@ def retry_task(task_id: str):
     task.started_at = now_utc()
     task.completed_at = None
     db.session.commit()
-    enqueue_task_generation(current_app._get_current_object(), task.id)
+    from app.worker_tasks import generate_task_images
+
+    generate_task_images.delay(task.id)
     return jsonify({"task": build_task_payload(task)})
 
 
@@ -216,7 +217,10 @@ def augment_task(task_id: str):
         },
     }
     db.session.commit()
-    task = sync_task_progress(task)
+    from app.worker_tasks import augment_task_images
+
+    augment_task_images.delay(task.id)
+    task = sync_task_progress(_task_for_user(task_id, user_id))
     return jsonify(
         {
             "summary": task.config_json["augmentation"],
@@ -346,10 +350,10 @@ def annotate_task(task_id: str):
         "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
     }
 
-    app = current_app._get_current_object()
-    _run_annotation_in_thread(
-        app,
-        task,
+    from app.worker_tasks import annotate_task_images_task
+
+    annotate_task_images_task.delay(
+        task.id,
         action["confidence_threshold"],
         vl_config,
     )
@@ -364,74 +368,6 @@ def annotate_task(task_id: str):
     task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
     db.session.commit()
     return jsonify({"summary": annotation_summary, "task": build_task_payload(task)})
-
-
-def _run_annotation_in_thread(
-    app: Flask,
-    task: Task,
-    confidence_threshold: float,
-    vl_config: dict[str, str],
-) -> None:
-    from threading import Thread
-
-    def worker() -> None:
-        try:
-            with app.app_context():
-                results = annotate_task_images(
-                    task,
-                    confidence_threshold=confidence_threshold,
-                    annotator_url="",
-                    storage_root=app.config["STORAGE_ROOT"],
-                    vl_config=vl_config,
-                )
-
-                images_by_id = {image.id: image for image in task.images}
-                detected_images = 0
-                empty_labels = 0
-
-                for result in results:
-                    image = images_by_id.get(result["imageId"])
-                    if not image:
-                        continue
-                    detections = result.get("detections", [])
-                    save_annotation_result(app.config["STORAGE_ROOT"], task.id, image.id, detections)
-                    image.annotation_status = "annotated" if detections else "empty"
-                    image.confidence_score = max(
-                        [float(detection["confidence"]) for detection in detections],
-                        default=None,
-                    )
-                    if detections:
-                        detected_images += 1
-                    else:
-                        empty_labels += 1
-
-                annotation_summary = {
-                    **((task.config_json or {}).get("annotation") or {}),
-                    "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
-                    "confidenceThreshold": confidence_threshold,
-                    "detectedImages": detected_images,
-                    "emptyLabels": empty_labels,
-                    "format": "yolo",
-                    "status": "completed",
-                    "updatedAt": now_utc().isoformat(),
-                }
-                task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
-                db.session.commit()
-        except Exception:
-            app.logger.exception("Manual annotation failed for task %s", task.id)
-            try:
-                with app.app_context():
-                    annotation_summary = {
-                        **((task.config_json or {}).get("annotation") or {}),
-                        "status": "failed",
-                        "updatedAt": now_utc().isoformat(),
-                    }
-                    task.config_json = {**(task.config_json or {}), "annotation": annotation_summary}
-                    db.session.commit()
-            except Exception:
-                pass
-
-    Thread(target=worker, daemon=True, name=f"manual-annotate-{task.id}").start()
 
 
 @tasks_bp.get("/<task_id>/images/<image_id>/preview")
@@ -490,6 +426,7 @@ def export_task(task_id: str):
         task_id=task.id,
         version=latest_version + 1,
         export_format=action["export_format"],
+        status="pending",
         download_url=f"{current_app.config['API_PREFIX']}/tasks/{task.id}/exports/{latest_version + 1}/download",
         summary_json={
             "imageFormat": action["image_format"],
@@ -500,15 +437,9 @@ def export_task(task_id: str):
     )
     db.session.add(export_job)
     db.session.flush()
-    archive_summary = build_export_archive(
-        task=task,
-        export_job=export_job,
-        export_format=action["export_format"],
-        image_format=action["image_format"],
-        include_readme=action["include_readme"],
-        storage_root=current_app.config["STORAGE_ROOT"],
-    )
-    export_job.summary_json = archive_summary
+    from app.worker_tasks import export_task_archive
+
+    export_task_archive.delay(export_job.id)
     db.session.commit()
     return jsonify({"export": build_export_payload(export_job), "task": build_task_payload(task)}), 201
 

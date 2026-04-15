@@ -91,5 +91,5 @@ def test_retry_task_clears_generation_error(tmp_path: Path):
     task = wait_for_task(client, task_id, headers)
 
     assert retried.status_code == 200
-    assert retried.get_json()["task"]["status"] == "running"
+    assert retried.get_json()["task"]["status"] == "paused"
     assert task["status"] == "paused"

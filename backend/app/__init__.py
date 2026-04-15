@@ -12,7 +12,7 @@ from app.api.auth import auth_bp
 from app.api.system import system_bp
 from app.api.tasks import tasks_bp
 from app.config import Config
-from app.extensions import cors, db, jwt
+from app.extensions import celery, cors, db, jwt
 from app.models import User
 from app.services.model_profile_service import ensure_default_model_profiles
 
@@ -31,6 +31,7 @@ def create_app(
         resources={f"{app.config['API_PREFIX']}/*": {"origins": app.config["FRONTEND_URL"]}},
         supports_credentials=True,
     )
+    _make_celery(app)
 
     api_prefix = app.config["API_PREFIX"]
     app.register_blueprint(auth_bp, url_prefix=f"{api_prefix}/auth")
@@ -123,3 +124,20 @@ def _ensure_schema_columns() -> None:
         db.session.execute(text(statement))
     if statements:
         db.session.commit()
+
+
+def _make_celery(app: Flask) -> None:
+    celery.conf.update(
+        broker_url=app.config["CELERY_BROKER_URL"],
+        result_backend=app.config["CELERY_RESULT_BACKEND"],
+        task_track_started=app.config.get("CELERY_TASK_TRACK_STARTED", True),
+        task_time_limit=app.config.get("CELERY_TASK_TIME_LIMIT", 3600),
+        broker_connection_retry_on_startup=app.config.get("CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP", True),
+    )
+
+    # Propagate any other CELERY_ prefixed config keys (strip CELERY_ prefix and lower-case)
+    for key, value in app.config.items():
+        if key.startswith("CELERY_"):
+            celery.conf[key[7:].lower()] = value
+
+    celery.conf["flask_app"] = app

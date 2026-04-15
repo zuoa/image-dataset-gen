@@ -25,6 +25,15 @@ x-backend-env: &backend-env
   IMAGE_BASE_URL: ${IMAGE_BASE_URL:-http://localhost:4173/images}
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   backend:
     image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
     build:
@@ -32,6 +41,9 @@ services:
     init: true
     restart: unless-stopped
     environment: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -47,6 +59,33 @@ services:
     volumes:
       - backend_storage:/app/storage
       - generated_images:/app/storage/images
+
+  celery-worker:
+    image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
+    build:
+      context: ./backend
+    init: true
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - backend_storage:/app/storage
+      - generated_images:/app/storage/images
+    command:
+      - celery
+      - -A
+      - app.celery_worker
+      - worker
+      - --concurrency=1
+      - --pool=solo
+      - --loglevel=info
 
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/zuoa/dataset-gen-frontend:latest}

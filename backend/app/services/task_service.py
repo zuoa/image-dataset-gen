@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from threading import Lock, Thread
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from flask import Flask, current_app
+from flask import current_app
 from sqlalchemy import case, func, select
 
 from app.clients.gemini_client import (
@@ -22,7 +21,6 @@ from app.extensions import db
 from app.models import Task, TaskExport, TaskImage
 from app.services.annotation_storage import load_annotation_result
 from app.services.image_storage import (
-    augment_generated_image,
     existing_generated_image,
     preview_data_url,
     save_generated_image,
@@ -105,12 +103,6 @@ PROVIDER_CATALOG = [
         "notes": ["Currently unsupported and will pause immediately"],
     },
 ]
-
-_active_generation_tasks: set[str] = set()
-_active_generation_lock = Lock()
-_active_annotation_tasks: set[str] = set()
-_active_annotation_lock = Lock()
-
 
 def now_utc() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
@@ -232,22 +224,6 @@ def build_demo_svg(task: Task, ordinal: int, category: str, variant: dict[str, A
     return f"data:image/svg+xml;utf8,{quote(svg)}"
 
 
-def enqueue_task_generation(app: Flask, task_id: str) -> bool:
-    with _active_generation_lock:
-        if task_id in _active_generation_tasks:
-            return False
-        _active_generation_tasks.add(task_id)
-
-    thread = Thread(
-        target=_run_task_generation,
-        args=(app, task_id),
-        daemon=True,
-        name=f"task-generation-{task_id}",
-    )
-    thread.start()
-    return True
-
-
 def sync_task_progress(task: Task) -> Task:
     return sync_task_augmentation_progress(task)
 
@@ -260,10 +236,6 @@ def sync_task_augmentation_progress(task: Task) -> Task:
     task.selected_count = sum(1 for image in task.images if image.selected)
     db.session.commit()
     db.session.refresh(task)
-
-    augmentation = (task.config_json or {}).get("augmentation", {})
-    if augmentation.get("status") == "completed":
-        _enqueue_auto_annotation(current_app._get_current_object(), task)
     return task
 
 
@@ -271,12 +243,6 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
     augmentation = {**((task.config_json or {}).get("augmentation") or {})}
     if augmentation.get("status") != "running":
         return False
-
-    started_at_raw = augmentation.get("startedAt")
-    try:
-        started_at = datetime.fromisoformat(str(started_at_raw)) if started_at_raw else now_utc()
-    except ValueError:
-        started_at = now_utc()
 
     source_image_ids = [str(image_id) for image_id in augmentation.get("sourceImageIds", [])]
     source_images = [image for image in task.images if image.id in source_image_ids]
@@ -299,57 +265,6 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
         task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
         return True
 
-    elapsed_seconds = max(0.0, (now_utc() - started_at).total_seconds())
-    target_completed = min(total_to_create, int(elapsed_seconds / 0.55) + 1)
-    batch_limit = max(1, int(task.config_json.get("concurrency", 1)))
-    target_completed = min(target_completed, completed_images + batch_limit)
-
-    next_ordinal = max((image.ordinal for image in task.images), default=0) + 1
-    methods = [str(method) for method in augmentation.get("methods", [])]
-    settings = augmentation.get("settings") if isinstance(augmentation.get("settings"), dict) else {}
-    storage_root = current_app.config["STORAGE_ROOT"]
-
-    while completed_images < target_completed:
-        source_image = source_images[completed_images % len(source_images)]
-        augmentation_seed = source_image.seed + 1000 + completed_images
-        augmented = augment_generated_image(
-            storage_root,
-            task.id,
-            f"ordinal-{source_image.ordinal:06d}",
-            f"ordinal-{next_ordinal:06d}",
-            methods,
-            augmentation_seed,
-            settings,
-        )
-        if augmented is None:
-            augmentation["status"] = "failed"
-            augmentation["error"] = "source_image_missing"
-            augmentation["updatedAt"] = now_utc().isoformat()
-            task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
-            return True
-
-        applied_methods = [str(item) for item in augmented["applied_methods"]]
-        image = TaskImage(
-            task_id=task.id,
-            ordinal=next_ordinal,
-            status="augmented",
-            seed=augmentation_seed,
-            prompt_text=f'{source_image.prompt_text}, augmentation: {", ".join(applied_methods)}',
-            diversity_vars={**(source_image.diversity_vars or {}), "augmentation": ", ".join(applied_methods)},
-            latency_ms=max(400, int(source_image.latency_ms * 0.35)),
-            preview_svg=preview_data_url(
-                bytes(augmented["image_bytes"]),
-                str(augmented["mime_type"]),
-            ),
-            selected=True,
-            annotation_status="pending",
-            confidence_score=source_image.confidence_score,
-        )
-        db.session.add(image)
-        task.images.append(image)
-        completed_images += 1
-        next_ordinal += 1
-
     augmentation["completedImages"] = completed_images
     augmentation["progressPercent"] = round(completed_images / total_to_create * 100)
     augmentation["updatedAt"] = now_utc().isoformat()
@@ -358,46 +273,6 @@ def _sync_augmentation_progress_inplace(task: Task) -> bool:
         augmentation["completedAt"] = now_utc().isoformat()
     task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
     return True
-
-
-def _run_task_generation(app: Flask, task_id: str) -> None:
-    try:
-        with app.app_context():
-            while True:
-                task = db.session.get(Task, task_id)
-                if task is None or task.status != "running":
-                    return
-
-                if len(task.images) >= task.image_count:
-                    _update_generation_metrics(task, len(task.images))
-                    db.session.commit()
-                    return
-
-                try:
-                    _generate_next_task_image(task)
-                    db.session.commit()
-                except ImageGenerationError as exc:
-                    _pause_task_generation(task, str(exc))
-                    db.session.commit()
-                    return
-
-                db.session.remove()
-    except Exception:
-        with app.app_context():
-            app.logger.exception("Background generation failed for task %s", task_id)
-            task = db.session.get(Task, task_id)
-            if task is not None and task.status == "running":
-                _pause_task_generation(task, "background_generation_failed")
-                db.session.commit()
-            db.session.remove()
-    finally:
-        with _active_generation_lock:
-            _active_generation_tasks.discard(task_id)
-        with app.app_context():
-            task = db.session.get(Task, task_id)
-            if task is not None and task.status == "completed":
-                _enqueue_auto_annotation(app, task)
-            db.session.remove()
 
 
 def _generate_next_task_image(task: Task) -> None:
@@ -600,80 +475,3 @@ def _build_dashboard_summary_payload(
     }
 
 
-def _enqueue_auto_annotation(app: Flask, task: Task) -> None:
-    with _active_annotation_lock:
-        if task.id in _active_annotation_tasks:
-            return
-        _active_annotation_tasks.add(task.id)
-
-    def run_annotation() -> None:
-        try:
-            with app.app_context():
-                from app.clients.annotator_client import annotate_task_images
-                from app.services.annotation_storage import save_annotation_result
-
-                task_inner = db.session.get(Task, task.id)
-                if not task_inner:
-                    return
-
-                vl_config = {
-                    "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
-                    "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
-                    "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
-                    "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
-                }
-
-                try:
-                    results = annotate_task_images(
-                        task_inner,
-                        confidence_threshold=0.5,
-                        annotator_url=current_app.config["ANNOTATOR_URL"],
-                        storage_root=current_app.config["STORAGE_ROOT"],
-                        vl_config=vl_config,
-                    )
-                except Exception:
-                    app.logger.exception("Auto annotation API failed for task %s", task.id)
-                    return
-
-                images_by_id = {image.id: image for image in task_inner.images}
-                detected_images = 0
-                empty_labels = 0
-
-                for result in results:
-                    image = images_by_id.get(result["imageId"])
-                    if not image:
-                        continue
-                    detections = result.get("detections", [])
-                    save_annotation_result(
-                        current_app.config["STORAGE_ROOT"], task_inner.id, image.id, detections
-                    )
-                    image.annotation_status = "annotated" if detections else "empty"
-                    image.confidence_score = max(
-                        [float(detection["confidence"]) for detection in detections],
-                        default=None,
-                    )
-                    if detections:
-                        detected_images += 1
-                    else:
-                        empty_labels += 1
-
-                annotation_summary = {
-                    **((task_inner.config_json or {}).get("annotation") or {}),
-                    "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
-                    "confidenceThreshold": 0.5,
-                    "detectedImages": detected_images,
-                    "emptyLabels": empty_labels,
-                    "format": "yolo",
-                    "autoAnnotated": True,
-                    "updatedAt": now_utc().isoformat(),
-                }
-                task_inner.config_json = {**(task_inner.config_json or {}), "annotation": annotation_summary}
-                db.session.commit()
-        except Exception:
-            app.logger.exception("Auto annotation failed for task %s", task.id)
-        finally:
-            with _active_annotation_lock:
-                _active_annotation_tasks.discard(task.id)
-
-    thread = Thread(target=run_annotation, daemon=True, name=f"auto-annotate-{task.id}")
-    thread.start()

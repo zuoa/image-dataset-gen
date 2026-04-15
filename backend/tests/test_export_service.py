@@ -119,7 +119,7 @@ def test_export_uses_manually_updated_annotations(tmp_path: Path):
     with patch(
         "app.services.task_service.generate_gemini_image",
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
-    ):
+    ), patch("app.worker_tasks._enqueue_auto_annotation"):
         client.post(f"/api/v1/tasks/{task_id}/start", headers=headers, json={})
         task = wait_for_task(client, task_id, headers)
 
@@ -149,6 +149,9 @@ def test_export_uses_manually_updated_annotations(tmp_path: Path):
     assert files
 
     with zipfile.ZipFile(files[0]) as archive:
-        label_name = next(member for member in archive.namelist() if member.endswith(".txt"))
+        label_name = next(
+            member for member in archive.namelist()
+            if member.endswith(".txt") and "000001" in member
+        )
         label_content = archive.read(label_name).decode("utf-8").strip()
         assert label_content == "0 0.500000 0.500000 0.200000 0.300000"

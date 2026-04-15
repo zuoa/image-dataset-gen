@@ -68,6 +68,11 @@ class Config:
     OPENAI_COMPAT_BASE_URL: str = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")
     OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "deepseek-chat")
     IMAGE_BASE_URL: str = os.getenv("IMAGE_BASE_URL", "")
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_TASK_TIME_LIMIT: int = 3600
+    CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP: bool = True
 
 
 @dataclass
@@ -76,3 +81,7 @@ class TestConfig(Config):
     TESTING: bool = True
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
     AUTO_CREATE_SCHEMA: bool = True
+    CELERY_BROKER_URL: str = "memory://"
+    CELERY_RESULT_BACKEND: str = "cache+memory://"
+    CELERY_TASK_ALWAYS_EAGER: bool = True
+    CELERY_TASK_EAGER_PROPAGATES: bool = True
