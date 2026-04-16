@@ -144,6 +144,7 @@ class TaskActionSchema(Schema):
     confidence_threshold = fields.Float(
         load_default=0.6, validate=validate.Range(min=0.3, max=0.95)
     )
+    skip_annotated = fields.Boolean(load_default=False)
     export_format = fields.String(
         load_default="yolo", validate=validate.OneOf(["yolo", "coco", "voc", "csv"])
     )

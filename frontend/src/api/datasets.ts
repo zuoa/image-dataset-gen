@@ -126,11 +126,11 @@ export function augmentDataset(
   });
 }
 
-export function annotateDataset(datasetId: string, token: string, confidenceThreshold: number) {
+export function annotateDataset(datasetId: string, token: string, confidenceThreshold: number, skipAnnotated: boolean = false) {
   return apiRequest<{ summary: Record<string, unknown>; dataset: Dataset }>(`/datasets/${datasetId}/annotate`, {
     method: "POST",
     token,
-    body: JSON.stringify({ confidence_threshold: confidenceThreshold }),
+    body: JSON.stringify({ confidence_threshold: confidenceThreshold, skip_annotated: skipAnnotated }),
   });
 }
 

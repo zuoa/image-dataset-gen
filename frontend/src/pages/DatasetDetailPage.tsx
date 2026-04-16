@@ -103,6 +103,7 @@ export function DatasetDetailPage() {
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
+  const [skipAnnotated, setSkipAnnotated] = useState(true);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("yolo");
   const [actionError, setActionError] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
@@ -291,7 +292,7 @@ export function DatasetDetailPage() {
     if (!token || !datasetId) return;
     setIsSubmittingAnnotation(true);
     try {
-      const response = await annotateDataset(datasetId, token, confidenceThreshold);
+      const response = await annotateDataset(datasetId, token, confidenceThreshold, skipAnnotated);
       setDataset(response.dataset);
       setActionError(null);
       setIsAnnotationModalOpen(false);
@@ -1038,6 +1039,16 @@ export function DatasetDetailPage() {
                 </div>
               </div>
             </div>
+
+            <label className="mt-5 flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={skipAnnotated}
+                onChange={() => setSkipAnnotated((current) => !current)}
+                className="h-4 w-4 rounded border-neutral-300"
+              />
+              <span className="text-sm text-neutral-700 dark:text-neutral-300">跳过已标注的样本，仅标注未标注的图片</span>
+            </label>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <Button

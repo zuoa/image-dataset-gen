@@ -481,6 +481,7 @@ def annotate_dataset(dataset_id: str):
         dataset.id,
         action["confidence_threshold"],
         vl_config,
+        action["skip_annotated"],
     )
     dataset.annotation_json = {
         **annotation,

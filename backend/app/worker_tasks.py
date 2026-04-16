@@ -225,6 +225,7 @@ def annotate_dataset_images_task(
     dataset_id: str,
     confidence_threshold: float,
     vl_config: dict[str, str] | None = None,
+    skip_annotated: bool = False,
 ) -> None:
     from app.clients.annotator_client import annotate_dataset_images
     from app.services.annotation_storage import save_annotation_result
@@ -237,6 +238,20 @@ def annotate_dataset_images_task(
     storage_root = current_app.config["STORAGE_ROOT"]
     vl_config = vl_config or {}
 
+    images_to_process = dataset.images
+    if skip_annotated:
+        images_to_process = [img for img in dataset.images if img.annotation_status != "annotated"]
+
+    if not images_to_process:
+        dataset.annotation_json = {
+            **annotation,
+            "status": "completed",
+            "updatedAt": now_utc().isoformat(),
+            "skipped": True,
+        }
+        db.session.commit()
+        return
+
     try:
         results = annotate_dataset_images(
             dataset,
@@ -244,6 +259,7 @@ def annotate_dataset_images_task(
             annotator_url=current_app.config.get("ANNOTATOR_URL", ""),
             storage_root=storage_root,
             vl_config=vl_config,
+            images=images_to_process,
         )
     except Exception:
         current_app.logger.exception("Annotation API failed for dataset %s", dataset.id)
