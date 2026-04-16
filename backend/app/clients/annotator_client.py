@@ -130,25 +130,32 @@ def _vl_annotate_dataset(
 def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "") -> str:
     categories_str = ", ".join(categories)
     parts = [
-        "You are an expert computer vision bounding-box annotator.",
+        "You are a professional bounding-box annotator. Your ONLY task is to output precise, tight bounding boxes.",
         f"Dataset subject: '{subject}'.",
-        f"Allowed categories: {categories_str}.",
+        f"Target categories: {categories_str}.",
     ]
     if prompt_text:
-        parts.append(f'The image was generated from this prompt: "{prompt_text}".')
+        parts.append(f'Image was generated from prompt: "{prompt_text}".')
     parts.extend([
-        "Instructions:",
-        "1. Detect every clearly visible object that matches one of the allowed categories.",
-        "2. For each object, return: category name, confidence (0-1 float), and a tight bounding box.",
-        "3. The bounding box MUST be in normalized [x_center, y_center, width, height] format.",
-        "4. All four values must be floats strictly between 0 and 1 (not pixels).",
-        "5. The box must be as tight as possible — hug the visible object outline closely. Shrink 20% tighter than you think.",
-        "6. Do not include empty background. A tight box is MUCH better than a loose box. When in doubt, make it smaller.",
-        "7. If an object is partially cropped, estimate the full box based on visible portions.",
-        'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
+        "",
+        "CRITICAL RULES FOR BOUNDING BOXES:",
+        "- Format: normalized [x_center, y_center, width, height], all values between 0 and 1.",
+        "- The box must tightly contour the object's actual visible boundary — no extra margin.",
+        "- Do NOT add any padding or safety margin around the object.",
+        "- If the object occupies a small region, return a small box. A typical object in these images is often only 10-25% of the image dimension.",
+        "- WRONG: a loose box covering the whole object with lots of background — this is the most common mistake.",
+        "- RIGHT: a box that closely hugs the exact outline of the object.",
+        "- Before finalizing each box, ask yourself: can I shrink this box by 30% and still contain the object? If yes, your box is too large.",
+        "",
+        "Steps:",
+        "1. Identify each clearly visible object matching a target category.",
+        "2. For each object, carefully trace its visual outline and place the box right at that boundary.",
+        "3. Return category, confidence (0-1), and bounding box.",
+        "",
+        'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.15, 0.2]}]}. '
         'If nothing is found, return {"detections": []}.'
     ])
-    return " ".join(parts)
+    return "\n".join(parts)
 
 
 def _call_gemini_vl(api_key: str, model: str, prompt: str, mime_type: str, b64_data: str) -> str:
@@ -260,8 +267,8 @@ def _parse_vl_response(
         y_center = min(y_center, 1.0 - height / 2)
         y_center = max(y_center, height / 2)
 
-        # Shrink to counteract VL tendency to over-estimate bounding boxes
-        shrink = 0.78
+        # Minor shrink to compensate for VL over-estimation
+        shrink = 0.92
         width *= shrink
         height *= shrink
         x_center = min(max(x_center, width / 2), 1.0 - width / 2)
@@ -287,8 +294,8 @@ def _local_annotate(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if image["ordinal"] % 7 != 0 and confidence >= threshold:
             x_center = round(min(0.24 + ((seed % 37) / 100), 0.84), 4)
             y_center = round(min(0.26 + (((seed // 10) % 33) / 100), 0.84), 4)
-            width = round(min(0.14 + (((seed // 100) % 9) / 100), 0.24), 4)
-            height = round(min(0.16 + (((seed // 1000) % 9) / 100), 0.26), 4)
+            width = round(min(0.10 + (((seed // 100) % 7) / 100), 0.18), 4)
+            height = round(min(0.12 + (((seed // 1000) % 7) / 100), 0.20), 4)
             detections.append(
                 {
                     "category": image["categoryHint"],
