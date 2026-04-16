@@ -136,7 +136,8 @@ def export_image_to_format(source_path: Path, destination_path: Path, image_form
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     if image_format == "png":
         with Image.open(source_path) as image:
-            image.convert("RGB").save(destination_path, format="PNG")
+            preserve_alpha = image.mode in {"RGBA", "LA"} or "transparency" in image.info
+            image.convert("RGBA" if preserve_alpha else "RGB").save(destination_path, format="PNG")
         return
     with Image.open(source_path) as image:
         image.convert("RGB").save(destination_path, format="JPEG", quality=90)

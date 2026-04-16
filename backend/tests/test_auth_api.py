@@ -48,3 +48,27 @@ def test_register_accepts_plain_username(tmp_path: Path):
     payload = register.get_json()
     assert payload["user"]["username"] == "dataset_ops"
     assert "email" not in payload["user"]
+
+
+def test_dashboard_summary_uses_dataset_summary_helper(tmp_path: Path):
+    class AuthConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(AuthConfig)
+    client = app.test_client()
+
+    register = client.post(
+        "/api/v1/auth/register",
+        json={"username": "dashboard_user", "password": "Dataset123!"},
+    )
+    token = register.get_json()["token"]
+
+    response = client.get(
+        "/api/v1/system/dashboard",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    summary = response.get_json()["summary"]
+    assert summary["totalDatasets"] == 0
+    assert summary["totalImages"] == 0

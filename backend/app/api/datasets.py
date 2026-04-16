@@ -224,7 +224,23 @@ def retry_dataset_task(dataset_id: str, task_id: str):
     runtime = {**((task.config_json or {}).get("runtime") or {})}
     runtime.pop("generationError", None)
     runtime["retriedAt"] = now_utc().isoformat()
-    task.config_json = {**(task.config_json or {}), "runtime": runtime}
+    next_config = {**(task.config_json or {}), "runtime": runtime}
+    if task.task_type == "augmentation":
+        augmentation = {**((task.config_json or {}).get("augmentation") or {})}
+        if augmentation:
+            augmentation["status"] = "running"
+            augmentation["completedImages"] = len(task.images)
+            total_to_create = max(int(augmentation.get("totalImagesToCreate", task.image_count or 0)), 0)
+            if total_to_create > 0:
+                augmentation["progressPercent"] = min(100, round(len(task.images) / total_to_create * 100))
+            else:
+                augmentation["progressPercent"] = 0
+            augmentation["updatedAt"] = now_utc().isoformat()
+            augmentation["startedAt"] = augmentation.get("startedAt") or now_utc().isoformat()
+            augmentation.pop("completedAt", None)
+            augmentation.pop("error", None)
+            next_config["augmentation"] = augmentation
+    task.config_json = next_config
     task.status = "running"
     task.started_at = now_utc()
     task.completed_at = None

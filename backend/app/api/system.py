@@ -27,7 +27,7 @@ def providers():
 @jwt_required()
 def dashboard():
     user_id = get_jwt_identity()
-    return jsonify({"summary": build_dashboard_summary_for_user(user_id)})
+    return jsonify({"summary": build_dataset_summary_for_user(user_id)})
 
 
 @system_bp.get("/model-profiles")

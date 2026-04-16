@@ -33,26 +33,25 @@ def build_dataset_export_archive(
     dataset_name = _slugify(dataset.name or "dataset")
 
     selected_images = [image for image in dataset.images if image.selected]
-    actual_image_format = _resolve_image_format(image_format, "jpg")
-    image_ext = "jpg" if actual_image_format == "jpg" else "png"
     split_assignments = _build_splits(selected_images)
     categories = dataset.categories or ["default"]
+    image_format_summary = _resolved_image_format_summary(dataset, selected_images, image_format, storage_root)
 
     with tempfile.TemporaryDirectory(prefix="dataset-export-") as temp_dir:
         temp_root = Path(temp_dir) / dataset_name
         temp_root.mkdir(parents=True, exist_ok=True)
 
         if export_format == "yolo":
-            _write_yolo_dataset(temp_root, dataset, selected_images, split_assignments, categories, image_ext, storage_root)
+            _write_yolo_dataset(temp_root, dataset, selected_images, split_assignments, categories, image_format, storage_root)
         elif export_format == "coco":
-            _write_coco_dataset(temp_root, dataset, split_assignments, categories, image_ext, storage_root)
+            _write_coco_dataset(temp_root, dataset, split_assignments, categories, image_format, storage_root)
         elif export_format == "voc":
-            _write_voc_dataset(temp_root, dataset, split_assignments, image_ext, storage_root)
+            _write_voc_dataset(temp_root, dataset, split_assignments, image_format, storage_root)
         else:
-            _write_csv_dataset(temp_root, dataset, selected_images, categories, image_ext, storage_root)
+            _write_csv_dataset(temp_root, dataset, selected_images, categories, image_format, storage_root)
 
         if include_readme:
-            _write_readme(temp_root, dataset, export_format, len(selected_images), image_ext)
+            _write_readme(temp_root, dataset, export_format, len(selected_images), image_format_summary)
 
         if export_format == "yolo":
             _write_data_yaml(temp_root, categories)
@@ -69,7 +68,7 @@ def build_dataset_export_archive(
         "estimatedSizeMb": round(archive_path.stat().st_size / (1024 * 1024), 2),
         "imageCount": len(selected_images),
         "categoryCount": len(categories),
-        "imageFormat": image_ext,
+        "imageFormat": image_format_summary,
         "structure": "yolov8" if export_format == "yolo" else export_format,
         "splits": {key: len(value) for key, value in split_assignments.items()},
     }
@@ -88,6 +87,48 @@ def _resolve_image_format(image_format: str, original_format: str) -> str:
     if image_format in {"jpg", "png"}:
         return image_format
     return "jpg" if original_format == "jpg" else "png"
+
+
+def _resolved_image_format_for_dataset_image(
+    dataset: Dataset,
+    dataset_image: DatasetImage,
+    image_format: str,
+    storage_root: str,
+) -> tuple[str, str]:
+    if image_format in {"jpg", "png"}:
+        return image_format, image_format
+
+    generated_path = existing_generated_image(storage_root, dataset.id, f"image-{dataset_image.ordinal:06d}")
+    if generated_path is not None and generated_path.suffix.lower() == ".png":
+        return "png", "png"
+
+    if generated_path is not None:
+        return "jpg", "jpg"
+
+    if dataset_image.preview_svg.startswith("data:image/png"):
+        return "png", "png"
+
+    return "jpg", "jpg"
+
+
+def _resolved_image_format_summary(
+    dataset: Dataset,
+    images: list[DatasetImage],
+    image_format: str,
+    storage_root: str,
+) -> str:
+    if image_format in {"jpg", "png"}:
+        return image_format
+
+    actual_formats = {
+        _resolved_image_format_for_dataset_image(dataset, dataset_image, image_format, storage_root)[1]
+        for dataset_image in images
+    }
+    if not actual_formats:
+        return "keep"
+    if len(actual_formats) == 1:
+        return next(iter(actual_formats))
+    return "mixed"
 
 
 def _build_splits(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
@@ -180,7 +221,7 @@ def _write_yolo_dataset(
     images: list[DatasetImage],
     split_assignments: dict[str, list[DatasetImage]],
     categories: list[str],
-    image_ext: str,
+    image_format: str,
     storage_root: str,
 ) -> None:
     category_to_id = {name: index for index, name in enumerate(categories)}
@@ -189,8 +230,17 @@ def _write_yolo_dataset(
         for dataset_image in split_images:
             detection = _primary_detection(storage_root, dataset, dataset_image)
             category = str(detection["category"]) if detection and detection.get("category") in category_to_id else categories[0]
+            actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
+                dataset, dataset_image, image_format, storage_root
+            )
             image_name = _image_name(dataset_image, category, image_ext)
-            _save_preview_image(dataset, dataset_image, temp_root / "images" / split_name / image_name, image_ext, storage_root)
+            _save_preview_image(
+                dataset,
+                dataset_image,
+                temp_root / "images" / split_name / image_name,
+                actual_image_format,
+                storage_root,
+            )
             _write_yolo_label(
                 temp_root / "labels" / split_name / f"{Path(image_name).stem}.txt",
                 category_to_id[category],
@@ -203,7 +253,7 @@ def _write_coco_dataset(
     dataset: Dataset,
     split_assignments: dict[str, list[DatasetImage]],
     categories: list[str],
-    image_ext: str,
+    image_format: str,
     storage_root: str,
 ) -> None:
     category_to_id = {name: index + 1 for index, name in enumerate(categories)}
@@ -217,8 +267,17 @@ def _write_coco_dataset(
         for image_id, dataset_image in enumerate(split_images, start=1):
             detection = _primary_detection(storage_root, dataset, dataset_image)
             category = str(detection["category"]) if detection and detection.get("category") in category_to_id else categories[0]
+            actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
+                dataset, dataset_image, image_format, storage_root
+            )
             image_name = _image_name(dataset_image, category, image_ext)
-            _save_preview_image(dataset, dataset_image, temp_root / split_name / image_name, image_ext, storage_root)
+            _save_preview_image(
+                dataset,
+                dataset_image,
+                temp_root / split_name / image_name,
+                actual_image_format,
+                storage_root,
+            )
             images_payload.append(
                 {
                     "id": image_id,
@@ -266,7 +325,7 @@ def _write_voc_dataset(
     temp_root: Path,
     dataset: Dataset,
     split_assignments: dict[str, list[DatasetImage]],
-    image_ext: str,
+    image_format: str,
     storage_root: str,
 ) -> None:
     jpeg_images = temp_root / "JPEGImages"
@@ -285,9 +344,18 @@ def _write_voc_dataset(
                 if detection and detection.get("category")
                 else (dataset.categories[0] if dataset.categories else "default")
             )
+            actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
+                dataset, dataset_image, image_format, storage_root
+            )
             image_stem = Path(_image_name(dataset_image, category, image_ext)).stem
             ids.append(image_stem)
-            _save_preview_image(dataset, dataset_image, jpeg_images / f"{image_stem}.{image_ext}", image_ext, storage_root)
+            _save_preview_image(
+                dataset,
+                dataset_image,
+                jpeg_images / f"{image_stem}.{image_ext}",
+                actual_image_format,
+                storage_root,
+            )
 
             annotation = Element("annotation")
             SubElement(annotation, "folder").text = "JPEGImages"
@@ -321,7 +389,7 @@ def _write_csv_dataset(
     dataset: Dataset,
     images: list[DatasetImage],
     categories: list[str],
-    image_ext: str,
+    image_format: str,
     storage_root: str,
 ) -> None:
     images_dir = temp_root / "images"
@@ -329,8 +397,17 @@ def _write_csv_dataset(
     for dataset_image in images:
         detection = _primary_detection(storage_root, dataset, dataset_image)
         category = str(detection["category"]) if detection and detection.get("category") in categories else categories[0]
+        actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
+            dataset, dataset_image, image_format, storage_root
+        )
         image_name = _image_name(dataset_image, category, image_ext)
-        _save_preview_image(dataset, dataset_image, images_dir / image_name, image_ext, storage_root)
+        _save_preview_image(
+            dataset,
+            dataset_image,
+            images_dir / image_name,
+            actual_image_format,
+            storage_root,
+        )
         rows.append(
             {
                 "image_name": image_name,
