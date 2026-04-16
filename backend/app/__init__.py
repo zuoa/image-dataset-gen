@@ -6,6 +6,7 @@ from pathlib import Path
 from flask import Flask, jsonify
 from marshmallow import ValidationError
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
 from app.api.auth import auth_bp
@@ -53,7 +54,10 @@ def create_app(
             if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
                 with db.engine.connect() as conn:
                     conn.execute(text("PRAGMA journal_mode=WAL"))
-            db.create_all()
+            try:
+                db.create_all()
+            except OperationalError:
+                pass
             _ensure_schema_columns()
             _ensure_demo_user(app)
 
