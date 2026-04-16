@@ -163,11 +163,11 @@ def ensure_default_model_profiles(user: User) -> None:
                     expected_model = None
                     if profile.provider_id == "gemini":
                         if profile.name in ("Nano Banana 2 · 通用写实", "Gemini Imagen · 通用写实"):
-                            expected_model = "gemini-3.1-flash-image-preview"
+                            expected_model = current_app.config["GEMINI_IMAGE_MODEL"]
                         elif profile.name in ("Nano Banana · 高吞吐", "Gemini Imagen · 快速预览"):
                             expected_model = "gemini-2.5-flash-image"
                     elif profile.provider_id == "jimeng" and profile.name == "即梦 AI · 中文生产":
-                        expected_model = "doubao-seedream-3-0-t2i-250415"
+                        expected_model = current_app.config["JIMENG_IMAGE_MODEL"]
                     if expected_model and profile.model != expected_model:
                         profile.model = expected_model
                         changed = True
@@ -186,7 +186,7 @@ def ensure_default_model_profiles(user: User) -> None:
                 continue
             if profile.profile_type == "image" and profile.provider_id == "gemini":
                 profile.name = legacy_update["name"]
-                profile.model = legacy_update["model"]
+                profile.model = current_app.config["GEMINI_IMAGE_MODEL"]
                 profile.notes = legacy_update["notes"]
                 changed = True
             if profile.profile_type == "llm" and profile.provider_id == "openai_compatible":
@@ -212,5 +212,10 @@ def ensure_default_model_profiles(user: User) -> None:
         if payload["profile_type"] == "llm":
             payload["base_url"] = current_app.config["OPENAI_COMPAT_BASE_URL"]
             payload["model"] = current_app.config["OPENAI_COMPAT_MODEL"]
+        elif payload["profile_type"] == "image":
+            if payload["provider_id"] == "gemini" and payload["model"] == "gemini-3.1-flash-image-preview":
+                payload["model"] = current_app.config["GEMINI_IMAGE_MODEL"]
+            elif payload["provider_id"] == "jimeng":
+                payload["model"] = current_app.config["JIMENG_IMAGE_MODEL"]
         create_model_profile(user.id, payload)
     db.session.commit()
