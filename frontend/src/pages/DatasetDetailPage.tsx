@@ -18,15 +18,15 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SectionCard } from "../components/ui/SectionCard";
-import type { AugmentationMethod, Dataset, DatasetImage } from "../lib/types";
+import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
 const DEFAULT_BOX_SIZE = 0.22;
 const MIN_BOX_SIZE = 0.04;
 const defaultAugmentationMethods: AugmentationMethod[] = ["flip", "color_jitter", "blur"];
-const defaultAugmentationSettings = {
-  flip: { mode: "random" as const },
+const defaultAugmentationSettings: AugmentationSettings = {
+  flip: { mode: "random" },
   rotate: { max_angle: 8 },
   crop: { min_scale: 0.82, max_scale: 0.94 },
   color_jitter: { strength: 0.18 },

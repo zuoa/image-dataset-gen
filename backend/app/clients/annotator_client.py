@@ -142,8 +142,8 @@ def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "")
         "2. For each object, return: category name, confidence (0-1 float), and a tight bounding box.",
         "3. The bounding box MUST be in normalized [x_center, y_center, width, height] format.",
         "4. All four values must be floats strictly between 0 and 1 (not pixels).",
-        "5. The box must be as small as possible while still containing the entire object. Touch the outermost visible pixels.",
-        "6. Do not include empty background. A tight box is better than a loose box.",
+        "5. The box must be as tight as possible — hug the visible object outline closely. Shrink 20% tighter than you think.",
+        "6. Do not include empty background. A tight box is MUCH better than a loose box. When in doubt, make it smaller.",
         "7. If an object is partially cropped, estimate the full box based on visible portions.",
         'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.2, 0.3]}]}. '
         'If nothing is found, return {"detections": []}.'
@@ -260,8 +260,8 @@ def _parse_vl_response(
         y_center = min(y_center, 1.0 - height / 2)
         y_center = max(y_center, height / 2)
 
-        # Shrink slightly to counteract VL tendency to over-estimate bounding boxes
-        shrink = 0.90
+        # Shrink to counteract VL tendency to over-estimate bounding boxes
+        shrink = 0.78
         width *= shrink
         height *= shrink
         x_center = min(max(x_center, width / 2), 1.0 - width / 2)
@@ -287,8 +287,8 @@ def _local_annotate(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if image["ordinal"] % 7 != 0 and confidence >= threshold:
             x_center = round(min(0.24 + ((seed % 37) / 100), 0.84), 4)
             y_center = round(min(0.26 + (((seed // 10) % 33) / 100), 0.84), 4)
-            width = round(min(0.20 + (((seed // 100) % 13) / 100), 0.36), 4)
-            height = round(min(0.22 + (((seed // 1000) % 13) / 100), 0.4), 4)
+            width = round(min(0.14 + (((seed // 100) % 9) / 100), 0.24), 4)
+            height = round(min(0.16 + (((seed // 1000) % 9) / 100), 0.26), 4)
             detections.append(
                 {
                     "category": image["categoryHint"],
