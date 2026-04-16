@@ -91,6 +91,8 @@ export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
   const [dataset, setDataset] = useState<Dataset | null>(null);
+  const datasetRef = useRef<Dataset | null>(null);
+  datasetRef.current = dataset;
   const [isAugmentationModalOpen, setIsAugmentationModalOpen] = useState(false);
   const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -141,7 +143,10 @@ export function DatasetDetailPage() {
 
     void loadDataset();
     const interval = window.setInterval(() => {
-      if (runningTask || annotationRunning || dataset?.exports.some((item) => item.status === "pending" || item.status === "running")) {
+      const hasPendingExports = datasetRef.current?.exports.some(
+        (item) => item.status === "pending" || item.status === "running"
+      );
+      if (runningTask || annotationRunning || hasPendingExports) {
         void loadDataset();
       }
     }, 2000);
@@ -150,7 +155,7 @@ export function DatasetDetailPage() {
       disposed = true;
       window.clearInterval(interval);
     };
-  }, [annotationRunning, dataset?.exports, datasetId, runningTask, token]);
+  }, [annotationRunning, datasetId, runningTask, token]);
 
   useEffect(() => {
     setDraftDetections(previewImage?.detections ?? []);

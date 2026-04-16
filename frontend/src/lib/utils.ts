@@ -31,6 +31,7 @@ export function formatCurrency(value: number) {
 export function formatDate(value?: string | null) {
   if (!value) return "未开始";
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
