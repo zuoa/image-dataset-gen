@@ -146,11 +146,42 @@ def ensure_default_model_profiles(user: User) -> None:
             legacy_update = LEGACY_DEFAULT_PROFILE_UPDATES.get(profile.name)
             if profile.name in DEFAULT_PROFILE_NAMES:
                 current_api_key = _resolved_profile_api_key(profile)
+                env_api_key = _default_api_key_for_profile(profile.profile_type, profile.provider_id)
                 if current_api_key == "demo-api-key":
                     profile.api_key_encrypted = encrypt_secret(
                         "", current_app.config["ENCRYPTION_KEY"]
                     )
                     changed = True
+                elif env_api_key and env_api_key != current_api_key:
+                    profile.api_key_encrypted = encrypt_secret(
+                        env_api_key, current_app.config["ENCRYPTION_KEY"]
+                    )
+                    changed = True
+
+                # Sync default models / base_url from environment variables
+                if profile.profile_type == "image":
+                    expected_model = None
+                    if profile.provider_id == "gemini":
+                        if profile.name in ("Nano Banana 2 · 通用写实", "Gemini Imagen · 通用写实"):
+                            expected_model = "gemini-3.1-flash-image-preview"
+                        elif profile.name in ("Nano Banana · 高吞吐", "Gemini Imagen · 快速预览"):
+                            expected_model = "gemini-2.5-flash-image"
+                    elif profile.provider_id == "jimeng" and profile.name == "即梦 AI · 中文生产":
+                        expected_model = "doubao-seedream-3-0-t2i-250415"
+                    if expected_model and profile.model != expected_model:
+                        profile.model = expected_model
+                        changed = True
+
+                if profile.profile_type == "llm" and profile.provider_id == "openai_compatible":
+                    expected_model = current_app.config["OPENAI_COMPAT_MODEL"]
+                    expected_base_url = current_app.config["OPENAI_COMPAT_BASE_URL"]
+                    if profile.model != expected_model:
+                        profile.model = expected_model
+                        changed = True
+                    if profile.base_url != expected_base_url:
+                        profile.base_url = expected_base_url
+                        changed = True
+
             if not legacy_update:
                 continue
             if profile.profile_type == "image" and profile.provider_id == "gemini":

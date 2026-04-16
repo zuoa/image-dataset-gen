@@ -23,6 +23,7 @@ def create_app(
     app = Flask(__name__, instance_path=str(instance_path) if instance_path is not None else None)
     app.config.from_object(config_object or Config)
     _prepare_runtime_paths(app)
+    _configure_sqlite_engine(app)
 
     db.init_app(app)
     jwt.init_app(app)
@@ -49,6 +50,9 @@ def create_app(
     with app.app_context():
         os.makedirs(app.config["STORAGE_ROOT"], exist_ok=True)
         if app.config["AUTO_CREATE_SCHEMA"]:
+            if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
+                with db.engine.connect() as conn:
+                    conn.execute(text("PRAGMA journal_mode=WAL"))
             db.create_all()
             _ensure_schema_columns()
             _ensure_demo_user(app)
@@ -106,6 +110,18 @@ def _ensure_demo_user(app: Flask) -> None:
     db.session.add(demo_user)
     db.session.commit()
     ensure_default_model_profiles(demo_user)
+
+
+def _configure_sqlite_engine(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite:///") or uri == "sqlite:///:memory:":
+        return
+    options = app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}
+    connect_args = dict(options.get("connect_args") or {})
+    connect_args.setdefault("timeout", 20)
+    connect_args.setdefault("check_same_thread", False)
+    options["connect_args"] = connect_args
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = options
 
 
 def _ensure_schema_columns() -> None:
