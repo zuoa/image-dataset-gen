@@ -4,10 +4,11 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { authExpiredEvent, sessionExpiredMessage } from "./lib/session";
 import { AuthPage } from "./pages/AuthPage";
-import { DashboardPage } from "./pages/DashboardPage";
+import { DatasetCreatePage } from "./pages/DatasetCreatePage";
+import { DatasetDetailPage } from "./pages/DatasetDetailPage";
+import { DatasetListPage } from "./pages/DatasetListPage";
+import { GenerationTaskPage } from "./pages/GenerationTaskPage";
 import { ModelManagementPage } from "./pages/ModelManagementPage";
-import { TaskDetailPage } from "./pages/TaskDetailPage";
-import { TaskWizardPage } from "./pages/TaskWizardPage";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 
@@ -55,10 +56,11 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<DashboardPage />} />
           <Route path="models" element={<ModelManagementPage />} />
-          <Route path="tasks/new" element={<TaskWizardPage />} />
-          <Route path="tasks/:taskId" element={<TaskDetailPage />} />
+          <Route index element={<DatasetListPage />} />
+          <Route path="datasets/new" element={<DatasetCreatePage />} />
+          <Route path="datasets/:datasetId" element={<DatasetDetailPage />} />
+          <Route path="datasets/:datasetId/generate" element={<GenerationTaskPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

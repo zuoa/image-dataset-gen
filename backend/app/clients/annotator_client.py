@@ -8,37 +8,37 @@ from urllib import error, request
 
 from PIL import Image
 
-from app.models import Task
+from app.models import Dataset
 from app.services.image_storage import existing_generated_image
 
 
-def annotate_task_images(
-    task: Task,
+def annotate_dataset_images(
+    dataset: Dataset,
     confidence_threshold: float,
     annotator_url: str,
     storage_root: str,
     vl_config: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     payload = {
-        "taskId": task.id,
-        "subject": task.subject,
-        "categories": task.categories,
+        "taskId": dataset.id,
+        "subject": dataset.name,
+        "categories": dataset.categories,
         "confidenceThreshold": confidence_threshold,
         "images": [
             {
                 "imageId": image.id,
                 "ordinal": image.ordinal,
                 "seed": image.seed,
-                "categoryHint": task.categories[(image.ordinal - 1) % len(task.categories or ["default"])],
+                "categoryHint": dataset.categories[0] if dataset.categories else "default",
                 "promptText": image.prompt_text,
             }
-            for image in task.images
+            for image in dataset.images
         ],
     }
 
     vl_config = vl_config or {}
     if vl_config.get("api_key"):
-        return _vl_annotate(task, confidence_threshold, storage_root, vl_config)
+        return _vl_annotate_dataset(dataset, confidence_threshold, storage_root, vl_config)
 
     if annotator_url:
         return _remote_annotate(payload, annotator_url)
@@ -61,8 +61,8 @@ def _remote_annotate(payload: dict[str, Any], annotator_url: str) -> list[dict[s
         return _local_annotate(payload)
 
 
-def _vl_annotate(
-    task: Task,
+def _vl_annotate_dataset(
+    dataset: Dataset,
     confidence_threshold: float,
     storage_root: str,
     vl_config: dict[str, str],
@@ -73,28 +73,30 @@ def _vl_annotate(
     base_url = vl_config.get("base_url", "")
 
     if not api_key:
-        return _local_annotate({
-            "taskId": task.id,
-            "subject": task.subject,
-            "categories": task.categories,
-            "confidenceThreshold": confidence_threshold,
-            "images": [
-                {
-                    "imageId": image.id,
-                    "ordinal": image.ordinal,
-                    "seed": image.seed,
-                    "categoryHint": task.categories[(image.ordinal - 1) % len(task.categories or ["default"])],
-                    "promptText": image.prompt_text,
-                }
-                for image in task.images
-            ],
-        })
+        return _local_annotate(
+            {
+                "taskId": dataset.id,
+                "subject": dataset.name,
+                "categories": dataset.categories,
+                "confidenceThreshold": confidence_threshold,
+                "images": [
+                    {
+                        "imageId": image.id,
+                        "ordinal": image.ordinal,
+                        "seed": image.seed,
+                        "categoryHint": dataset.categories[0] if dataset.categories else "default",
+                        "promptText": image.prompt_text,
+                    }
+                    for image in dataset.images
+                ],
+            }
+        )
 
-    categories = task.categories or ["default"]
+    categories = dataset.categories or ["default"]
     allowed = set(categories)
 
     def annotate_single(image: Any) -> dict[str, Any]:
-        path = existing_generated_image(storage_root, task.id, f"ordinal-{image.ordinal:06d}")
+        path = existing_generated_image(storage_root, dataset.id, f"image-{image.ordinal:06d}")
         if not path:
             return {"imageId": image.id, "detections": [], "status": "empty"}
 
@@ -107,7 +109,7 @@ def _vl_annotate(
         image_bytes = path.read_bytes()
         mime_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt = _build_vl_prompt(task.subject, categories, getattr(image, "prompt_text", ""))
+        prompt = _build_vl_prompt(dataset.name, categories, getattr(image, "prompt_text", ""))
 
         try:
             if provider == "gemini":
@@ -120,7 +122,7 @@ def _vl_annotate(
             return {"imageId": image.id, "detections": [], "status": "empty"}
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        results = list(executor.map(annotate_single, task.images))
+        results = list(executor.map(annotate_single, dataset.images))
 
     return results
 
@@ -129,7 +131,7 @@ def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "")
     categories_str = ", ".join(categories)
     parts = [
         "You are an expert computer vision bounding-box annotator.",
-        f"Task subject: '{subject}'.",
+        f"Dataset subject: '{subject}'.",
         f"Allowed categories: {categories_str}.",
     ]
     if prompt_text:

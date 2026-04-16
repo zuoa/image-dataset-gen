@@ -99,8 +99,53 @@ export type SubjectAssistSuggestion = {
   extra_desc: string;
 };
 
-export type TaskImage = {
+export type DatasetTask = {
   id: string;
+  datasetId: string;
+  taskType: "generation" | "import" | "augmentation" | string;
+  taskName: string;
+  subject: string;
+  categories: string[];
+  imageCount: number;
+  imagesGenerated: number;
+  selectedCount: number;
+  progressPercent: number;
+  status: string;
+  estimatedCost: number;
+  spentCost: number;
+  apiProvider: string;
+  config: TaskConfig & {
+    augmentation?: {
+      multiplier: number;
+      methods: AugmentationMethod[];
+      settings?: AugmentationSettingsPatch;
+      sourceCount: number;
+      estimatedAddedImages: number;
+      totalImagesToCreate: number;
+      completedImages: number;
+      progressPercent: number;
+      status?: "running" | "completed" | "failed";
+      startedAt?: string;
+      completedAt?: string;
+      updatedAt?: string;
+    };
+    runtime?: Record<string, unknown>;
+  };
+  prompt: PromptPreview;
+  runtime: Record<string, unknown>;
+  sourceImageIds: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type DatasetImage = {
+  id: string;
+  datasetId: string;
+  sourceTaskId?: string | null;
+  sourceType: string;
+  sourceOrdinal: number;
   ordinal: number;
   status: string;
   latencyMs: number;
@@ -110,7 +155,7 @@ export type TaskImage = {
   previewSvg: string;
   selected: boolean;
   annotationStatus: string;
-  confidenceScore?: number;
+  confidenceScore?: number | null;
   source: string;
   detections: Array<{
     category: string;
@@ -119,7 +164,7 @@ export type TaskImage = {
   }>;
 };
 
-export type TaskExport = {
+export type DatasetExport = {
   id: string;
   version: number;
   status: string;
@@ -129,60 +174,36 @@ export type TaskExport = {
   createdAt: string;
 };
 
-export type Task = {
+export type Dataset = {
   id: string;
-  subject: string;
+  name: string;
+  description: string;
   categories: string[];
-  imageCount: number;
-  sampleCount: number;
   status: string;
-  progressPercent: number;
-  imagesGenerated: number;
+  imageCount: number;
   selectedCount: number;
-  estimatedCost: number;
+  taskCount: number;
   spentCost: number;
-  apiProvider: string;
-  startedAt?: string | null;
-  completedAt?: string | null;
-  createdAt?: string;
-  updatedAt?: string;
-  config: TaskConfig & {
-    augmentation?: {
-      multiplier: number;
-      methods: AugmentationMethod[];
-      settings?: AugmentationSettingsPatch;
-      sourceCount: number;
-      estimatedAddedImages: number;
-      simulatedOutput: number;
-      totalImagesToCreate: number;
-      completedImages: number;
-      progressPercent: number;
-      status?: "running" | "completed" | "failed";
-      startedAt?: string;
-      completedAt?: string;
-      updatedAt?: string;
-    };
-    annotation?: Record<string, unknown>;
-    runtime?: Record<string, unknown>;
-  };
-  prompt: PromptPreview;
-  images: TaskImage[];
-  exports: TaskExport[];
+  annotation: Record<string, unknown>;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  images: DatasetImage[];
+  tasks: DatasetTask[];
+  exports: DatasetExport[];
+  latestTask?: DatasetTask | null;
+};
+
+export type DatasetSummary = {
+  totalDatasets: number;
+  activeDatasets: number;
+  totalTasks: number;
+  totalImages: number;
+  selectedImages: number;
+  costToDate: number;
 };
 
 export type User = {
   id: string;
   username: string;
   plan: string;
-};
-
-export type DashboardSummary = {
-  totalTasks: number;
-  runningTasks: number;
-  completedTasks: number;
-  draftTasks: number;
-  totalImages: number;
-  avgCompletionMinutes: number;
-  successRate: number;
-  costToDate: number;
 };

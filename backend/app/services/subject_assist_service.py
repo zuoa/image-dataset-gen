@@ -11,7 +11,7 @@ class SubjectAssistError(RuntimeError):
 
 
 SYSTEM_PROMPT = (
-    "You help build synthetic image dataset tasks. "
+    "You help build synthetic image datasets and generation batches. "
     "Return strict JSON only with keys categories, extra_desc. "
     "categories must be a 2-6 item array of concise English snake_case labels. "
     "extra_desc must be concise Simplified Chinese, focus on scene, action, occlusion, lighting, and dataset usefulness. "
@@ -28,7 +28,7 @@ def suggest_subject_fields(
 ) -> dict[str, Any]:
     user_prompt = (
         f"目标对象：{subject}\n"
-        "请补全适合图像生成数据集任务的字段，输出 JSON：\n"
+        "请补全适合图像生成数据集与生成批次的字段，输出 JSON：\n"
         "{\n"
         '  "categories": ["string"],\n'
         '  "extra_desc": "string"\n'

@@ -1,12 +1,12 @@
-import { BarChart3, Cpu, LogOut, Sparkles } from "lucide-react";
+import { Boxes, Cpu, LogOut, Sparkles } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { useAuthStore } from "../store/auth";
 import { cn } from "../lib/utils";
 
 const navItems = [
-  { to: "/", label: "控制台", icon: BarChart3 },
-  { to: "/tasks/new", label: "新建任务", icon: Sparkles },
+  { to: "/", label: "数据集", icon: Boxes },
+  { to: "/datasets/new", label: "新建数据集", icon: Sparkles },
   { to: "/models", label: "模型管理", icon: Cpu },
 ];
 
@@ -24,7 +24,7 @@ export function AppShell() {
             <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500">Synthetic Vision Ops Platform</div>
             <h1 className="mt-1 text-xl font-medium leading-tight text-neutral-900 dark:text-white">Dataset Forge</h1>
             <p className="mt-2 text-xs leading-5 text-neutral-500 dark:text-neutral-400">
-              用结构化工作流压缩图像数据集生产周期。
+              用数据集管理统一组织样本池、批次任务和导出结果。
             </p>
           </div>
 

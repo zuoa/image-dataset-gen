@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getProviders } from "../api/tasks";
+import { getProviders } from "../api/system";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
@@ -180,7 +180,7 @@ export function ModelManagementPage() {
             <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Model Registry</div>
             <h2 className="mt-2 text-3xl text-neutral-900 dark:text-white">模型管理</h2>
             <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              统一维护图像生成模型和大语言模型。任务 flow 里只做选择，不再手填底层接口参数。
+              统一维护图像生成模型和大语言模型。数据集内的生成批次只做选择，不再手填底层接口参数。
             </p>
           </div>
           <div className={segmentedGroupClasses}>
@@ -386,8 +386,8 @@ export function ModelManagementPage() {
           ) : null}
 
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-6 dark:border-white/10">
-            <Link to="/tasks/new" className="text-sm text-neutral-500 transition hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white">
-              返回任务 flow
+            <Link to="/datasets/new" className="text-sm text-neutral-500 transition hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white">
+              返回数据集 flow
             </Link>
             <div className="flex gap-3">
               <Button

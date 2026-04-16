@@ -6,12 +6,13 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.extensions import db
 from app.models import ModelProfile, User
 from app.schemas import ModelProfileSchema
+from app.services.dataset_service import build_dataset_summary_for_user
 from app.services.model_profile_service import (
     build_model_profile_payload,
     create_model_profile,
     ensure_default_model_profiles,
 )
-from app.services.task_service import PROVIDER_CATALOG, build_dashboard_summary_for_user
+from app.services.provider_catalog import PROVIDER_CATALOG
 from app.utils.crypto import encrypt_secret
 
 system_bp = Blueprint("system", __name__)

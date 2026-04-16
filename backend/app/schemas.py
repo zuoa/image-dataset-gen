@@ -102,9 +102,31 @@ class PromptPreviewSchema(Schema):
             raise ValidationError({"format": ["jimeng current model only supports jpg output"]})
 
 
-class TaskSchema(PromptPreviewSchema):
-    api_key = fields.String(load_default="", allow_none=True, validate=validate.Length(max=255))
+class DatasetSchema(Schema):
+    name = fields.String(required=True, validate=validate.Length(min=3, max=255))
+    categories = fields.List(fields.String(), required=True, validate=validate.Length(min=1, max=24))
+    description = fields.String(load_default="", allow_none=True, validate=validate.Length(max=1000))
+
+
+class GenerationTaskSchema(PromptPreviewSchema):
+    task_name = fields.String(load_default="", allow_none=True, validate=validate.Length(max=255))
     status = fields.String(load_default="draft")
+
+    @validates_schema
+    def validate_categories(self, data: dict, **_: object) -> None:
+        categories = data.get("categories") or []
+        if not categories:
+            raise ValidationError({"categories": ["categories cannot be empty"]})
+
+
+class DatasetExportSchema(Schema):
+    export_format = fields.String(
+        load_default="yolo", validate=validate.OneOf(["yolo", "coco", "voc", "csv"])
+    )
+    image_format = fields.String(
+        load_default="keep", validate=validate.OneOf(["keep", "jpg", "png"])
+    )
+    include_readme = fields.Boolean(load_default=True)
 
 
 class TaskActionSchema(Schema):
@@ -187,6 +209,10 @@ class SelectionSchema(Schema):
     )
     image_id = fields.String(load_default="", allow_none=True)
     selected = fields.Boolean(load_default=None, allow_none=True)
+
+
+class DatasetSelectionSchema(SelectionSchema):
+    pass
 
 
 class AnnotationDetectionSchema(Schema):

@@ -3,10 +3,9 @@
 基于 Flask + SQLite + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
 
 - Token 鉴权与演示账号
-- 任务配置向导
+- 数据集管理与批次化生成
 - Prompt 预览与多样性变体生成
-- 图片生成进度页与模拟结果画廊
-- 数据增强、自动标注微服务、导出操作流
+- 数据集样本池、导入、增强、自动标注与导出
 - Docker / docker-compose / GitHub Actions CI
 
 ## Monorepo 结构
@@ -57,7 +56,7 @@ JWT 说明：
 - 使用应用工厂模式与 SQLAlchemy 模型层
 - Token 鉴权基于 JWT
 - API Key 使用 AES-GCM 加密存储
-- `gemini` provider 已接入 Google 官方 Imagen REST 适配层，调用失败会直接暂停任务并返回错误
+- `gemini` provider 已接入 Google 官方 Imagen REST 适配层，调用失败会直接暂停生成批次并返回错误
 - `jimeng` provider 已接入火山引擎官方 Seedream 图片生成接口，默认模型为 `doubao-seedream-3-0-t2i-250415`
 - 标注链路已拆成独立微服务，后续可直接替换为真实 YOLO 推理
 
@@ -67,22 +66,30 @@ JWT 说明：
 - `GET /api/v1/auth/me`
 - `GET /api/v1/system/providers`
 - `GET /api/v1/system/dashboard`
-- `POST /api/v1/tasks/prompt-preview`
-- `GET /api/v1/tasks`
-- `POST /api/v1/tasks`
-- `PATCH /api/v1/tasks/:id`
-- `POST /api/v1/tasks/:id/start`
-- `POST /api/v1/tasks/:id/retry`
-- `POST /api/v1/tasks/:id/augment`
-- `POST /api/v1/tasks/:id/annotate`
-- `POST /api/v1/tasks/:id/export`
-- `GET /api/v1/tasks/:id/exports/:version/download`
+- `GET /api/v1/datasets`
+- `POST /api/v1/datasets`
+- `GET /api/v1/datasets/:id`
+- `PATCH /api/v1/datasets/:id`
+- `DELETE /api/v1/datasets/:id`
+- `POST /api/v1/datasets/generation/prompt-preview`
+- `POST /api/v1/datasets/assist-subject`
+- `POST /api/v1/datasets/:id/tasks/generation`
+- `GET /api/v1/datasets/:id/tasks/:taskId`
+- `POST /api/v1/datasets/:id/tasks/:taskId/start`
+- `POST /api/v1/datasets/:id/tasks/:taskId/retry`
+- `POST /api/v1/datasets/:id/tasks/import`
+- `POST /api/v1/datasets/:id/tasks/augmentation`
+- `PATCH /api/v1/datasets/:id/selection`
+- `PATCH /api/v1/datasets/:id/images/:imageId/annotations`
+- `POST /api/v1/datasets/:id/annotate`
+- `POST /api/v1/datasets/:id/export`
+- `GET /api/v1/datasets/:id/exports/:version/download`
 
 Gemini 生成说明：
 
 - 默认模型：`imagen-4.0-generate-001`
 - 请求走官方 Gemini Imagen `:predict` REST 接口
-- 当前按任务轮询进度触发逐张生成；若 API 不可用或 provider 未实现，会暂停任务而不是回退
+- 当前按生成批次轮询进度触发逐张生成；若 API 不可用或 provider 未实现，会暂停批次而不是回退
 
 Jimeng 生成说明：
 
@@ -94,14 +101,15 @@ Jimeng 生成说明：
 ## 前端说明
 
 - React 18 + TypeScript + Vite
-- Zustand 管理认证与任务草稿
+- Zustand 管理认证与模型配置
 - 响应式黑白灰工作台风格
-- 向导页支持实时 Prompt 预览与本地草稿恢复
-- 任务详情页轮询生成进度并串联增强、标注、导出
+- 数据集创建页支持先定义长期信息，再在详情页内管理批次
+- 生成批次页支持实时 Prompt 预览
+- 数据集详情页统一串联导入、增强、标注、导出与批次追踪
 - 下载动作通过带 token 的 blob 流方式完成，适配跨端口部署
 
 ## 已知边界
 
 - WebSocket、Bull、真实图像生成 API 尚未接入
-- 数据导出会生成真实 ZIP；只有在任务确实生成出图片文件后才会被打包
+- 数据导出会生成真实 ZIP；只有在数据集样本池中确实存在图片文件后才会被打包
 - 当前使用 `AUTO_CREATE_SCHEMA=true` 自动建表，生产环境建议切换为 Alembic/Flask-Migrate

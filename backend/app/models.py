@@ -31,51 +31,17 @@ class User(TimestampMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     plan = db.Column(db.String(32), nullable=False, default="pro")
 
-    tasks = db.relationship("Task", back_populates="user", cascade="all, delete-orphan")
     model_profiles = db.relationship(
         "ModelProfile",
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="ModelProfile.created_at.asc()",
     )
-
-
-class Task(TimestampMixin, db.Model):
-    __tablename__ = "tasks"
-
-    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
-    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
-    task_name = db.Column(db.String(255), nullable=False)
-    subject = db.Column(db.String(255), nullable=False)
-    categories = db.Column(db.JSON, nullable=False, default=list)
-    image_count = db.Column(db.Integer, nullable=False)
-    config_json = db.Column(db.JSON, nullable=False, default=dict)
-    prompt_json = db.Column(db.JSON, nullable=False, default=dict)
-    status = db.Column(db.String(32), nullable=False, default="draft", index=True)
-    progress_percent = db.Column(db.Integer, nullable=False, default=0)
-    images_generated = db.Column(db.Integer, nullable=False, default=0)
-    selected_count = db.Column(db.Integer, nullable=False, default=0)
-    estimated_cost = db.Column(db.Float, nullable=False, default=0.0)
-    spent_cost = db.Column(db.Float, nullable=False, default=0.0)
-    budget_limit = db.Column(db.Float, nullable=True)
-    api_provider = db.Column(db.String(64), nullable=False)
-    api_key_encrypted = db.Column(db.Text, nullable=True)
-    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
-    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
-    last_synced_at = db.Column(db.DateTime(timezone=True), nullable=True)
-
-    user = db.relationship("User", back_populates="tasks")
-    images = db.relationship(
-        "TaskImage",
-        back_populates="task",
+    datasets = db.relationship(
+        "Dataset",
+        back_populates="user",
         cascade="all, delete-orphan",
-        order_by="TaskImage.ordinal.asc()",
-    )
-    exports = db.relationship(
-        "TaskExport",
-        back_populates="task",
-        cascade="all, delete-orphan",
-        order_by="TaskExport.version.desc()",
+        order_by="Dataset.created_at.desc()",
     )
 
 
@@ -98,35 +64,108 @@ class ModelProfile(TimestampMixin, db.Model):
     user = db.relationship("User", back_populates="model_profiles")
 
 
-class TaskImage(TimestampMixin, db.Model):
-    __tablename__ = "task_images"
+class Dataset(TimestampMixin, db.Model):
+    __tablename__ = "datasets"
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
-    task_id = db.Column(db.String(36), db.ForeignKey("tasks.id"), nullable=False, index=True)
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=False, default="")
+    categories = db.Column(db.JSON, nullable=False, default=list)
+    status = db.Column(db.String(32), nullable=False, default="draft", index=True)
+    image_count = db.Column(db.Integer, nullable=False, default=0)
+    selected_count = db.Column(db.Integer, nullable=False, default=0)
+    task_count = db.Column(db.Integer, nullable=False, default=0)
+    spent_cost = db.Column(db.Float, nullable=False, default=0.0)
+    annotation_json = db.Column(db.JSON, nullable=False, default=dict)
+
+    user = db.relationship("User", back_populates="datasets")
+    tasks = db.relationship(
+        "DatasetTask",
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="DatasetTask.created_at.desc()",
+    )
+    images = db.relationship(
+        "DatasetImage",
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="DatasetImage.ordinal.asc()",
+    )
+    exports = db.relationship(
+        "DatasetExport",
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="DatasetExport.version.desc()",
+    )
+
+
+class DatasetTask(TimestampMixin, db.Model):
+    __tablename__ = "dataset_tasks"
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
+    task_type = db.Column(db.String(32), nullable=False, index=True)
+    task_name = db.Column(db.String(255), nullable=False)
+    subject = db.Column(db.String(255), nullable=False, default="")
+    image_count = db.Column(db.Integer, nullable=False, default=0)
+    categories = db.Column(db.JSON, nullable=False, default=list)
+    config_json = db.Column(db.JSON, nullable=False, default=dict)
+    prompt_json = db.Column(db.JSON, nullable=False, default=dict)
+    status = db.Column(db.String(32), nullable=False, default="draft", index=True)
+    progress_percent = db.Column(db.Integer, nullable=False, default=0)
+    images_generated = db.Column(db.Integer, nullable=False, default=0)
+    selected_count = db.Column(db.Integer, nullable=False, default=0)
+    estimated_cost = db.Column(db.Float, nullable=False, default=0.0)
+    spent_cost = db.Column(db.Float, nullable=False, default=0.0)
+    api_provider = db.Column(db.String(64), nullable=False, default="")
+    api_key_encrypted = db.Column(db.Text, nullable=True)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_synced_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    dataset = db.relationship("Dataset", back_populates="tasks")
+    images = db.relationship(
+        "DatasetImage",
+        back_populates="source_task",
+        order_by="DatasetImage.ordinal.asc()",
+    )
+
+
+class DatasetImage(TimestampMixin, db.Model):
+    __tablename__ = "dataset_images"
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
+    source_task_id = db.Column(db.String(36), db.ForeignKey("dataset_tasks.id"), nullable=True, index=True)
+    source_type = db.Column(db.String(32), nullable=False, default="generation")
+    source_ordinal = db.Column(db.Integer, nullable=False, default=1)
     ordinal = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String(32), nullable=False, default="ready")
     latency_ms = db.Column(db.Integer, nullable=False, default=0)
-    seed = db.Column(db.Integer, nullable=False)
-    prompt_text = db.Column(db.Text, nullable=False)
+    seed = db.Column(db.Integer, nullable=False, default=0)
+    prompt_text = db.Column(db.Text, nullable=False, default="")
     diversity_vars = db.Column(db.JSON, nullable=False, default=dict)
-    preview_svg = db.Column(db.Text, nullable=False)
+    preview_svg = db.Column(db.Text, nullable=False, default="")
     selected = db.Column(db.Boolean, nullable=False, default=True)
     annotation_status = db.Column(db.String(32), nullable=False, default="pending")
     confidence_score = db.Column(db.Float, nullable=True)
     generated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=naive_utcnow)
 
-    task = db.relationship("Task", back_populates="images")
+    dataset = db.relationship("Dataset", back_populates="images")
+    source_task = db.relationship("DatasetTask", back_populates="images")
 
 
-class TaskExport(TimestampMixin, db.Model):
-    __tablename__ = "task_exports"
+class DatasetExport(TimestampMixin, db.Model):
+    __tablename__ = "dataset_exports"
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
-    task_id = db.Column(db.String(36), db.ForeignKey("tasks.id"), nullable=False, index=True)
+    dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
     version = db.Column(db.Integer, nullable=False, default=1)
     export_format = db.Column(db.String(32), nullable=False)
     status = db.Column(db.String(32), nullable=False, default="ready")
     summary_json = db.Column(db.JSON, nullable=False, default=dict)
     download_url = db.Column(db.String(255), nullable=False)
 
-    task = db.relationship("Task", back_populates="exports")
+    dataset = db.relationship("Dataset", back_populates="exports")

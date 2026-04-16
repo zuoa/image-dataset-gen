@@ -5,7 +5,7 @@ import {
   deleteModelProfile,
   getModelProfiles,
   updateModelProfile,
-} from "../api/tasks";
+} from "../api/system";
 import type { ModelProfile } from "../lib/types";
 
 type ModelProfileState = {
