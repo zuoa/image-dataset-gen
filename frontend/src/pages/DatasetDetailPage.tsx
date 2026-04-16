@@ -732,7 +732,7 @@ export function DatasetDetailPage() {
           }}
         >
           <SectionCard
-            className="relative z-50 w-full max-w-2xl"
+            className="relative z-50 w-full max-w-4xl max-h-[90vh] overflow-y-auto"
             onClick={(event) => event.stopPropagation()}
           >
             <button
@@ -752,243 +752,238 @@ export function DatasetDetailPage() {
               </p>
             </div>
 
-            <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="mt-6 grid gap-6 md:grid-cols-2">
               <div>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">增强倍率</div>
-                    <Input
-                      type="number"
-                      min={2}
-                      max={20}
-                      value={multiplier}
-                      onChange={(event) => setMultiplier(Number(event.target.value))}
-                    />
-                  </div>
-                  <div>
-                    <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">可增强原始样本</div>
-                    <div className="rounded-[20px] border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-200">
-                      {selectedOriginalCount} 张
-                    </div>
-                  </div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">增强倍率</div>
+                <Input
+                  type="number"
+                  min={2}
+                  max={20}
+                  value={multiplier}
+                  onChange={(event) => setMultiplier(Number(event.target.value))}
+                />
+              </div>
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">可增强原始样本</div>
+                <div className="rounded-[20px] border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-200">
+                  {selectedOriginalCount} 张
                 </div>
+              </div>
+            </div>
 
-                <div className="mt-5">
-                  <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">增强方法</div>
-                  <div className="flex flex-wrap gap-2">
-                    {augmentationOptions.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => toggleAugmentationMethod(option.value)}
-                        className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                          augmentationMethods.includes(option.value)
-                            ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                            : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
+            <div className="mt-5">
+              <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">增强方法</div>
+              <div className="flex flex-wrap gap-2">
+                {augmentationOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => toggleAugmentationMethod(option.value)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      augmentationMethods.includes(option.value)
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                  {augmentationMethods.length > 0 ? (
-                    <div className="mt-5 space-y-4">
-                      <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">参数调节</div>
+            {augmentationMethods.length > 0 ? (
+              <div className="mt-5 space-y-4">
+                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">参数调节</div>
 
-                      {augmentationMethods.includes("flip") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">翻转模式</div>
-                          <div className="flex flex-wrap gap-2">
-                            {(["random", "horizontal", "vertical"] as const).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => setAugmentationSettings((s) => ({ ...s, flip: { mode } }))}
-                                className={`rounded-full border px-3 py-1 text-sm transition ${
-                                  augmentationSettings.flip.mode === mode
-                                    ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                                    : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
-                                }`}
-                              >
-                                {mode === "random" ? "随机" : mode === "horizontal" ? "水平" : "垂直"}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {augmentationMethods.includes("flip") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">翻转模式</div>
+                      <div className="flex flex-wrap gap-2">
+                        {(["random", "horizontal", "vertical"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setAugmentationSettings((s) => ({ ...s, flip: { mode } }))}
+                            className={`rounded-full border px-3 py-1 text-sm transition ${
+                              augmentationSettings.flip.mode === mode
+                                ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                                : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                            }`}
+                          >
+                            {mode === "random" ? "随机" : mode === "horizontal" ? "水平" : "垂直"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("rotate") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            最大旋转角度 <span className="text-neutral-400">{augmentationSettings.rotate.max_angle}°</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={20}
-                            step={0.5}
-                            value={augmentationSettings.rotate.max_angle}
-                            onChange={(e) => setAugmentationSettings((s) => ({ ...s, rotate: { max_angle: Number(e.target.value) } }))}
-                            className="w-full accent-neutral-900 dark:accent-white"
-                          />
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("rotate") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        最大旋转角度 <span className="text-neutral-400">{augmentationSettings.rotate.max_angle}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={20}
+                        step={0.5}
+                        value={augmentationSettings.rotate.max_angle}
+                        onChange={(e) => setAugmentationSettings((s) => ({ ...s, rotate: { max_angle: Number(e.target.value) } }))}
+                        className="w-full accent-neutral-900 dark:accent-white"
+                      />
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("crop") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            裁切范围 <span className="text-neutral-400">{augmentationSettings.crop.min_scale} – {augmentationSettings.crop.max_scale}</span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="range"
-                              min={0.6}
-                              max={0.98}
-                              step={0.01}
-                              value={augmentationSettings.crop.min_scale}
-                              onChange={(e) => setAugmentationSettings((s) => ({ ...s, crop: { ...s.crop, min_scale: Number(e.target.value) } }))}
-                              className="flex-1 accent-neutral-900 dark:accent-white"
-                            />
-                            <input
-                              type="range"
-                              min={0.6}
-                              max={0.99}
-                              step={0.01}
-                              value={augmentationSettings.crop.max_scale}
-                              onChange={(e) => setAugmentationSettings((s) => ({ ...s, crop: { ...s.crop, max_scale: Number(e.target.value) } }))}
-                              className="flex-1 accent-neutral-900 dark:accent-white"
-                            />
-                          </div>
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("crop") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        裁切范围 <span className="text-neutral-400">{augmentationSettings.crop.min_scale} – {augmentationSettings.crop.max_scale}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={0.6}
+                          max={0.98}
+                          step={0.01}
+                          value={augmentationSettings.crop.min_scale}
+                          onChange={(e) => setAugmentationSettings((s) => ({ ...s, crop: { ...s.crop, min_scale: Number(e.target.value) } }))}
+                          className="flex-1 accent-neutral-900 dark:accent-white"
+                        />
+                        <input
+                          type="range"
+                          min={0.6}
+                          max={0.99}
+                          step={0.01}
+                          value={augmentationSettings.crop.max_scale}
+                          onChange={(e) => setAugmentationSettings((s) => ({ ...s, crop: { ...s.crop, max_scale: Number(e.target.value) } }))}
+                          className="flex-1 accent-neutral-900 dark:accent-white"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("color_jitter") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            颜色抖动强度 <span className="text-neutral-400">{augmentationSettings.color_jitter.strength}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={0.4}
-                            step={0.01}
-                            value={augmentationSettings.color_jitter.strength}
-                            onChange={(e) => setAugmentationSettings((s) => ({ ...s, color_jitter: { strength: Number(e.target.value) } }))}
-                            className="w-full accent-neutral-900 dark:accent-white"
-                          />
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("color_jitter") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        颜色抖动强度 <span className="text-neutral-400">{augmentationSettings.color_jitter.strength}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={0.4}
+                        step={0.01}
+                        value={augmentationSettings.color_jitter.strength}
+                        onChange={(e) => setAugmentationSettings((s) => ({ ...s, color_jitter: { strength: Number(e.target.value) } }))}
+                        className="w-full accent-neutral-900 dark:accent-white"
+                      />
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("blur") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            最大模糊半径 <span className="text-neutral-400">{augmentationSettings.blur.max_radius}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={4}
-                            step={0.1}
-                            value={augmentationSettings.blur.max_radius}
-                            onChange={(e) => setAugmentationSettings((s) => ({ ...s, blur: { max_radius: Number(e.target.value) } }))}
-                            className="w-full accent-neutral-900 dark:accent-white"
-                          />
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("blur") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        最大模糊半径 <span className="text-neutral-400">{augmentationSettings.blur.max_radius}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={4}
+                        step={0.1}
+                        value={augmentationSettings.blur.max_radius}
+                        onChange={(e) => setAugmentationSettings((s) => ({ ...s, blur: { max_radius: Number(e.target.value) } }))}
+                        className="w-full accent-neutral-900 dark:accent-white"
+                      />
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("noise") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            最大噪声强度 <span className="text-neutral-400">{augmentationSettings.noise.max_sigma}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={40}
-                            step={1}
-                            value={augmentationSettings.noise.max_sigma}
-                            onChange={(e) => setAugmentationSettings((s) => ({ ...s, noise: { max_sigma: Number(e.target.value) } }))}
-                            className="w-full accent-neutral-900 dark:accent-white"
-                          />
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("noise") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        最大噪声强度 <span className="text-neutral-400">{augmentationSettings.noise.max_sigma}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={40}
+                        step={1}
+                        value={augmentationSettings.noise.max_sigma}
+                        onChange={(e) => setAugmentationSettings((s) => ({ ...s, noise: { max_sigma: Number(e.target.value) } }))}
+                        className="w-full accent-neutral-900 dark:accent-white"
+                      />
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("occlusion") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            遮挡比例 <span className="text-neutral-400">{augmentationSettings.occlusion.min_ratio} – {augmentationSettings.occlusion.max_ratio}</span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="range"
-                              min={0.05}
-                              max={0.35}
-                              step={0.01}
-                              value={augmentationSettings.occlusion.min_ratio}
-                              onChange={(e) => setAugmentationSettings((s) => ({ ...s, occlusion: { ...s.occlusion, min_ratio: Number(e.target.value) } }))}
-                              className="flex-1 accent-neutral-900 dark:accent-white"
-                            />
-                            <input
-                              type="range"
-                              min={0.05}
-                              max={0.4}
-                              step={0.01}
-                              value={augmentationSettings.occlusion.max_ratio}
-                              onChange={(e) => setAugmentationSettings((s) => ({ ...s, occlusion: { ...s.occlusion, max_ratio: Number(e.target.value) } }))}
-                              className="flex-1 accent-neutral-900 dark:accent-white"
-                            />
-                          </div>
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("occlusion") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        遮挡比例 <span className="text-neutral-400">{augmentationSettings.occlusion.min_ratio} – {augmentationSettings.occlusion.max_ratio}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={0.05}
+                          max={0.35}
+                          step={0.01}
+                          value={augmentationSettings.occlusion.min_ratio}
+                          onChange={(e) => setAugmentationSettings((s) => ({ ...s, occlusion: { ...s.occlusion, min_ratio: Number(e.target.value) } }))}
+                          className="flex-1 accent-neutral-900 dark:accent-white"
+                        />
+                        <input
+                          type="range"
+                          min={0.05}
+                          max={0.4}
+                          step={0.01}
+                          value={augmentationSettings.occlusion.max_ratio}
+                          onChange={(e) => setAugmentationSettings((s) => ({ ...s, occlusion: { ...s.occlusion, max_ratio: Number(e.target.value) } }))}
+                          className="flex-1 accent-neutral-900 dark:accent-white"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
 
-                      {augmentationMethods.includes("perspective") ? (
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                            最大透视畸变 <span className="text-neutral-400">{augmentationSettings.perspective.max_warp}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={0}
-                            max={0.15}
-                            step={0.005}
-                            value={augmentationSettings.perspective.max_warp}
-                            onChange={(e) => setAugmentationSettings((s) => ({ ...s, perspective: { max_warp: Number(e.target.value) } }))}
-                            className="w-full accent-neutral-900 dark:accent-white"
-                          />
-                        </div>
-                      ) : null}
+                  {augmentationMethods.includes("perspective") ? (
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        最大透视畸变 <span className="text-neutral-400">{augmentationSettings.perspective.max_warp}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={0.15}
+                        step={0.005}
+                        value={augmentationSettings.perspective.max_warp}
+                        onChange={(e) => setAugmentationSettings((s) => ({ ...s, perspective: { max_warp: Number(e.target.value) } }))}
+                        className="w-full accent-neutral-900 dark:accent-white"
+                      />
                     </div>
                   ) : null}
                 </div>
               </div>
+            ) : null}
 
-              <div className="space-y-4 rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">批次预期</div>
-                  <div className="mt-3 text-lg text-neutral-900 dark:text-white">
-                    预计新增 {selectedOriginalCount * multiplier} 张增强样本
-                  </div>
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">批次预期</div>
+                <div className="mt-1 text-lg text-neutral-900 dark:text-white">
+                  预计新增 {selectedOriginalCount * multiplier} 张增强样本
                 </div>
-                <div className="text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                  只会处理已选中的原始样本，不会重复增强已经标记为 `augmented` 的图片。
-                </div>
-                <div className="flex flex-wrap gap-3 pt-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => setIsAugmentationModalOpen(false)}
-                    disabled={isCreatingAugmentationTask}
-                  >
-                    取消
-                  </Button>
-                  <Button
-                    onClick={() => void createAugmentationTask()}
-                    disabled={isCreatingAugmentationTask || augmentationMethods.length === 0 || selectedOriginalCount === 0}
-                  >
-                    <Wand2 className="mr-2 h-4 w-4" />
-                    {isCreatingAugmentationTask ? "处理中..." : "增强"}
-                  </Button>
-                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => setIsAugmentationModalOpen(false)}
+                  disabled={isCreatingAugmentationTask}
+                >
+                  取消
+                </Button>
+                <Button
+                  onClick={() => void createAugmentationTask()}
+                  disabled={isCreatingAugmentationTask || augmentationMethods.length === 0 || selectedOriginalCount === 0}
+                >
+                  <Wand2 className="mr-2 h-4 w-4" />
+                  {isCreatingAugmentationTask ? "处理中..." : "增强"}
+                </Button>
               </div>
             </div>
           </SectionCard>
