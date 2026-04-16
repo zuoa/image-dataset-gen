@@ -91,12 +91,19 @@ def _default_api_key_for_profile(profile_type: str, provider_id: str) -> str:
     return ""
 
 
-def _resolved_profile_api_key(profile: ModelProfile) -> str:
+def _stored_profile_api_key(profile: ModelProfile) -> str:
+    """Return the decrypted *stored* API key (may be empty)."""
     try:
-        stored_api_key = decrypt_secret(profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"])
+        return decrypt_secret(profile.api_key_encrypted, current_app.config["ENCRYPTION_KEY"])
     except Exception:
-        stored_api_key = ""
-    return stored_api_key or _default_api_key_for_profile(profile.profile_type, profile.provider_id)
+        return ""
+
+
+def _resolved_profile_api_key(profile: ModelProfile) -> str:
+    """Return the stored key, falling back to the env-var default."""
+    return _stored_profile_api_key(profile) or _default_api_key_for_profile(
+        profile.profile_type, profile.provider_id
+    )
 
 
 def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
@@ -145,14 +152,14 @@ def ensure_default_model_profiles(user: User) -> None:
         for profile in user.model_profiles:
             legacy_update = LEGACY_DEFAULT_PROFILE_UPDATES.get(profile.name)
             if profile.name in DEFAULT_PROFILE_NAMES:
-                current_api_key = _resolved_profile_api_key(profile)
+                stored_api_key = _stored_profile_api_key(profile)
                 env_api_key = _default_api_key_for_profile(profile.profile_type, profile.provider_id)
-                if current_api_key == "demo-api-key":
+                if stored_api_key == "demo-api-key":
                     profile.api_key_encrypted = encrypt_secret(
                         "", current_app.config["ENCRYPTION_KEY"]
                     )
                     changed = True
-                elif env_api_key and env_api_key != current_api_key:
+                elif env_api_key and not stored_api_key:
                     profile.api_key_encrypted = encrypt_secret(
                         env_api_key, current_app.config["ENCRYPTION_KEY"]
                     )
