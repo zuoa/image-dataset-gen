@@ -57,6 +57,7 @@ export const defaultTaskConfig: TaskConfig = {
   llm_profile_id: "llm-openai-compatible",
   subject: "雨夜城市道路中的行人检测",
   categories: ["pedestrian", "umbrella"],
+  cv_task: "detection",
   image_count: 10,
   distance: "far",
   angle: "top",

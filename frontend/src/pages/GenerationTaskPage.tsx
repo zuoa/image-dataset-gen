@@ -37,6 +37,13 @@ const backgroundOptions = [
   { value: "nature", label: "自然场景" },
 ] as const;
 
+const cvTaskOptions = [
+  { value: "detection", label: "目标检测" },
+  { value: "segmentation", label: "语义分割" },
+  { value: "classification", label: "图像分类" },
+  { value: "instance_segmentation", label: "实例分割" },
+] as const;
+
 function toggleValue(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 }
@@ -195,6 +202,17 @@ export function GenerationTaskPage() {
                   value={draft.image_count}
                   onChange={(event) => setDraft((current) => ({ ...current, image_count: Number(event.target.value) }))}
                 />
+              </div>
+
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">CV 任务类型</div>
+                <Select value={draft.cv_task ?? "detection"} onChange={(event) => setDraft((current) => ({ ...current, cv_task: event.target.value as TaskConfig["cv_task"] }))}>
+                  {cvTaskOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
               </div>
 
               <div>

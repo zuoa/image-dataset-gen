@@ -42,8 +42,27 @@ PROVIDER_RATE = {
     "custom": 0.04,
 }
 
+CV_TASK_MAP = {
+    "detection": "subject clearly visible, multi-scale presence, multi-position placement, partial occlusion possible, training-ready detection sample",
+    "segmentation": "clear subject-background boundary, sharp edges, distinct pixel-level contours, training-ready segmentation sample",
+    "classification": "single centered subject, clean uncluttered background, unambiguous class identity, training-ready classification sample",
+    "instance_segmentation": "multiple instances with varying overlap, clear individual contours, distinguishable overlapping subjects, training-ready instance segmentation sample",
+}
+
+STYLE_QUALITY_SUFFIX = {
+    "realistic": "high quality, sharp focus, dataset-ready framing",
+    "illustration": "clean lines, consistent style, dataset-ready framing",
+    "sketch": "clear strokes, consistent line weight, dataset-ready framing",
+    "3d": "clean render, studio quality, dataset-ready framing",
+    "cartoon": "bold outlines, consistent style, dataset-ready framing",
+    "surveillance": "authentic footage quality, realistic noise pattern, dataset-ready framing",
+}
+
 NEGATIVE_PROMPT = (
-    "blurry, low quality, watermark, text overlay, duplicate subjects, deformed anatomy"
+    "blurry, out of focus, low resolution, watermark, text overlay, logo stamp, "
+    "duplicate subjects, deformed anatomy, amputated limbs, extra fingers, "
+    "mutated proportions, heavy motion blur, chromatic aberration, "
+    "overexposed highlights, completely dark silhouette, misaligned composition"
 )
 
 VARIATION_POOLS = {
@@ -62,6 +81,26 @@ VARIATION_POOLS = {
         "leading lines",
         "symmetrical layout",
         "diagonal composition",
+    ],
+    "occlusion": [
+        "fully visible subject",
+        "lightly occluded subject",
+        "heavily occluded subject",
+    ],
+    "subject_count": [
+        "single isolated subject",
+        "few subjects 2 to 5",
+        "dense crowd more than 5",
+    ],
+    "background_complexity": [
+        "clean minimal background",
+        "moderate background detail",
+        "cluttered complex background",
+    ],
+    "subject_scale": [
+        "large prominent subject",
+        "medium balanced subject",
+        "small distant subject",
     ],
 }
 
@@ -109,16 +148,36 @@ def estimate_cost(config: dict[str, Any]) -> float:
     return round(unit_price * config["image_count"], 2)
 
 
+def _build_category_context(categories: list[str]) -> str:
+    if not categories:
+        return ""
+    if len(categories) == 1:
+        return f"focus on detecting {categories[0]}"
+    first_items = ", ".join(categories[:-1])
+    return f"focus on detecting {first_items} and {categories[-1]}"
+
+
 def build_prompt_preview(config: dict[str, Any]) -> dict[str, Any]:
-    base_prompt = (
-        f'{config["subject"]}, '
-        f'{DISTANCE_MAP[config["distance"]]}, '
-        f'{ANGLE_MAP[config["angle"]]}, '
-        f'{STYLE_MAP[config["style"]]}, '
-        f'lighting: {", ".join(config["lighting"])}, '
-        f'background: {", ".join(config["background"])}, '
-        "high quality, professional composition, dataset-ready framing"
-    )
+    style = config["style"]
+    cv_task = config.get("cv_task") or "detection"
+    quality_suffix = STYLE_QUALITY_SUFFIX.get(style, STYLE_QUALITY_SUFFIX["realistic"])
+    cv_suffix = CV_TASK_MAP.get(cv_task, CV_TASK_MAP["detection"])
+    category_context = _build_category_context(config.get("categories", []))
+
+    parts = [
+        config["subject"],
+        DISTANCE_MAP[config["distance"]],
+        ANGLE_MAP[config["angle"]],
+        STYLE_MAP[style],
+        f'lighting: {", ".join(config["lighting"])}',
+        f'background: {", ".join(config["background"])}',
+        quality_suffix,
+        cv_suffix,
+    ]
+    if category_context:
+        parts.append(category_context)
+
+    base_prompt = ", ".join(parts)
 
     if requires_chinese_human_traits(config):
         base_prompt = (

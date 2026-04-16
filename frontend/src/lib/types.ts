@@ -30,6 +30,7 @@ export type TaskConfig = {
   llm_profile_id?: string;
   subject: string;
   categories: string[];
+  cv_task?: "detection" | "segmentation" | "classification" | "instance_segmentation";
   image_count: number;
   distance: "close" | "mid" | "far";
   angle: "front" | "side" | "top" | "bottom" | "random";

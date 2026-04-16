@@ -93,6 +93,10 @@ class PromptPreviewSchema(Schema):
     llm_enhanced = fields.Boolean(load_default=False)
     is_manual_edited = fields.Boolean(load_default=False)
     manual_prompt = fields.String(load_default="", allow_none=True)
+    cv_task = fields.String(
+        load_default="detection",
+        validate=validate.OneOf(["detection", "segmentation", "classification", "instance_segmentation"]),
+    )
 
     @validates_schema
     def validate_manual_prompt(self, data: dict, **_: object) -> None:

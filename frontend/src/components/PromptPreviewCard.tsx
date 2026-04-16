@@ -54,7 +54,7 @@ export function PromptPreviewCard({
                   <div key={variant.seed} className="rounded-2xl border border-neutral-100 bg-white p-3 dark:border-white/12 dark:bg-neutral-950">
                     <div className="mb-2 flex items-center justify-between text-xs text-neutral-500">
                       <span>Seed {variant.seed}</span>
-                      <span>{variant.diversity_vars.composition}</span>
+                      <span>{variant.diversity_vars.composition} / {variant.diversity_vars.occlusion}</span>
                     </div>
                     <p className="line-clamp-3 text-sm text-neutral-600 dark:text-neutral-300">{variant.prompt}</p>
                   </div>
