@@ -25,6 +25,7 @@ STYLE_MAP = {
     "sketch": "pencil sketch, monochrome texture, hand-drawn lines",
     "3d": "3D render, ray tracing, studio material realism",
     "cartoon": "cartoon style, bold outlines, graphic shapes",
+    "surveillance": "CCTV surveillance footage, grainy texture, wide angle lens, low resolution, timestamp overlay, security camera perspective",
 }
 
 PROVIDER_LANGUAGE = {

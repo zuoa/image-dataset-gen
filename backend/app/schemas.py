@@ -78,7 +78,7 @@ class PromptPreviewSchema(Schema):
     format = fields.String(required=True, validate=validate.OneOf(["jpg", "png"]))
     style = fields.String(
         required=True,
-        validate=validate.OneOf(["realistic", "illustration", "sketch", "3d", "cartoon"]),
+        validate=validate.OneOf(["realistic", "illustration", "sketch", "3d", "cartoon", "surveillance"]),
     )
     api_provider = fields.String(
         required=True, validate=validate.OneOf(["gemini", "jimeng", "stability", "custom"])

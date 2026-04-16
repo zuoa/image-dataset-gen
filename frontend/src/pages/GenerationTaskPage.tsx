@@ -200,6 +200,7 @@ export function GenerationTaskPage() {
               <div>
                 <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">风格</div>
                 <Select value={draft.style} onChange={(event) => setDraft((current) => ({ ...current, style: event.target.value as TaskConfig["style"] }))}>
+                  <option value="surveillance">监控画面</option>
                   <option value="realistic">写实</option>
                   <option value="illustration">插画</option>
                   <option value="sketch">素描</option>

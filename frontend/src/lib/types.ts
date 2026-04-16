@@ -37,7 +37,7 @@ export type TaskConfig = {
   background: string[];
   aspect_ratio: "1:1" | "4:3" | "3:4" | "16:9" | "9:16";
   format: "jpg" | "png";
-  style: "realistic" | "illustration" | "sketch" | "3d" | "cartoon";
+  style: "realistic" | "illustration" | "sketch" | "3d" | "cartoon" | "surveillance";
   api_provider: ProviderId;
   api_key: string;
   concurrency: number;
