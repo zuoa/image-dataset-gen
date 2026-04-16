@@ -64,6 +64,18 @@ def _sync_and_payload(dataset: Dataset) -> dict:
     return build_dataset_payload(dataset)
 
 
+def _dispatch_background_task(task_callable, *args: object) -> None:
+    try:
+        task_callable.delay(*args)
+    except Exception:
+        task_name = getattr(task_callable, "name", repr(task_callable))
+        current_app.logger.exception(
+            "Failed to enqueue background task %s; falling back to inline execution",
+            task_name,
+        )
+        task_callable.apply(args=args, throw=False)
+
+
 @datasets_bp.post("/generation/prompt-preview")
 @jwt_required()
 def prompt_preview():
@@ -206,11 +218,11 @@ def start_dataset_task(dataset_id: str, task_id: str):
     if task.task_type == "generation":
         from app.worker_tasks import generate_dataset_task_images
 
-        generate_dataset_task_images.delay(task.id)
+        _dispatch_background_task(generate_dataset_task_images, task.id)
     elif task.task_type == "augmentation":
         from app.worker_tasks import augment_dataset_task_images
 
-        augment_dataset_task_images.delay(task.id)
+        _dispatch_background_task(augment_dataset_task_images, task.id)
 
     return jsonify({"task": build_dataset_task_payload(task), "dataset": _sync_and_payload(dataset)})
 
@@ -249,11 +261,11 @@ def retry_dataset_task(dataset_id: str, task_id: str):
     if task.task_type == "generation":
         from app.worker_tasks import generate_dataset_task_images
 
-        generate_dataset_task_images.delay(task.id)
+        _dispatch_background_task(generate_dataset_task_images, task.id)
     elif task.task_type == "augmentation":
         from app.worker_tasks import augment_dataset_task_images
 
-        augment_dataset_task_images.delay(task.id)
+        _dispatch_background_task(augment_dataset_task_images, task.id)
 
     return jsonify({"task": build_dataset_task_payload(task), "dataset": _sync_and_payload(dataset)})
 
@@ -430,7 +442,7 @@ def create_augmentation_task(dataset_id: str):
 
     from app.worker_tasks import augment_dataset_task_images
 
-    augment_dataset_task_images.delay(task.id)
+    _dispatch_background_task(augment_dataset_task_images, task.id)
     return jsonify({"task": build_dataset_task_payload(task), "dataset": build_dataset_payload(dataset)}), 201
 
 
@@ -464,7 +476,12 @@ def annotate_dataset(dataset_id: str):
 
     from app.worker_tasks import annotate_dataset_images_task
 
-    annotate_dataset_images_task.delay(dataset.id, action["confidence_threshold"], vl_config)
+    _dispatch_background_task(
+        annotate_dataset_images_task,
+        dataset.id,
+        action["confidence_threshold"],
+        vl_config,
+    )
     dataset.annotation_json = {
         **annotation,
         "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
@@ -572,7 +589,7 @@ def export_dataset(dataset_id: str):
 
     from app.worker_tasks import export_dataset_archive
 
-    export_dataset_archive.delay(export_job.id)
+    _dispatch_background_task(export_dataset_archive, export_job.id)
     db.session.commit()
     return jsonify({"export": build_dataset_export_payload(export_job), "dataset": build_dataset_payload(dataset)}), 201
 

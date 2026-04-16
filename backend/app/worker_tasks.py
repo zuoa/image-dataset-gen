@@ -26,6 +26,18 @@ def _maybe_remove_session(is_eager: bool) -> None:
         db.session.remove()
 
 
+def _dispatch_followup_task(task_callable, *args: object) -> None:
+    try:
+        task_callable.delay(*args)
+    except Exception:
+        task_name = getattr(task_callable, "name", repr(task_callable))
+        current_app.logger.exception(
+            "Failed to enqueue follow-up task %s; falling back to inline execution",
+            task_name,
+        )
+        task_callable.apply(args=args, throw=False)
+
+
 @celery.task(bind=True)
 def generate_dataset_task_images(self, task_id: str) -> None:
     task = db.session.get(DatasetTask, task_id)
@@ -400,4 +412,4 @@ def _enqueue_auto_annotation_dataset(dataset: Dataset) -> None:
         "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
         "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
     }
-    annotate_dataset_images_task.delay(str(dataset.id), 0.5, vl_config)
+    _dispatch_followup_task(annotate_dataset_images_task, str(dataset.id), 0.5, vl_config)

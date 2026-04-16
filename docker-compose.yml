@@ -54,8 +54,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    ports:
-      - "${BACKEND_PORT:-8004}:8000"
     volumes:
       - backend_storage:/app/storage
       - generated_images:/app/storage/images

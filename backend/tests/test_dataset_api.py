@@ -103,6 +103,35 @@ def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     assert all(image["sourceType"] == "generation" for image in dataset["images"])
 
 
+def test_generation_start_falls_back_to_inline_execution_when_queue_is_unavailable(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-inline-fallback")
+    dataset_id = _create_dataset(client, headers)
+    task_id = _create_generation_task(client, dataset_id, headers)
+
+    with (
+        patch(
+            "app.worker_tasks.generate_gemini_image",
+            return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
+        ),
+        patch("app.worker_tasks.generate_dataset_task_images.delay", side_effect=RuntimeError("queue unavailable")),
+    ):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/{task_id}/start",
+            headers=headers,
+            json={},
+        )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["task"]["imagesGenerated"] == 5
+    assert payload["dataset"]["imageCount"] == 5
+
+
 def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
