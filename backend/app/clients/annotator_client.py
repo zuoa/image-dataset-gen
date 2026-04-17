@@ -12,6 +12,16 @@ from PIL import Image, ImageDraw
 from app.models import Dataset
 from app.services.image_storage import existing_generated_image
 
+MAX_PROMPT_CONTEXT_CHARS = 160
+LARGE_BOX_AREA_THRESHOLD = 0.12
+LARGE_BOX_DIM_THRESHOLD = 0.34
+TIGHTEN_MARGIN_RATIO = 0.18
+TIGHTEN_MIN_MARGIN_PX = 24
+TIGHTEN_MAX_CENTER_SHIFT = 0.12
+TIGHTEN_MAX_AREA_EXPANSION = 1.08
+MERGE_IOU_THRESHOLD = 0.65
+MERGE_CONFIDENCE_EPS = 0.05
+
 
 def annotate_dataset_images(
     dataset: Dataset,
@@ -115,23 +125,65 @@ def _vl_annotate_dataset(
         image_bytes = path.read_bytes()
         mime_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         b64 = base64.b64encode(image_bytes).decode("utf-8")
-        prompt = _build_vl_prompt(dataset.name, categories, getattr(image, "prompt_text", ""), img_w=img_w, img_h=img_h, provider=provider)
+        prompt_text = getattr(image, "prompt_text", "")
+        detect_targets: list[str | None]
+        if provider != "gemini" and len(categories) <= 6:
+            detect_targets = list(categories)
+        else:
+            detect_targets = [None]
 
         try:
-            if provider == "gemini":
-                raw = _call_gemini_vl(api_key, model, prompt, mime_type, b64)
-            else:
-                raw = _call_openai_compat_vl(base_url, api_key, model, prompt, mime_type, b64)
-            detections = _parse_vl_response(raw, confidence_threshold, allowed, img_w, img_h)
+            detections: list[dict[str, Any]] = []
+            for target_category in detect_targets:
+                prompt = _build_vl_prompt(
+                    dataset.name,
+                    categories,
+                    prompt_text,
+                    img_w=img_w,
+                    img_h=img_h,
+                    provider=provider,
+                    target_category=target_category,
+                )
+                raw = _call_vl_model(provider, base_url, api_key, model, prompt, mime_type, b64)
+                detections.extend(
+                    _parse_vl_response(
+                        raw,
+                        confidence_threshold,
+                        {target_category} if target_category else allowed,
+                        img_w,
+                        img_h,
+                    )
+                )
 
-            # Self-check: draw predictions and ask model to refine
+            detections = _merge_detections(detections)
+
             if provider != "gemini" and detections:
                 try:
                     with Image.open(path) as refine_img:
-                        detections = _refine_detections(
-                            provider, model, api_key, base_url, refine_img,
-                            detections, categories, img_w, img_h,
+                        detections = _tighten_large_detections(
+                            provider,
+                            model,
+                            api_key,
+                            base_url,
+                            refine_img,
+                            detections,
+                            img_w,
+                            img_h,
                         )
+                        if len(detections) > 1:
+                            detections = _merge_detections(
+                                _refine_detections(
+                                    provider,
+                                    model,
+                                    api_key,
+                                    base_url,
+                                    refine_img,
+                                    detections,
+                                    categories,
+                                    img_w,
+                                    img_h,
+                                )
+                            )
                 except Exception:
                     pass
 
@@ -145,32 +197,53 @@ def _vl_annotate_dataset(
     return results
 
 
-def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "", *, img_w: int = 0, img_h: int = 0, provider: str = "gemini") -> str:
+def _build_vl_prompt(
+    subject: str,
+    categories: list[str],
+    prompt_text: str = "",
+    *,
+    img_w: int = 0,
+    img_h: int = 0,
+    provider: str = "gemini",
+    target_category: str | None = None,
+) -> str:
     categories_str = ", ".join(categories)
 
     if provider != "gemini" and img_w > 0 and img_h > 0:
-        # Qwen2.5-VL native bbox_2d grounding format
+        focus_line = f"Target category: {target_category}." if target_category else f"Target categories: {categories_str}."
         parts = [
-            f"Detect all visible instances of these categories in the image: {categories_str}.",
+            "You are an expert object-grounding annotator.",
+            f"Dataset subject: {subject}.",
             f"Image dimensions: {img_w} x {img_h} pixels.",
+            focus_line,
             "",
-            "Return a JSON array where each element contains:",
-            '  "bbox_2d": [x1, y1, x2, y2] in pixel coordinates matching the image dimensions,',
-            '  "label": the detected category,',
-            '  "confidence": float between 0 and 1.',
+            'Return strictly as JSON object with no markdown: {"detections": [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]}.',
             "",
             "Rules:",
             "- [x1, y1] = top-left corner, [x2, y2] = bottom-right corner.",
-            "- The box must TIGHTLY hug the object's visible outline with minimal margin.",
+            "- Return one box per object instance.",
+            "- Never use one large box to cover multiple nearby objects.",
+            "- The box must tightly fit only the visible pixels of the object.",
             "- Do NOT pad the box with extra background.",
-            "- A typical object occupies only a fraction of the image — avoid oversized boxes.",
+            "- Exclude shadow, reflection, and invisible or guessed object extent.",
+            "- If the object is partly occluded, annotate only the visible portion.",
+            "- If unsure, skip the detection instead of returning a loose box.",
         ]
         if prompt_text:
-            parts.append(f'- Generation context: "{prompt_text}".')
+            parts.extend(
+                [
+                    "",
+                    f'Weak generation hint only: "{_truncate_prompt_context(prompt_text)}".',
+                    "Use the image as the source of truth. Do not enlarge boxes based on the hint.",
+                ]
+            )
+        if target_category:
+            parts.append(f"- Only return detections whose label matches '{target_category}'.")
+        else:
+            parts.append(f"- Only return detections from this closed set: {categories_str}.")
         parts.extend([
             "",
-            'Output strictly as JSON with no markdown: [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]',
-            "If nothing is found, return [].",
+            'If nothing is found, return {"detections": []}.',
         ])
         return "\n".join(parts)
 
@@ -204,6 +277,27 @@ def _build_vl_prompt(subject: str, categories: list[str], prompt_text: str = "",
     return "\n".join(parts)
 
 
+def _truncate_prompt_context(prompt_text: str) -> str:
+    compact = " ".join(prompt_text.split())
+    if len(compact) <= MAX_PROMPT_CONTEXT_CHARS:
+        return compact
+    return compact[: MAX_PROMPT_CONTEXT_CHARS - 3].rstrip() + "..."
+
+
+def _call_vl_model(
+    provider: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    mime_type: str,
+    b64_data: str,
+) -> str:
+    if provider == "gemini":
+        return _call_gemini_vl(api_key, model, prompt, mime_type, b64_data)
+    return _call_openai_compat_vl(base_url, api_key, model, prompt, mime_type, b64_data)
+
+
 def _call_gemini_vl(api_key: str, model: str, prompt: str, mime_type: str, b64_data: str) -> str:
     body = {
         "contents": [{
@@ -214,6 +308,7 @@ def _call_gemini_vl(api_key: str, model: str, prompt: str, mime_type: str, b64_d
         }],
         "generationConfig": {
             "responseMimeType": "application/json",
+            "temperature": 0,
         },
     }
     req = request.Request(
@@ -249,6 +344,8 @@ def _call_openai_compat_vl(base_url: str, api_key: str, model: str, prompt: str,
             }
         ],
         "response_format": {"type": "json_object"},
+        "temperature": 0,
+        "max_tokens": 512,
     }
     req = request.Request(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -309,42 +406,41 @@ def _parse_vl_response(
 
         # --- Qwen2.5-VL bbox_2d format: pixel [x1, y1, x2, y2] ---
         if "bbox_2d" in item:
-            category = str(item.get("label", "")).strip()
-            confidence = float(item.get("confidence", 0))
+            raw_label = str(item.get("label", "")).strip()
+            category = _resolve_allowed_category(raw_label, allowed_categories)
             bbox_2d = item["bbox_2d"]
+            if category is None and len(allowed_categories) == 1 and not raw_label:
+                category = fallback_category
             if not category or not isinstance(bbox_2d, list) or len(bbox_2d) != 4:
                 continue
-            if category not in allowed_categories:
-                category = fallback_category
+            confidence = _parse_confidence(item.get("confidence"), default=1.0)
             if confidence < threshold:
                 continue
             try:
                 x1, y1, x2, y2 = (float(v) for v in bbox_2d)
             except (ValueError, TypeError):
                 continue
-            nw = img_w if img_w > 0 else 1
-            nh = img_h if img_h > 0 else 1
-            bw = max((x2 - x1) / nw, 0.01)
-            bh = max((y2 - y1) / nh, 0.01)
-            cx = (x1 + x2) / 2 / nw
-            cy = (y1 + y2) / 2 / nh
-            cx = max(bw / 2, min(cx, 1.0 - bw / 2))
-            cy = max(bh / 2, min(cy, 1.0 - bh / 2))
+            if x2 <= x1 or y2 <= y1:
+                continue
             detections.append({
                 "category": category,
                 "confidence": round(confidence, 4),
-                "bbox": [round(cx, 4), round(cy, 4), round(bw, 4), round(bh, 4)],
+                "bbox": _corners_to_bbox(x1, y1, x2, y2, img_w, img_h),
             })
             continue
 
         # --- Original format: normalized [x_center, y_center, width, height] ---
-        category = str(item.get("category", "")).strip()
-        confidence = float(item.get("confidence", 0))
+        raw_label = str(item.get("category", "") or item.get("label", "")).strip()
+        category = _resolve_allowed_category(
+            raw_label,
+            allowed_categories,
+        )
+        if category is None and len(allowed_categories) == 1 and not raw_label:
+            category = fallback_category
+        confidence = _parse_confidence(item.get("confidence"), default=0.0)
         bbox = item.get("bbox", [])
         if not category:
             continue
-        if category not in allowed_categories:
-            category = fallback_category
         if confidence < threshold:
             continue
         if not isinstance(bbox, list) or len(bbox) != 4:
@@ -379,9 +475,132 @@ def _parse_vl_response(
         detections.append({
             "category": category,
             "confidence": round(confidence, 4),
-            "bbox": [round(x_center, 4), round(y_center, 4), round(width, 4), round(height, 4)],
+            "bbox": _clip_bbox(x_center, y_center, width, height),
         })
-    return detections
+    return _merge_detections(detections)
+
+
+def _parse_confidence(value: Any, *, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip().rstrip("%")
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return default
+    if confidence > 1.0:
+        confidence /= 100.0
+    return min(max(confidence, 0.0), 1.0)
+
+
+def _resolve_allowed_category(label: str, allowed_categories: set[str]) -> str | None:
+    if not label:
+        return None
+    if label in allowed_categories:
+        return label
+
+    normalized_label = label.casefold().replace("-", " ").replace("_", " ")
+    for category in allowed_categories:
+        normalized_category = category.casefold().replace("-", " ").replace("_", " ")
+        if normalized_label == normalized_category:
+            return category
+        if normalized_label.startswith(normalized_category) or normalized_category in normalized_label:
+            return category
+    return None
+
+
+def _clip_bbox(x_center: float, y_center: float, width: float, height: float) -> list[float]:
+    width = min(max(width, 0.001), 1.0)
+    height = min(max(height, 0.001), 1.0)
+    x_center = min(max(x_center, width / 2), 1.0 - width / 2)
+    y_center = min(max(y_center, height / 2), 1.0 - height / 2)
+    return [round(x_center, 4), round(y_center, 4), round(width, 4), round(height, 4)]
+
+
+def _bbox_to_corners(bbox: list[float], img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    cx, cy, bw, bh = bbox
+    x1 = int(round((cx - bw / 2) * img_w))
+    y1 = int(round((cy - bh / 2) * img_h))
+    x2 = int(round((cx + bw / 2) * img_w))
+    y2 = int(round((cy + bh / 2) * img_h))
+    x1 = max(0, min(x1, max(img_w - 1, 0)))
+    y1 = max(0, min(y1, max(img_h - 1, 0)))
+    x2 = max(x1 + 1, min(x2, max(img_w, 1)))
+    y2 = max(y1 + 1, min(y2, max(img_h, 1)))
+    return x1, y1, x2, y2
+
+
+def _corners_to_bbox(x1: float, y1: float, x2: float, y2: float, img_w: int, img_h: int) -> list[float]:
+    safe_w = max(img_w, 1)
+    safe_h = max(img_h, 1)
+    x1 = min(max(x1, 0.0), float(safe_w - 1))
+    y1 = min(max(y1, 0.0), float(safe_h - 1))
+    x2 = min(max(x2, x1 + 1.0), float(safe_w))
+    y2 = min(max(y2, y1 + 1.0), float(safe_h))
+    width = max((x2 - x1) / safe_w, 0.001)
+    height = max((y2 - y1) / safe_h, 0.001)
+    x_center = ((x1 + x2) / 2) / safe_w
+    y_center = ((y1 + y2) / 2) / safe_h
+    return _clip_bbox(x_center, y_center, width, height)
+
+
+def _bbox_area(bbox: list[float]) -> float:
+    return max(bbox[2], 0.0) * max(bbox[3], 0.0)
+
+
+def _bbox_iou(a: list[float], b: list[float]) -> float:
+    ax1 = a[0] - a[2] / 2
+    ay1 = a[1] - a[3] / 2
+    ax2 = a[0] + a[2] / 2
+    ay2 = a[1] + a[3] / 2
+    bx1 = b[0] - b[2] / 2
+    by1 = b[1] - b[3] / 2
+    bx2 = b[0] + b[2] / 2
+    by2 = b[1] + b[3] / 2
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(inter_x2 - inter_x1, 0.0)
+    inter_h = max(inter_y2 - inter_y1, 0.0)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0:
+        return 0.0
+    union = _bbox_area(a) + _bbox_area(b) - inter_area
+    if union <= 0:
+        return 0.0
+    return inter_area / union
+
+
+def _merge_detections(detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for detection in detections:
+        if not detection.get("bbox"):
+            continue
+        replaced = False
+        for index, existing in enumerate(merged):
+            if detection["category"] != existing["category"]:
+                continue
+            if _bbox_iou(detection["bbox"], existing["bbox"]) < MERGE_IOU_THRESHOLD:
+                continue
+            merged[index] = _prefer_tighter_detection(existing, detection)
+            replaced = True
+            break
+        if not replaced:
+            merged.append(detection)
+    return merged
+
+
+def _prefer_tighter_detection(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    left_confidence = float(left.get("confidence", 0.0))
+    right_confidence = float(right.get("confidence", 0.0))
+    if abs(left_confidence - right_confidence) <= MERGE_CONFIDENCE_EPS:
+        if _bbox_area(right["bbox"]) < _bbox_area(left["bbox"]):
+            return right
+        return left
+    return right if right_confidence > left_confidence else left
 
 
 def _draw_boxes_on_image(pil_img: Image.Image, detections: list[dict], img_w: int, img_h: int) -> None:
@@ -440,7 +659,7 @@ def _build_self_check_prompt(categories: list[str], detections: list[dict], img_
         "- Box misaligned → shift to better center the object.",
         "",
         "Return ALL boxes (including unchanged ones):",
-        '[{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]',
+        '{"detections": [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]}',
     ])
 
 
@@ -467,15 +686,133 @@ def _refine_detections(
     annotated_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
     prompt = _build_self_check_prompt(categories, detections, img_w, img_h)
-
-    if provider == "gemini":
-        raw = _call_gemini_vl(api_key, model, prompt, "image/png", annotated_b64)
-    else:
-        raw = _call_openai_compat_vl(base_url, api_key, model, prompt, "image/png", annotated_b64)
+    raw = _call_vl_model(provider, base_url, api_key, model, prompt, "image/png", annotated_b64)
 
     allowed = set(categories)
     refined = _parse_vl_response(raw, 0.0, allowed, img_w, img_h)
     return refined if refined else detections
+
+
+def _tighten_large_detections(
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    pil_img: Image.Image,
+    detections: list[dict[str, Any]],
+    img_w: int,
+    img_h: int,
+) -> list[dict[str, Any]]:
+    tightened: list[dict[str, Any]] = []
+    for detection in detections:
+        if not _is_suspicious_large_box(detection["bbox"]):
+            tightened.append(detection)
+            continue
+        tightened.append(
+            _tighten_single_detection(
+                provider,
+                model,
+                api_key,
+                base_url,
+                pil_img,
+                detection,
+                img_w,
+                img_h,
+            )
+        )
+    return _merge_detections(tightened)
+
+
+def _is_suspicious_large_box(bbox: list[float]) -> bool:
+    return _bbox_area(bbox) >= LARGE_BOX_AREA_THRESHOLD or bbox[2] >= LARGE_BOX_DIM_THRESHOLD or bbox[3] >= LARGE_BOX_DIM_THRESHOLD
+
+
+def _tighten_single_detection(
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    pil_img: Image.Image,
+    detection: dict[str, Any],
+    img_w: int,
+    img_h: int,
+) -> dict[str, Any]:
+    x1, y1, x2, y2 = _bbox_to_corners(detection["bbox"], img_w, img_h)
+    margin_x = max(int((x2 - x1) * TIGHTEN_MARGIN_RATIO), TIGHTEN_MIN_MARGIN_PX)
+    margin_y = max(int((y2 - y1) * TIGHTEN_MARGIN_RATIO), TIGHTEN_MIN_MARGIN_PX)
+    crop_x1 = max(0, x1 - margin_x)
+    crop_y1 = max(0, y1 - margin_y)
+    crop_x2 = min(img_w, x2 + margin_x)
+    crop_y2 = min(img_h, y2 + margin_y)
+    if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+        return detection
+
+    crop = pil_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+    crop_w, crop_h = crop.size
+    if crop_w <= 1 or crop_h <= 1:
+        return detection
+
+    buffer = io.BytesIO()
+    crop.save(buffer, format="PNG")
+    crop_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    prompt = _build_tighten_prompt(detection["category"], crop_w, crop_h)
+    raw = _call_vl_model(provider, base_url, api_key, model, prompt, "image/png", crop_b64)
+    local_candidates = _parse_vl_response(raw, 0.0, {detection["category"]}, crop_w, crop_h)
+    if not local_candidates:
+        return detection
+
+    best_local = min(
+        local_candidates,
+        key=lambda item: (
+            (item["bbox"][0] - 0.5) ** 2 + (item["bbox"][1] - 0.5) ** 2,
+            _bbox_area(item["bbox"]),
+        ),
+    )
+    local_x1, local_y1, local_x2, local_y2 = _bbox_to_corners(best_local["bbox"], crop_w, crop_h)
+    candidate = {
+        "category": detection["category"],
+        "confidence": round(max(float(detection.get("confidence", 0.0)), float(best_local.get("confidence", 0.0))), 4),
+        "bbox": _corners_to_bbox(
+            crop_x1 + local_x1,
+            crop_y1 + local_y1,
+            crop_x1 + local_x2,
+            crop_y1 + local_y2,
+            img_w,
+            img_h,
+        ),
+    }
+    if not _accept_tightened_detection(detection, candidate):
+        return detection
+    return candidate
+
+
+def _build_tighten_prompt(category: str, crop_w: int, crop_h: int) -> str:
+    return "\n".join([
+        f"You are refining one coarse detection for category '{category}'.",
+        f"Crop dimensions: {crop_w} x {crop_h} pixels.",
+        "The target object is near the center of this crop.",
+        'Return strictly as JSON object with no markdown: {"detections": [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]}.',
+        "",
+        "Rules:",
+        "- Return at most one detection.",
+        f"- Only return category '{category}'.",
+        "- The new box must be as tight as possible around the visible object pixels.",
+        "- Exclude background, shadow, reflection, and invisible extent.",
+        "- If no clear instance is present, return {\"detections\": []}.",
+    ])
+
+
+def _accept_tightened_detection(original: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    original_area = _bbox_area(original["bbox"])
+    candidate_area = _bbox_area(candidate["bbox"])
+    center_shift = (
+        (original["bbox"][0] - candidate["bbox"][0]) ** 2 + (original["bbox"][1] - candidate["bbox"][1]) ** 2
+    ) ** 0.5
+    if candidate_area > original_area * TIGHTEN_MAX_AREA_EXPANSION:
+        return False
+    if center_shift > TIGHTEN_MAX_CENTER_SHIFT:
+        return False
+    return True
 
 
 def _local_annotate(payload: dict[str, Any]) -> list[dict[str, Any]]:
