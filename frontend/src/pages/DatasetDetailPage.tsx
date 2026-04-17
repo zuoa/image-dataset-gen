@@ -774,12 +774,11 @@ export function DatasetDetailPage() {
                 </div>
               </button>
             ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      {isAugmentationModalOpen ? (
-        <div
+	          </div>
+	        </SectionCard>
+	
+	      {isAugmentationModalOpen ? (
+	        <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm"
           onClick={() => {
             if (!isCreatingAugmentationTask) {
