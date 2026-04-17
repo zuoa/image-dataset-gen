@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, Upload, Wand2, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Download, FlipHorizontal2, Layers, ListChecks, Loader, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
@@ -115,6 +115,8 @@ export function DatasetDetailPage() {
   const [isAddingDetection, setIsAddingDetection] = useState(false);
   const [isTasksExpanded, setIsTasksExpanded] = useState(false);
   const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
+  const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
+  const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -515,7 +517,7 @@ export function DatasetDetailPage() {
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link to={`/datasets/${dataset.id}/generate`}>
-                <Button>生成</Button>
+                <Button><Sparkles className="mr-2 h-4 w-4" />生成</Button>
               </Link>
               <Button
                 variant="secondary"
@@ -530,6 +532,7 @@ export function DatasetDetailPage() {
                 onClick={openAnnotationModal}
                 disabled={dataset.imageCount === 0 || annotationRunning}
               >
+                <Tag className="mr-2 h-4 w-4" />
                 自动标注
               </Button>
               <Button
@@ -537,11 +540,27 @@ export function DatasetDetailPage() {
                 onClick={openExportModal}
                 disabled={dataset.selectedCount === 0}
               >
+                <Download className="mr-2 h-4 w-4" />
                 导出
               </Button>
               <Button variant="secondary" onClick={() => archiveInputRef.current?.click()} disabled={isImporting}>
                 <Upload className="mr-2 h-4 w-4" />
                 导入
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setIsTasksDrawerOpen(true)}
+              >
+                <ClipboardList className="mr-2 h-4 w-4" />
+                批次任务
+                <span className="ml-1.5 text-xs text-neutral-400">{dataset.tasks.length}</span>
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setIsToolsDrawerOpen(true)}
+              >
+                <Layers className="mr-2 h-4 w-4" />
+                数据集功能
               </Button>
               <input ref={archiveInputRef} type="file" accept=".zip" className="hidden" onChange={handleArchiveImport} />
             </div>
@@ -573,137 +592,148 @@ export function DatasetDetailPage() {
         </SectionCard>
       ) : null}
 
-      <div className="space-y-6">
-        {/* Collapsible Batch Tasks */}
-        <SectionCard>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between"
-            onClick={() => setIsTasksExpanded(!isTasksExpanded)}
-          >
-            <div className="flex items-center gap-3">
-              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">批次任务</div>
-              <span className="text-xs text-neutral-400">{dataset.tasks.length} 个任务</span>
+      {/* Batch Tasks Drawer */}
+      {isTasksDrawerOpen ? (
+        <div className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-sm" onClick={() => setIsTasksDrawerOpen(false)}>
+          <div className="flex h-full w-full max-w-lg flex-col bg-white dark:bg-neutral-950" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-4 dark:border-white/10">
+              <div className="flex items-center gap-3">
+                <ClipboardList className="h-5 w-5 text-neutral-500" />
+                <h3 className="text-lg text-neutral-900 dark:text-white">批次任务</h3>
+                <span className="text-xs text-neutral-400">{dataset.tasks.length} 个任务</span>
+              </div>
+              <button type="button" onClick={() => setIsTasksDrawerOpen(false)} className="rounded-full p-1 hover:bg-neutral-100 dark:hover:bg-white/10">
+                <X className="h-5 w-5 text-neutral-500" />
+              </button>
             </div>
-            {isTasksExpanded ? <ChevronUp className="h-4 w-4 text-neutral-400" /> : <ChevronDown className="h-4 w-4 text-neutral-400" />}
-          </button>
-          {isTasksExpanded && (
-            <div className="mt-4 space-y-3">
-              {dataset.tasks.map((task) => (
-                <div key={task.id} className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge>{task.taskType}</Badge>
-                        <Badge>{task.status}</Badge>
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-3">
+                {dataset.tasks.length === 0 ? (
+                  <div className="text-sm text-neutral-500">暂无批次任务</div>
+                ) : (
+                  dataset.tasks.map((task) => (
+                    <div key={task.id} className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge>{task.taskType}</Badge>
+                            <Badge>{task.status}</Badge>
+                          </div>
+                          <div className="mt-3 text-lg text-neutral-900 dark:text-white">{task.taskName}</div>
+                          <div className="mt-1 text-sm text-neutral-500">{task.subject}</div>
+                        </div>
+                        {(task.status === "paused" || task.status === "failed") && token ? (
+                          <Button
+                            variant="secondary"
+                            onClick={() => {
+                              void retryDatasetTask(dataset.id, task.id, token)
+                                .then((response) => setDataset(response.dataset))
+                                .catch((error) => setActionError((error as Error).message));
+                            }}
+                          >
+                            <Loader className="mr-2 h-4 w-4" />
+                            重试
+                          </Button>
+                        ) : null}
                       </div>
-                      <div className="mt-3 text-lg text-neutral-900 dark:text-white">{task.taskName}</div>
-                      <div className="mt-1 text-sm text-neutral-500">{task.subject}</div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
+                        <div className="h-full rounded-full bg-neutral-900 dark:bg-white" style={{ width: `${task.progressPercent}%` }} />
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-4 text-xs text-neutral-500">
+                        <span>{task.imagesGenerated} / {task.imageCount}</span>
+                        <span>{formatCurrency(task.spentCost)}</span>
+                        <span>{formatDate(task.updatedAt)}</span>
+                      </div>
                     </div>
-                    {(task.status === "paused" || task.status === "failed") && token ? (
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Tools Drawer */}
+      {isToolsDrawerOpen ? (
+        <div className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-sm" onClick={() => setIsToolsDrawerOpen(false)}>
+          <div className="flex h-full w-full max-w-lg flex-col bg-white dark:bg-neutral-950" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-4 dark:border-white/10">
+              <div className="flex items-center gap-3">
+                <Layers className="h-5 w-5 text-neutral-500" />
+                <h3 className="text-lg text-neutral-900 dark:text-white">数据集功能</h3>
+              </div>
+              <button type="button" onClick={() => setIsToolsDrawerOpen(false)} className="rounded-full p-1 hover:bg-neutral-100 dark:hover:bg-white/10">
+                <X className="h-5 w-5 text-neutral-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-4">
+                <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">自动标注</div>
+                  <div className="mt-3 text-lg text-neutral-900 dark:text-white">
+                    {annotationRunning ? "运行中" : annotationStatus === "completed" ? "已完成" : "待执行"}
+                  </div>
+                  <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+                    对当前样本池执行自动标注，默认阈值 {confidenceThreshold.toFixed(2)}。
+                  </div>
+                  <div className="mt-4">
+                    <Button
+                      variant="secondary"
+                      onClick={() => { setIsToolsDrawerOpen(false); openAnnotationModal(); }}
+                      disabled={dataset.imageCount === 0 || annotationRunning}
+                    >
+                      <Tag className="mr-2 h-4 w-4" />
+                      自动标注
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">导出</div>
+                  <div className="mt-3 text-lg text-neutral-900 dark:text-white">
+                    {latestExport ? `v${latestExport.version} · ${String(latestExport.status)}` : "未创建导出包"}
+                  </div>
+                  <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+                    当前已选中 {dataset.selectedCount} 张样本，可导出为 {exportFormat.toUpperCase()} 数据集。
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <Button
+                      variant="secondary"
+                      onClick={() => { setIsToolsDrawerOpen(false); openExportModal(); }}
+                      disabled={dataset.selectedCount === 0}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      导出
+                    </Button>
+                    {latestExport && latestExport.status === "ready" ? (
                       <Button
-                        variant="secondary"
                         onClick={() => {
-                          void retryDatasetTask(dataset.id, task.id, token)
-                            .then((response) => setDataset(response.dataset))
-                            .catch((error) => setActionError((error as Error).message));
+                          if (!token) return;
+                          void downloadWithToken(latestExport.downloadUrl, token, `${dataset.name}-${latestExport.version}.zip`);
                         }}
                       >
-                        重试
+                        <Download className="mr-2 h-4 w-4" />
+                        下载最新包
                       </Button>
                     ) : null}
                   </div>
-                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
-                    <div className="h-full rounded-full bg-neutral-900 dark:bg-white" style={{ width: `${task.progressPercent}%` }} />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-4 text-xs text-neutral-500">
-                    <span>{task.imagesGenerated} / {task.imageCount}</span>
-                    <span>{formatCurrency(task.spentCost)}</span>
-                    <span>{formatDate(task.updatedAt)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Collapsible Tools Panel */}
-        <SectionCard>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between"
-            onClick={() => setIsToolsPanelOpen(!isToolsPanelOpen)}
-          >
-            <div className="flex items-center gap-3">
-              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">数据集功能</div>
-              <span className="text-xs text-neutral-400">{annotationRunning ? "标注中" : annotationStatus === "completed" ? "已标注" : "就绪"}</span>
-            </div>
-            {isToolsPanelOpen ? <ChevronUp className="h-4 w-4 text-neutral-400" /> : <ChevronDown className="h-4 w-4 text-neutral-400" />}
-          </button>
-          {isToolsPanelOpen && (
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">自动标注</div>
-                <div className="mt-3 text-lg text-neutral-900 dark:text-white">
-                  {annotationRunning ? "运行中" : annotationStatus === "completed" ? "已完成" : "待执行"}
-                </div>
-                <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                  对当前样本池执行自动标注，默认阈值 {confidenceThreshold.toFixed(2)}。
-                </div>
-                <div className="mt-4">
-                  <Button
-                    variant="secondary"
-                    onClick={openAnnotationModal}
-                    disabled={dataset.imageCount === 0 || annotationRunning}
-                  >
-                    自动标注
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">导出</div>
-                <div className="mt-3 text-lg text-neutral-900 dark:text-white">
-                  {latestExport ? `v${latestExport.version} · ${String(latestExport.status)}` : "未创建导出包"}
-                </div>
-                <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                  当前已选中 {dataset.selectedCount} 张样本，可导出为 {exportFormat.toUpperCase()} 数据集。
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <Button
-                    variant="secondary"
-                    onClick={openExportModal}
-                    disabled={dataset.selectedCount === 0}
-                  >
-                    导出
-                  </Button>
-                  {latestExport && latestExport.status === "ready" ? (
-                    <Button
-                      onClick={() => {
-                        if (!token) return;
-                        void downloadWithToken(latestExport.downloadUrl, token, `${dataset.name}-${latestExport.version}.zip`);
-                      }}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      下载最新包
-                    </Button>
-                  ) : null}
                 </div>
               </div>
             </div>
-          )}
-        </SectionCard>
+          </div>
+        </div>
+      ) : null}
 
-        <SectionCard>
+      <SectionCard>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "all" })}>全选</Button>
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "invert" })}>反选</Button>
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "none" })}>清空</Button>
+              <Button variant="secondary" onClick={() => void applySelection({ mode: "all" })}><CheckSquare className="mr-2 h-4 w-4" />全选</Button>
+              <Button variant="secondary" onClick={() => void applySelection({ mode: "invert" })}><FlipHorizontal2 className="mr-2 h-4 w-4" />反选</Button>
+              <Button variant="secondary" onClick={() => void applySelection({ mode: "none" })}><Square className="mr-2 h-4 w-4" />清空</Button>
             </div>
           </div>
 
