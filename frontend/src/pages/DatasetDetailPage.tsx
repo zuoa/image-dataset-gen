@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronLeft, ChevronRight, Download, Upload, Wand2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
@@ -113,6 +113,8 @@ export function DatasetDetailPage() {
   const [isSavingAnnotations, setIsSavingAnnotations] = useState(false);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [isAddingDetection, setIsAddingDetection] = useState(false);
+  const [isTasksExpanded, setIsTasksExpanded] = useState(false);
+  const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -571,10 +573,21 @@ export function DatasetDetailPage() {
         </SectionCard>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="space-y-6">
-          <SectionCard>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">批次任务</div>
+      <div className="space-y-6">
+        {/* Collapsible Batch Tasks */}
+        <SectionCard>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between"
+            onClick={() => setIsTasksExpanded(!isTasksExpanded)}
+          >
+            <div className="flex items-center gap-3">
+              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">批次任务</div>
+              <span className="text-xs text-neutral-400">{dataset.tasks.length} 个任务</span>
+            </div>
+            {isTasksExpanded ? <ChevronUp className="h-4 w-4 text-neutral-400" /> : <ChevronDown className="h-4 w-4 text-neutral-400" />}
+          </button>
+          {isTasksExpanded && (
             <div className="mt-4 space-y-3">
               {dataset.tasks.map((task) => (
                 <div key={task.id} className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
@@ -611,11 +624,23 @@ export function DatasetDetailPage() {
                 </div>
               ))}
             </div>
-          </SectionCard>
+          )}
+        </SectionCard>
 
-          <SectionCard>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">数据集功能</div>
-
+        {/* Collapsible Tools Panel */}
+        <SectionCard>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between"
+            onClick={() => setIsToolsPanelOpen(!isToolsPanelOpen)}
+          >
+            <div className="flex items-center gap-3">
+              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">数据集功能</div>
+              <span className="text-xs text-neutral-400">{annotationRunning ? "标注中" : annotationStatus === "completed" ? "已标注" : "就绪"}</span>
+            </div>
+            {isToolsPanelOpen ? <ChevronUp className="h-4 w-4 text-neutral-400" /> : <ChevronDown className="h-4 w-4 text-neutral-400" />}
+          </button>
+          {isToolsPanelOpen && (
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">自动标注</div>
@@ -666,8 +691,8 @@ export function DatasetDetailPage() {
                 </div>
               </div>
             </div>
-          </SectionCard>
-        </div>
+          )}
+        </SectionCard>
 
         <SectionCard>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -682,7 +707,7 @@ export function DatasetDetailPage() {
             </div>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {images.map((image) => (
               <button
                 key={image.id}
