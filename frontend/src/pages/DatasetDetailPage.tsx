@@ -54,6 +54,12 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
 ];
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
+type ImageViewport = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
 
 function detectionStyle([xCenter, yCenter, width, height]: [number, number, number, number]) {
   return {
@@ -72,6 +78,40 @@ function pointerToStage(rect: DOMRect, clientX: number, clientY: number) {
   return {
     x: clamp((clientX - rect.left) / rect.width),
     y: clamp((clientY - rect.top) / rect.height),
+  };
+}
+
+function fitImageViewport(
+  containerWidth: number,
+  containerHeight: number,
+  imageWidth: number,
+  imageHeight: number,
+): ImageViewport {
+  if (containerWidth <= 0 || containerHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+    return { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  const containerAspect = containerWidth / containerHeight;
+  const imageAspect = imageWidth / imageHeight;
+
+  if (imageAspect > containerAspect) {
+    const width = containerWidth;
+    const height = width / imageAspect;
+    return {
+      left: 0,
+      top: (containerHeight - height) / 2,
+      width,
+      height,
+    };
+  }
+
+  const height = containerHeight;
+  const width = height * imageAspect;
+  return {
+    left: (containerWidth - width) / 2,
+    top: 0,
+    width,
+    height,
   };
 }
 
@@ -118,7 +158,10 @@ export function DatasetDetailPage() {
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
   const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
+  const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
 
   const images = dataset?.images ?? [];
   const previewIndex = previewImageId ? images.findIndex((image) => image.id === previewImageId) : -1;
@@ -168,6 +211,38 @@ export function DatasetDetailPage() {
     setSelectedDetectionIndex(null);
     setIsAddingDetection(false);
   }, [previewImage]);
+
+  useEffect(() => {
+    setPreviewImageNaturalSize(null);
+    setImageViewport(null);
+  }, [previewImage?.id]);
+
+  useEffect(() => {
+    if (!previewImageNaturalSize || !stageRef.current) {
+      setImageViewport(null);
+      return;
+    }
+
+    const stage = stageRef.current;
+    const syncViewport = () => {
+      const rect = stage.getBoundingClientRect();
+      setImageViewport(
+        fitImageViewport(
+          rect.width,
+          rect.height,
+          previewImageNaturalSize.width,
+          previewImageNaturalSize.height,
+        ),
+      );
+    };
+
+    syncViewport();
+
+    const resizeObserver = new ResizeObserver(syncViewport);
+    resizeObserver.observe(stage);
+
+    return () => resizeObserver.disconnect();
+  }, [previewImageNaturalSize]);
 
   useEffect(() => {
     if (!previewImage) return;
@@ -373,10 +448,10 @@ export function DatasetDetailPage() {
   }
 
   function beginDragDetection(index: number, event: ReactMouseEvent<HTMLDivElement>) {
-    if (!stageRef.current) return;
+    if (!viewportRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    const rect = stageRef.current.getBoundingClientRect();
+    const rect = viewportRef.current.getBoundingClientRect();
     const origin = draftDetections[index];
     const startX = event.clientX;
     const startY = event.clientY;
@@ -405,10 +480,10 @@ export function DatasetDetailPage() {
   }
 
   function beginResizeDetection(index: number, corner: ResizeCorner, event: ReactMouseEvent<HTMLButtonElement>) {
-    if (!stageRef.current) return;
+    if (!viewportRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    const rect = stageRef.current.getBoundingClientRect();
+    const rect = viewportRef.current.getBoundingClientRect();
     const origin = draftDetections[index];
     const [xCenter, yCenter, width, height] = origin.bbox;
     const left = xCenter - width / 2;
@@ -436,9 +511,9 @@ export function DatasetDetailPage() {
   }
 
   function handleStageMouseDown(event: ReactMouseEvent<HTMLDivElement>) {
-    if (!stageRef.current || !isAddingDetection || !dataset) return;
+    if (!viewportRef.current || !isAddingDetection || !dataset) return;
     event.preventDefault();
-    const rect = stageRef.current.getBoundingClientRect();
+    const rect = viewportRef.current.getBoundingClientRect();
     const start = pointerToStage(rect, event.clientX, event.clientY);
     const category = dataset.categories[0] ?? "object";
     const nextIndex = draftDetections.length;
@@ -1227,48 +1302,70 @@ export function DatasetDetailPage() {
               </button>
               <div
                 ref={stageRef}
-                className={`relative mx-auto flex h-full max-h-[72vh] w-full max-w-[72vh] items-center justify-center overflow-hidden rounded-[28px] ${
-                  isAddingDetection ? "cursor-crosshair" : "cursor-default"
-                }`}
-                onMouseDown={handleStageMouseDown}
+                className="relative mx-auto flex h-full max-h-[72vh] w-full max-w-[72vh] items-center justify-center overflow-hidden rounded-[28px]"
               >
-                <AuthImage src={previewImage.previewSvg} alt={previewImage.promptText} className="h-full w-full object-contain" />
-                <div className="pointer-events-none absolute inset-0">
-                  {draftDetections.map((detection, index) => (
-                    <div
-                      key={`${detection.category}-${index}`}
-                      className={`pointer-events-auto absolute rounded-xl border-2 ${
-                        selectedDetectionIndex === index ? "border-lime-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.08)]" : "border-white/90"
-                      }`}
-                      style={detectionStyle(detection.bbox)}
-                      onMouseDown={(event) => beginDragDetection(index, event)}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedDetectionIndex(index);
-                      }}
-                    >
-                      <div className="absolute left-0 top-0 -translate-y-full rounded-t-lg bg-black/72 px-2 py-1 text-[11px] text-white">
-                        {detection.category} · {(detection.confidence * 100).toFixed(0)}%
-                      </div>
-                      {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
-                        <button
-                          key={corner}
-                          type="button"
-                          className={`absolute h-3 w-3 rounded-full border border-white bg-black/70 ${
-                            corner === "nw"
-                              ? "-left-1.5 -top-1.5"
-                              : corner === "ne"
-                                ? "-right-1.5 -top-1.5"
-                                : corner === "sw"
-                                  ? "-left-1.5 -bottom-1.5"
-                                  : "-right-1.5 -bottom-1.5"
+                <AuthImage
+                  src={previewImage.previewSvg}
+                  alt={previewImage.promptText}
+                  className="h-full w-full object-contain"
+                  onLoad={(event) => {
+                    const target = event.currentTarget;
+                    setPreviewImageNaturalSize({
+                      width: target.naturalWidth,
+                      height: target.naturalHeight,
+                    });
+                  }}
+                />
+                {imageViewport && imageViewport.width > 0 && imageViewport.height > 0 ? (
+                  <div
+                    ref={viewportRef}
+                    className={`absolute ${isAddingDetection ? "cursor-crosshair" : "cursor-default"}`}
+                    style={{
+                      left: imageViewport.left,
+                      top: imageViewport.top,
+                      width: imageViewport.width,
+                      height: imageViewport.height,
+                    }}
+                    onMouseDown={handleStageMouseDown}
+                  >
+                    <div className="pointer-events-none absolute inset-0">
+                      {draftDetections.map((detection, index) => (
+                        <div
+                          key={`${detection.category}-${index}`}
+                          className={`pointer-events-auto absolute rounded-xl border-2 ${
+                            selectedDetectionIndex === index ? "border-lime-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.08)]" : "border-white/90"
                           }`}
-                          onMouseDown={(event) => beginResizeDetection(index, corner, event)}
-                        />
+                          style={detectionStyle(detection.bbox)}
+                          onMouseDown={(event) => beginDragDetection(index, event)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedDetectionIndex(index);
+                          }}
+                        >
+                          <div className="absolute left-0 top-0 -translate-y-full rounded-t-lg bg-black/72 px-2 py-1 text-[11px] text-white">
+                            {detection.category} · {(detection.confidence * 100).toFixed(0)}%
+                          </div>
+                          {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
+                            <button
+                              key={corner}
+                              type="button"
+                              className={`absolute h-3 w-3 rounded-full border border-white bg-black/70 ${
+                                corner === "nw"
+                                  ? "-left-1.5 -top-1.5"
+                                  : corner === "ne"
+                                    ? "-right-1.5 -top-1.5"
+                                    : corner === "sw"
+                                      ? "-left-1.5 -bottom-1.5"
+                                      : "-right-1.5 -bottom-1.5"
+                              }`}
+                              onMouseDown={(event) => beginResizeDetection(index, corner, event)}
+                            />
+                          ))}
+                        </div>
                       ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
