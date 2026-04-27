@@ -407,7 +407,7 @@ def _parse_vl_response(
         if not isinstance(item, dict):
             continue
 
-        # --- Qwen2.5-VL bbox_2d format: pixel [x1, y1, x2, y2] ---
+        # --- Qwen2.5-VL bbox_2d format: pixel/normalized [x1, y1, x2, y2] ---
         if "bbox_2d" in item:
             raw_label = str(item.get("label", "")).strip()
             category = _resolve_allowed_category(raw_label, allowed_categories)
@@ -428,11 +428,13 @@ def _parse_vl_response(
             detections.append({
                 "category": category,
                 "confidence": round(confidence, 4),
-                "bbox": _corners_to_bbox(x1, y1, x2, y2, img_w, img_h),
+                "bbox": _corners_to_bbox_auto(x1, y1, x2, y2, img_w, img_h),
             })
             continue
 
         # --- Original format: normalized [x_center, y_center, width, height] ---
+        # Some VL models ignore the requested bbox_2d key and return pixel corners
+        # under "bbox"; detect that before falling back to center-size semantics.
         raw_label = str(item.get("category", "") or item.get("label", "")).strip()
         category = _resolve_allowed_category(
             raw_label,
@@ -451,6 +453,14 @@ def _parse_vl_response(
         try:
             bbox = [float(v) for v in bbox]
         except (ValueError, TypeError):
+            continue
+
+        if _bbox_field_looks_like_corners(bbox, img_w, img_h):
+            detections.append({
+                "category": category,
+                "confidence": round(confidence, 4),
+                "bbox": _corners_to_bbox_auto(bbox[0], bbox[1], bbox[2], bbox[3], img_w, img_h),
+            })
             continue
 
         # Normalize pixel coordinates to 0-1 if necessary
@@ -546,6 +556,38 @@ def _corners_to_bbox(x1: float, y1: float, x2: float, y2: float, img_w: int, img
     x_center = ((x1 + x2) / 2) / safe_w
     y_center = ((y1 + y2) / 2) / safe_h
     return _clip_bbox(x_center, y_center, width, height)
+
+
+def _corners_to_bbox_auto(x1: float, y1: float, x2: float, y2: float, img_w: int, img_h: int) -> list[float]:
+    values = [x1, y1, x2, y2]
+    if _bbox_values_are_normalized(values):
+        x1 = min(max(x1, 0.0), 1.0)
+        y1 = min(max(y1, 0.0), 1.0)
+        x2 = min(max(x2, x1 + 0.001), 1.0)
+        y2 = min(max(y2, y1 + 0.001), 1.0)
+        return _clip_bbox((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
+    return _corners_to_bbox(x1, y1, x2, y2, img_w, img_h)
+
+
+def _bbox_field_looks_like_corners(bbox: list[float], img_w: int, img_h: int) -> bool:
+    x1, y1, x2, y2 = bbox
+    if x2 <= x1 or y2 <= y1:
+        return False
+    if not _bbox_values_are_normalized(bbox):
+        return x1 < img_w and y1 < img_h and x2 <= img_w * 1.05 and y2 <= img_h * 1.05
+
+    _, _, width, height = bbox
+    center_size_would_be_out_of_bounds = (
+        x1 < width / 2
+        or x1 > 1.0 - width / 2
+        or y1 < height / 2
+        or y1 > 1.0 - height / 2
+    )
+    return center_size_would_be_out_of_bounds
+
+
+def _bbox_values_are_normalized(values: list[float]) -> bool:
+    return all(0.0 <= value <= 1.0 for value in values)
 
 
 def _bbox_area(bbox: list[float]) -> float:

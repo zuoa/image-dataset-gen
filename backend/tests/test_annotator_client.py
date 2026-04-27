@@ -8,6 +8,14 @@ from PIL import Image
 
 
 def _load_annotator_client_module():
+    stubbed_module_names = [
+        "app",
+        "app.models",
+        "app.services",
+        "app.services.image_storage",
+    ]
+    previous_modules = {name: sys.modules.get(name) for name in stubbed_module_names}
+
     app_module = types.ModuleType("app")
     models_module = types.ModuleType("app.models")
     services_module = types.ModuleType("app.services")
@@ -19,17 +27,24 @@ def _load_annotator_client_module():
     models_module.Dataset = Dataset
     image_storage_module.existing_generated_image = lambda *args, **kwargs: None
 
-    sys.modules.setdefault("app", app_module)
-    sys.modules["app.models"] = models_module
-    sys.modules["app.services"] = services_module
-    sys.modules["app.services.image_storage"] = image_storage_module
+    try:
+        sys.modules["app"] = app_module
+        sys.modules["app.models"] = models_module
+        sys.modules["app.services"] = services_module
+        sys.modules["app.services.image_storage"] = image_storage_module
 
-    module_path = Path(__file__).resolve().parents[1] / "app" / "clients" / "annotator_client.py"
-    spec = importlib.util.spec_from_file_location("annotator_client_under_test", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+        module_path = Path(__file__).resolve().parents[1] / "app" / "clients" / "annotator_client.py"
+        spec = importlib.util.spec_from_file_location("annotator_client_under_test", module_path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 annotator_client = _load_annotator_client_module()
@@ -86,6 +101,54 @@ def test_parse_vl_response_accepts_bbox_2d_without_confidence():
             "category": "pedestrian",
             "confidence": 1.0,
             "bbox": [0.3, 0.3, 0.5, 0.5],
+        }
+    ]
+
+
+def test_parse_vl_response_accepts_corner_bbox_field():
+    raw = json.dumps(
+        {
+            "detections": [
+                {
+                    "bbox": [10, 20, 110, 220],
+                    "label": "Pedestrian",
+                    "confidence": 0.91,
+                }
+            ]
+        }
+    )
+
+    detections = annotator_client._parse_vl_response(raw, 0.5, {"pedestrian"}, 200, 400)
+
+    assert detections == [
+        {
+            "category": "pedestrian",
+            "confidence": 0.91,
+            "bbox": [0.3, 0.3, 0.5, 0.5],
+        }
+    ]
+
+
+def test_parse_vl_response_accepts_normalized_bbox_2d_corners():
+    raw = json.dumps(
+        {
+            "detections": [
+                {
+                    "bbox_2d": [0.1, 0.2, 0.6, 0.7],
+                    "label": "pedestrian",
+                    "confidence": 0.88,
+                }
+            ]
+        }
+    )
+
+    detections = annotator_client._parse_vl_response(raw, 0.5, {"pedestrian"}, 200, 400)
+
+    assert detections == [
+        {
+            "category": "pedestrian",
+            "confidence": 0.88,
+            "bbox": [0.35, 0.45, 0.5, 0.5],
         }
     ]
 
