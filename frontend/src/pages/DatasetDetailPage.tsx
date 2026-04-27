@@ -1304,30 +1304,28 @@ export function DatasetDetailPage() {
                 ref={stageRef}
                 className="relative mx-auto flex h-full max-h-[72vh] w-full max-w-[72vh] items-center justify-center overflow-hidden rounded-[28px]"
               >
-                <AuthImage
-                  src={previewImage.previewSvg}
-                  alt={previewImage.promptText}
-                  className="h-full w-full object-contain"
-                  onLoad={(event) => {
-                    const target = event.currentTarget;
-                    setPreviewImageNaturalSize({
-                      width: target.naturalWidth,
-                      height: target.naturalHeight,
-                    });
-                  }}
-                />
                 {imageViewport && imageViewport.width > 0 && imageViewport.height > 0 ? (
                   <div
                     ref={viewportRef}
-                    className={`absolute ${isAddingDetection ? "cursor-crosshair" : "cursor-default"}`}
+                    className={`relative ${isAddingDetection ? "cursor-crosshair" : "cursor-default"}`}
                     style={{
-                      left: imageViewport.left,
-                      top: imageViewport.top,
                       width: imageViewport.width,
                       height: imageViewport.height,
                     }}
                     onMouseDown={handleStageMouseDown}
                   >
+                    <AuthImage
+                      src={previewImage.previewSvg}
+                      alt={previewImage.promptText}
+                      className="h-full w-full"
+                      onLoad={(event) => {
+                        const target = event.currentTarget;
+                        setPreviewImageNaturalSize({
+                          width: target.naturalWidth,
+                          height: target.naturalHeight,
+                        });
+                      }}
+                    />
                     <div className="pointer-events-none absolute inset-0">
                       {draftDetections.map((detection, index) => (
                         <div
@@ -1365,7 +1363,20 @@ export function DatasetDetailPage() {
                       ))}
                     </div>
                   </div>
-                ) : null}
+                ) : (
+                  <AuthImage
+                    src={previewImage.previewSvg}
+                    alt={previewImage.promptText}
+                    className="h-full w-full object-contain"
+                    onLoad={(event) => {
+                      const target = event.currentTarget;
+                      setPreviewImageNaturalSize({
+                        width: target.naturalWidth,
+                        height: target.naturalHeight,
+                      });
+                    }}
+                  />
+                )}
               </div>
             </div>
 
