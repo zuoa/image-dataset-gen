@@ -52,6 +52,21 @@ def test_build_vl_prompt_uses_qwen_friendly_object_wrapper_and_tight_box_rules()
     assert prompt.count("night rain crosswalk") < 5
 
 
+def test_build_vl_prompt_uses_bbox_2d_for_gemini_outputs_too():
+    prompt = annotator_client._build_vl_prompt(
+        "street pedestrian dataset",
+        ["pedestrian"],
+        "single pedestrian crossing the street",
+        img_w=1280,
+        img_h=720,
+        provider="gemini",
+    )
+
+    assert '{"detections": [{"bbox_2d": [x1, y1, x2, y2]' in prompt
+    assert "Image dimensions: 1280 x 720 pixels." in prompt
+    assert "[x1, y1] is the top-left corner" in prompt
+
+
 def test_parse_vl_response_accepts_bbox_2d_without_confidence():
     raw = json.dumps(
         {

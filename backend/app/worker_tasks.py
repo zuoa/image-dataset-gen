@@ -291,6 +291,7 @@ def annotate_dataset_images_task(
     dataset.annotation_json = {
         **annotation,
         "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
+        "vlProvider": vl_config.get("provider", "gemini") if vl_config.get("api_key") else "local",
         "confidenceThreshold": confidence_threshold,
         "detectedImages": detected_images,
         "emptyLabels": empty_labels,

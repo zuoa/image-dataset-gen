@@ -12,7 +12,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from PIL import Image, ImageDraw
 
 from app.models import Dataset, DatasetExport, DatasetImage
-from app.services.annotation_storage import load_annotation_result
+from app.services.annotation_storage import infer_default_bbox_semantics, load_annotation_result
 from app.services.image_storage import existing_generated_image, export_image_to_format
 
 
@@ -154,7 +154,12 @@ def _image_name(dataset_image: DatasetImage, category: str, image_ext: str) -> s
 
 
 def _primary_detection(storage_root: str, dataset: Dataset, dataset_image: DatasetImage) -> dict[str, Any] | None:
-    stored = load_annotation_result(storage_root, dataset.id, dataset_image.id)
+    stored = load_annotation_result(
+        storage_root,
+        dataset.id,
+        dataset_image.id,
+        default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
+    )
     if stored is not None:
         detections = stored.get("detections", [])
         return detections[0] if detections else None

@@ -486,6 +486,7 @@ def annotate_dataset(dataset_id: str):
     dataset.annotation_json = {
         **annotation,
         "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
+        "vlProvider": vl_config.get("provider", "gemini") if vl_config.get("api_key") else "local",
         "confidenceThreshold": action["confidence_threshold"],
         "status": "running",
         "updatedAt": now_utc().isoformat(),

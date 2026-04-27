@@ -252,15 +252,18 @@ def _build_vl_prompt(
         "You are a professional bounding-box annotator. Your ONLY task is to output precise, tight bounding boxes.",
         f"Dataset subject: '{subject}'.",
         f"Target categories: {categories_str}.",
+        f"Image dimensions: {img_w} x {img_h} pixels.",
     ]
     if prompt_text:
         parts.append(f'Image was generated from prompt: "{prompt_text}".')
     parts.extend([
         "",
         "CRITICAL RULES FOR BOUNDING BOXES:",
-        "- Format: normalized [x_center, y_center, width, height], all values between 0 and 1.",
+        '- Format: pixel corners as {"detections": [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]}.',
+        "- [x1, y1] is the top-left corner and [x2, y2] is the bottom-right corner.",
         "- The box must tightly contour the object's actual visible boundary — no extra margin.",
         "- Do NOT add any padding or safety margin around the object.",
+        "- Coordinates must use the actual pixel space of this image, not normalized values.",
         "- If the object occupies a small region, return a small box. A typical object in these images is often only 10-25% of the image dimension.",
         "- WRONG: a loose box covering the whole object with lots of background — this is the most common mistake.",
         "- RIGHT: a box that closely hugs the exact outline of the object.",
@@ -271,7 +274,7 @@ def _build_vl_prompt(
         "2. For each object, carefully trace its visual outline and place the box right at that boundary.",
         "3. Return category, confidence (0-1), and bounding box.",
         "",
-        'Return strictly as JSON with no markdown: {"detections": [{"category": "...", "confidence": 0.95, "bbox": [0.5, 0.5, 0.15, 0.2]}]}. '
+        'Return strictly as JSON with no markdown: {"detections": [{"bbox_2d": [x1, y1, x2, y2], "label": "...", "confidence": 0.95}]}. '
         'If nothing is found, return {"detections": []}.',
     ])
     return "\n".join(parts)

@@ -7,7 +7,7 @@ from flask import current_app
 
 from app.extensions import db
 from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
-from app.services.annotation_storage import load_annotation_result
+from app.services.annotation_storage import infer_default_bbox_semantics, load_annotation_result
 from app.services.image_storage import existing_generated_image
 
 
@@ -91,7 +91,15 @@ def build_dataset_task_payload(task: DatasetTask | None) -> dict[str, Any] | Non
 
 
 def build_dataset_image_payload(dataset: Dataset, image: DatasetImage) -> dict[str, Any]:
-    stored_annotation = load_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id) or {}
+    stored_annotation = (
+        load_annotation_result(
+            current_app.config["STORAGE_ROOT"],
+            dataset.id,
+            image.id,
+            default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
+        )
+        or {}
+    )
     detections = stored_annotation.get("detections", [])
     if image.preview_svg.startswith("data:image/svg+xml"):
         preview = image.preview_svg
