@@ -153,6 +153,99 @@ def test_parse_vl_response_accepts_normalized_bbox_2d_corners():
     ]
 
 
+def test_parse_vl_response_scales_qwen_thousand_bbox_2d_without_axis_swap():
+    raw = json.dumps(
+        {
+            "detections": [
+                {
+                    "bbox_2d": [100, 200, 600, 700],
+                    "label": "pedestrian",
+                    "confidence": 0.88,
+                }
+            ]
+        }
+    )
+
+    detections = annotator_client._parse_vl_response(
+        raw,
+        0.5,
+        {"pedestrian"},
+        512,
+        384,
+        provider="openai_compatible",
+    )
+
+    assert detections == [
+        {
+            "category": "pedestrian",
+            "confidence": 0.88,
+            "bbox": [0.35, 0.45, 0.5, 0.5],
+        }
+    ]
+
+
+def test_parse_vl_response_scales_qwen_thousand_bbox_field_without_center_size_fallback():
+    raw = json.dumps(
+        {
+            "detections": [
+                {
+                    "bbox": [100, 200, 600, 700],
+                    "label": "pedestrian",
+                    "confidence": 0.88,
+                }
+            ]
+        }
+    )
+
+    detections = annotator_client._parse_vl_response(
+        raw,
+        0.5,
+        {"pedestrian"},
+        512,
+        384,
+        provider="openai_compatible",
+    )
+
+    assert detections == [
+        {
+            "category": "pedestrian",
+            "confidence": 0.88,
+            "bbox": [0.35, 0.45, 0.5, 0.5],
+        }
+    ]
+
+
+def test_parse_vl_response_scales_gemini_thousand_box_2d_with_axis_swap():
+    raw = json.dumps(
+        {
+            "detections": [
+                {
+                    "box_2d": [200, 100, 700, 600],
+                    "label": "pedestrian",
+                    "confidence": 0.88,
+                }
+            ]
+        }
+    )
+
+    detections = annotator_client._parse_vl_response(
+        raw,
+        0.5,
+        {"pedestrian"},
+        512,
+        384,
+        provider="gemini",
+    )
+
+    assert detections == [
+        {
+            "category": "pedestrian",
+            "confidence": 0.88,
+            "bbox": [0.35, 0.45, 0.5, 0.5],
+        }
+    ]
+
+
 def test_merge_detections_prefers_tighter_box_when_confidence_is_close():
     merged = annotator_client._merge_detections(
         [

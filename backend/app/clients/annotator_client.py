@@ -152,6 +152,7 @@ def _vl_annotate_dataset(
                         {target_category} if target_category else allowed,
                         img_w,
                         img_h,
+                        provider=provider,
                     )
                 )
 
@@ -373,6 +374,8 @@ def _parse_vl_response(
     allowed_categories: set[str],
     img_w: int = 1,
     img_h: int = 1,
+    *,
+    provider: str = "openai_compatible",
 ) -> list[dict[str, Any]]:
     # Strip markdown code fences if present
     text = raw.strip()
@@ -407,11 +410,13 @@ def _parse_vl_response(
         if not isinstance(item, dict):
             continue
 
-        # --- Qwen2.5-VL bbox_2d format: pixel/normalized [x1, y1, x2, y2] ---
-        if "bbox_2d" in item:
+        # --- VL corner formats: pixel/normalized [x1, y1, x2, y2], plus
+        # Gemini's common 0..1000 [ymin, xmin, ymax, xmax] "box_2d".
+        corner_key = "bbox_2d" if "bbox_2d" in item else "box_2d" if "box_2d" in item else None
+        if corner_key:
             raw_label = str(item.get("label", "")).strip()
             category = _resolve_allowed_category(raw_label, allowed_categories)
-            bbox_2d = item["bbox_2d"]
+            bbox_2d = item[corner_key]
             if category is None and len(allowed_categories) == 1 and not raw_label:
                 category = fallback_category
             if not category or not isinstance(bbox_2d, list) or len(bbox_2d) != 4:
@@ -428,7 +433,7 @@ def _parse_vl_response(
             detections.append({
                 "category": category,
                 "confidence": round(confidence, 4),
-                "bbox": _corners_to_bbox_auto(x1, y1, x2, y2, img_w, img_h),
+                "bbox": _corners_to_bbox_auto(x1, y1, x2, y2, img_w, img_h, provider=provider),
             })
             continue
 
@@ -459,7 +464,7 @@ def _parse_vl_response(
             detections.append({
                 "category": category,
                 "confidence": round(confidence, 4),
-                "bbox": _corners_to_bbox_auto(bbox[0], bbox[1], bbox[2], bbox[3], img_w, img_h),
+                "bbox": _corners_to_bbox_auto(bbox[0], bbox[1], bbox[2], bbox[3], img_w, img_h, provider=provider),
             })
             continue
 
@@ -558,7 +563,16 @@ def _corners_to_bbox(x1: float, y1: float, x2: float, y2: float, img_w: int, img
     return _clip_bbox(x_center, y_center, width, height)
 
 
-def _corners_to_bbox_auto(x1: float, y1: float, x2: float, y2: float, img_w: int, img_h: int) -> list[float]:
+def _corners_to_bbox_auto(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    img_w: int,
+    img_h: int,
+    *,
+    provider: str = "openai_compatible",
+) -> list[float]:
     values = [x1, y1, x2, y2]
     if _bbox_values_are_normalized(values):
         x1 = min(max(x1, 0.0), 1.0)
@@ -566,7 +580,38 @@ def _corners_to_bbox_auto(x1: float, y1: float, x2: float, y2: float, img_w: int
         x2 = min(max(x2, x1 + 0.001), 1.0)
         y2 = min(max(y2, y1 + 0.001), 1.0)
         return _clip_bbox((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
+    if _bbox_values_are_thousand_scale(values, img_w, img_h):
+        if provider == "gemini":
+            return _gemini_1000_corners_to_bbox(x1, y1, x2, y2)
+        return _scaled_1000_corners_to_bbox(x1, y1, x2, y2)
     return _corners_to_bbox(x1, y1, x2, y2, img_w, img_h)
+
+
+def _bbox_values_are_thousand_scale(values: list[float], img_w: int, img_h: int) -> bool:
+    if not all(0.0 <= value <= 1000.0 for value in values):
+        return False
+    if img_w == 1000 and img_h == 1000:
+        return False
+    x1, y1, x2, y2 = values
+    return x2 > img_w * 1.05 or y2 > img_h * 1.05 or x1 > img_w or y1 > img_h
+
+
+def _scaled_1000_corners_to_bbox(x1: float, y1: float, x2: float, y2: float) -> list[float]:
+    return _clip_bbox(
+        ((x1 + x2) / 2) / 1000.0,
+        ((y1 + y2) / 2) / 1000.0,
+        (x2 - x1) / 1000.0,
+        (y2 - y1) / 1000.0,
+    )
+
+
+def _gemini_1000_corners_to_bbox(y1: float, x1: float, y2: float, x2: float) -> list[float]:
+    return _clip_bbox(
+        ((x1 + x2) / 2) / 1000.0,
+        ((y1 + y2) / 2) / 1000.0,
+        (x2 - x1) / 1000.0,
+        (y2 - y1) / 1000.0,
+    )
 
 
 def _bbox_field_looks_like_corners(bbox: list[float], img_w: int, img_h: int) -> bool:
@@ -574,6 +619,8 @@ def _bbox_field_looks_like_corners(bbox: list[float], img_w: int, img_h: int) ->
     if x2 <= x1 or y2 <= y1:
         return False
     if not _bbox_values_are_normalized(bbox):
+        if _bbox_values_are_thousand_scale(bbox, img_w, img_h):
+            return True
         return x1 < img_w and y1 < img_h and x2 <= img_w * 1.05 and y2 <= img_h * 1.05
 
     _, _, width, height = bbox
