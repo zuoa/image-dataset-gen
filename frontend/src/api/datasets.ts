@@ -6,6 +6,7 @@ import type {
   DatasetSummary,
   PromptPreview,
   TaskConfig,
+  TrainingJob,
 } from "../lib/types";
 
 function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
@@ -144,6 +145,29 @@ export function exportDataset(
     method: "POST",
     token,
     body: JSON.stringify({ export_format: exportFormat, image_format: imageFormat }),
+  });
+}
+
+export function listTrainingJobs(datasetId: string, token: string) {
+  return apiRequest<{ jobs: TrainingJob[] }>(`/datasets/${datasetId}/training-jobs`, { token });
+}
+
+export function createTrainingJob(
+  datasetId: string,
+  token: string,
+  payload: {
+    model: string;
+    epochs: number;
+    image_size: number;
+    batch_size: number;
+    patience: number;
+    device?: string;
+  },
+) {
+  return apiRequest<{ job: TrainingJob; dataset: Dataset }>(`/datasets/${datasetId}/training-jobs`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
   });
 }
 

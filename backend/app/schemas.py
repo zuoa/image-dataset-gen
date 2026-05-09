@@ -133,6 +133,37 @@ class DatasetExportSchema(Schema):
     include_readme = fields.Boolean(load_default=True)
 
 
+class TrainingJobSchema(Schema):
+    model = fields.String(load_default="yolov8n.pt", validate=validate.Length(min=1, max=120))
+    epochs = fields.Integer(load_default=50, validate=validate.Range(min=1, max=500))
+    image_size = fields.Integer(load_default=640, validate=validate.Range(min=64, max=2048))
+    batch_size = fields.Integer(load_default=16, validate=validate.Range(min=1, max=256))
+    patience = fields.Integer(load_default=20, validate=validate.Range(min=0, max=200))
+    device = fields.String(load_default="", allow_none=True, validate=validate.Length(max=80))
+
+
+class TrainingWorkerRegisterSchema(Schema):
+    worker_id = fields.String(load_default="", allow_none=True, validate=validate.Length(max=64))
+    name = fields.String(required=True, validate=validate.Length(min=1, max=120))
+    version = fields.String(load_default="", allow_none=True, validate=validate.Length(max=64))
+    capabilities = fields.Dict(keys=fields.String(), values=fields.Raw(), load_default=dict)
+
+
+class TrainingWorkerHeartbeatSchema(Schema):
+    status = fields.String(load_default="idle", validate=validate.OneOf(["idle", "busy"]))
+    current_job_id = fields.String(load_default="", allow_none=True, validate=validate.Length(max=64))
+
+
+class TrainingJobStatusSchema(Schema):
+    status = fields.String(
+        required=True,
+        validate=validate.OneOf(["preparing", "running", "uploading", "completed", "failed"]),
+    )
+    progress_percent = fields.Integer(load_default=None, allow_none=True, validate=validate.Range(min=0, max=100))
+    metrics = fields.Dict(keys=fields.String(), values=fields.Raw(), load_default=dict)
+    error = fields.String(load_default="", allow_none=True, validate=validate.Length(max=2000))
+
+
 class TaskActionSchema(Schema):
     multiplier = fields.Integer(load_default=5, validate=validate.Range(min=1, max=20))
     augmentation_methods = fields.List(

@@ -12,6 +12,7 @@ from werkzeug.security import generate_password_hash
 from app.api.auth import auth_bp
 from app.api.datasets import datasets_bp
 from app.api.system import system_bp
+from app.api.training import training_bp
 from app.config import Config
 from app.extensions import celery, cors, db, jwt
 from app.models import User
@@ -39,6 +40,7 @@ def create_app(
     app.register_blueprint(auth_bp, url_prefix=f"{api_prefix}/auth")
     app.register_blueprint(system_bp, url_prefix=f"{api_prefix}/system")
     app.register_blueprint(datasets_bp, url_prefix=f"{api_prefix}/datasets")
+    app.register_blueprint(training_bp, url_prefix=api_prefix)
 
     @app.get(f"{api_prefix}/health")
     def healthcheck():

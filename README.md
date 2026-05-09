@@ -14,6 +14,7 @@
 backend/    Flask REST API
 frontend/   React + Vite UI
 annotator/  Flask annotation microservice
+trainer/    YOLOv8 training worker service
 ```
 
 ## 本地开发
@@ -84,6 +85,19 @@ JWT 说明：
 - `POST /api/v1/datasets/:id/annotate`
 - `POST /api/v1/datasets/:id/export`
 - `GET /api/v1/datasets/:id/exports/:version/download`
+- `POST /api/v1/datasets/:id/training-jobs`
+- `GET /api/v1/datasets/:id/training-jobs`
+- `GET /api/v1/datasets/:id/training-jobs/:jobId`
+- `GET /api/v1/datasets/:id/training-jobs/:jobId/artifacts/:artifactId/download`
+
+训练 worker API 使用 `X-Training-Worker-Token: <TRAINING_WORKER_TOKEN>`：
+
+- `POST /api/v1/training/workers/register`
+- `POST /api/v1/training/workers/:workerId/heartbeat`
+- `POST /api/v1/training/workers/:workerId/poll`
+- `GET /api/v1/training/jobs/:jobId/dataset.zip`
+- `PATCH /api/v1/training/jobs/:jobId/status`
+- `POST /api/v1/training/jobs/:jobId/artifacts`
 
 Gemini 生成说明：
 
@@ -106,7 +120,31 @@ Jimeng 生成说明：
 - 数据集创建页支持先定义长期信息，再在详情页内管理批次
 - 生成批次页支持实时 Prompt 预览
 - 数据集详情页统一串联导入、增强、标注、导出与批次追踪
+- 数据集详情页支持创建 YOLOv8 检测训练作业、查看进度、指标和下载模型产物
 - 下载动作通过带 token 的 blob 流方式完成，适配跨端口部署
+
+## 训练 worker
+
+第一版训练链路面向 YOLOv8 detection：
+
+1. 前端在数据集详情页创建训练作业。
+2. 后端生成 YOLO 数据集 ZIP，并把训练作业置为 `queued`。
+3. GPU 服务器上的 `trainer` 服务用共享 `TRAINING_WORKER_TOKEN` 注册到后端。
+4. worker 轮询任务，下载 ZIP，执行 Ultralytics 训练。
+5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
+
+本地启动训练 worker：
+
+```bash
+TRAINING_WORKER_TOKEN=change-me-training-worker-token docker compose --profile training up --build
+```
+
+跨服务器部署时，在 GPU 服务器构建并运行 `trainer/` 镜像，配置：
+
+- `TRAINER_BACKEND_URL=http://<backend-host>/api/v1`
+- `TRAINER_WORKER_TOKEN=<与后端 TRAINING_WORKER_TOKEN 一致>`
+- `TRAINER_WORKER_ID=<稳定 worker id>`
+- `TRAINER_WORK_ROOT=/app/work`
 
 ## 已知边界
 

@@ -175,6 +175,42 @@ export type DatasetExport = {
   createdAt: string;
 };
 
+export type TrainingArtifact = {
+  id: string;
+  type: string;
+  filename: string;
+  sizeBytes: number;
+  downloadUrl: string;
+  createdAt?: string | null;
+};
+
+export type TrainingJob = {
+  id: string;
+  datasetId: string;
+  exportId: string;
+  workerId?: string | null;
+  status: "queued" | "assigned" | "preparing" | "running" | "uploading" | "completed" | "failed" | string;
+  progressPercent: number;
+  config: {
+    framework: "yolov8" | string;
+    task: "detect" | string;
+    model: string;
+    epochs: number;
+    imageSize: number;
+    batchSize: number;
+    patience: number;
+    device?: string;
+  };
+  metrics: Record<string, number | string | null>;
+  error: string;
+  artifacts: TrainingArtifact[];
+  export?: DatasetExport | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
 export type Dataset = {
   id: string;
   name: string;

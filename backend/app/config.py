@@ -68,6 +68,8 @@ class Config:
     OPENAI_COMPAT_BASE_URL: str = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")
     OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "deepseek-chat")
     IMAGE_BASE_URL: str = os.getenv("IMAGE_BASE_URL", "")
+    TRAINING_WORKER_TOKEN: str = os.getenv("TRAINING_WORKER_TOKEN", "")
+    TRAINING_DEFAULT_MODEL: str = os.getenv("TRAINING_DEFAULT_MODEL", "yolov8n.pt")
     CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
     CELERY_TASK_TRACK_STARTED: bool = True

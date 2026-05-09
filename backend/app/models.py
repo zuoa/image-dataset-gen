@@ -98,6 +98,12 @@ class Dataset(TimestampMixin, db.Model):
         cascade="all, delete-orphan",
         order_by="DatasetExport.version.desc()",
     )
+    training_jobs = db.relationship(
+        "TrainingJob",
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="TrainingJob.created_at.desc()",
+    )
 
 
 class DatasetTask(TimestampMixin, db.Model):
@@ -169,3 +175,57 @@ class DatasetExport(TimestampMixin, db.Model):
     download_url = db.Column(db.String(255), nullable=False)
 
     dataset = db.relationship("Dataset", back_populates="exports")
+
+
+class TrainingWorker(TimestampMixin, db.Model):
+    __tablename__ = "training_workers"
+
+    id = db.Column(db.String(64), primary_key=True, default=generate_uuid)
+    name = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="idle", index=True)
+    capabilities_json = db.Column(db.JSON, nullable=False, default=dict)
+    version = db.Column(db.String(64), nullable=False, default="")
+    last_heartbeat_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    current_job_id = db.Column(db.String(36), nullable=True, index=True)
+
+    jobs = db.relationship("TrainingJob", back_populates="worker")
+
+
+class TrainingJob(TimestampMixin, db.Model):
+    __tablename__ = "training_jobs"
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
+    export_id = db.Column(db.String(36), db.ForeignKey("dataset_exports.id"), nullable=False, index=True)
+    worker_id = db.Column(db.String(64), db.ForeignKey("training_workers.id"), nullable=True, index=True)
+    status = db.Column(db.String(32), nullable=False, default="queued", index=True)
+    progress_percent = db.Column(db.Integer, nullable=False, default=0)
+    config_json = db.Column(db.JSON, nullable=False, default=dict)
+    metrics_json = db.Column(db.JSON, nullable=False, default=dict)
+    error_message = db.Column(db.Text, nullable=False, default="")
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    dataset = db.relationship("Dataset", back_populates="training_jobs")
+    export = db.relationship("DatasetExport")
+    worker = db.relationship("TrainingWorker", back_populates="jobs")
+    artifacts = db.relationship(
+        "TrainingArtifact",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="TrainingArtifact.created_at.asc()",
+    )
+
+
+class TrainingArtifact(TimestampMixin, db.Model):
+    __tablename__ = "training_artifacts"
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    job_id = db.Column(db.String(36), db.ForeignKey("training_jobs.id"), nullable=False, index=True)
+    artifact_type = db.Column(db.String(32), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    storage_path = db.Column(db.String(512), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+
+    job = db.relationship("TrainingJob", back_populates="artifacts")

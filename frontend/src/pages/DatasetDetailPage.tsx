@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Download, FlipHorizontal2, Layers, ListChecks, Loader, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FlipHorizontal2, Layers, ListChecks, Loader, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
 import {
   annotateDataset,
   augmentDataset,
+  createTrainingJob,
   exportDataset,
   getDataset,
   importDatasetImagesArchive,
+  listTrainingJobs,
   retryDatasetTask,
   updateDatasetImageAnnotations,
   updateDatasetSelection,
@@ -18,7 +20,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SectionCard } from "../components/ui/SectionCard";
-import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage } from "../lib/types";
+import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage, TrainingJob } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
@@ -52,6 +54,7 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
   { value: "voc", label: "VOC" },
   { value: "csv", label: "CSV" },
 ];
+const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
 type ImageViewport = {
@@ -127,19 +130,46 @@ function boxFromCorners(startX: number, startY: number, endX: number, endY: numb
   return [xCenter, yCenter, width, height];
 }
 
+function formatMetric(value: unknown) {
+  if (typeof value !== "number") return "—";
+  return value <= 1 ? value.toFixed(3) : String(value);
+}
+
+function trainingStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "排队中",
+    assigned: "已分配",
+    preparing: "准备数据",
+    running: "训练中",
+    uploading: "上传产物",
+    completed: "已完成",
+    failed: "失败",
+  };
+  return labels[status] ?? status;
+}
+
 export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
   const [dataset, setDataset] = useState<Dataset | null>(null);
+  const [trainingJobs, setTrainingJobs] = useState<TrainingJob[]>([]);
   const datasetRef = useRef<Dataset | null>(null);
   datasetRef.current = dataset;
+  const trainingJobsRef = useRef<TrainingJob[]>([]);
+  trainingJobsRef.current = trainingJobs;
   const [isAugmentationModalOpen, setIsAugmentationModalOpen] = useState(false);
   const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isCreatingAugmentationTask, setIsCreatingAugmentationTask] = useState(false);
   const [isSubmittingAnnotation, setIsSubmittingAnnotation] = useState(false);
   const [isCreatingExport, setIsCreatingExport] = useState(false);
+  const [isCreatingTrainingJob, setIsCreatingTrainingJob] = useState(false);
   const [multiplier, setMultiplier] = useState(3);
+  const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
+  const [trainingEpochs, setTrainingEpochs] = useState(50);
+  const [trainingImageSize, setTrainingImageSize] = useState(640);
+  const [trainingBatchSize, setTrainingBatchSize] = useState(16);
+  const [trainingPatience, setTrainingPatience] = useState(20);
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -171,6 +201,8 @@ export function DatasetDetailPage() {
   const selectedOriginalCount = images.filter((image) => image.selected && image.status !== "augmented").length;
   const latestExport = dataset?.exports[0];
   const annotationStatus = String(dataset?.annotation?.status ?? "idle");
+  const latestTrainingJob = trainingJobs[0];
+  const trainingRunning = trainingJobs.some((job) => activeTrainingStatuses.has(job.status));
 
   useEffect(() => {
     if (!token || !datasetId) return;
@@ -178,9 +210,13 @@ export function DatasetDetailPage() {
     let disposed = false;
     const loadDataset = async () => {
       try {
-        const response = await getDataset(datasetId, token);
+        const [response, trainingResponse] = await Promise.all([
+          getDataset(datasetId, token),
+          listTrainingJobs(datasetId, token),
+        ]);
         if (!disposed) {
           setDataset(response.dataset);
+          setTrainingJobs(trainingResponse.jobs);
           setActionError(null);
         }
       } catch (error) {
@@ -195,7 +231,8 @@ export function DatasetDetailPage() {
       const hasPendingExports = datasetRef.current?.exports.some(
         (item) => item.status === "pending" || item.status === "running"
       );
-      if (runningTask || annotationRunning || hasPendingExports) {
+      const hasActiveTraining = trainingJobsRef.current.some((job) => activeTrainingStatuses.has(job.status));
+      if (runningTask || annotationRunning || hasPendingExports || hasActiveTraining) {
         void loadDataset();
       }
     }, 2000);
@@ -204,7 +241,7 @@ export function DatasetDetailPage() {
       disposed = true;
       window.clearInterval(interval);
     };
-  }, [annotationRunning, datasetId, runningTask, token]);
+  }, [annotationRunning, datasetId, runningTask, token, trainingRunning]);
 
   useEffect(() => {
     setDraftDetections(previewImage?.detections ?? []);
@@ -394,6 +431,27 @@ export function DatasetDetailPage() {
       setActionError((error as Error).message);
     } finally {
       setIsCreatingExport(false);
+    }
+  }
+
+  async function startTrainingJob() {
+    if (!token || !datasetId) return;
+    setIsCreatingTrainingJob(true);
+    try {
+      const response = await createTrainingJob(datasetId, token, {
+        model: trainingModel.trim() || "yolov8n.pt",
+        epochs: trainingEpochs,
+        image_size: trainingImageSize,
+        batch_size: trainingBatchSize,
+        patience: trainingPatience,
+      });
+      setDataset(response.dataset);
+      setTrainingJobs((current) => [response.job, ...current.filter((job) => job.id !== response.job.id)]);
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setIsCreatingTrainingJob(false);
     }
   }
 
@@ -666,6 +724,122 @@ export function DatasetDetailPage() {
           <div className="text-sm text-red-700 dark:text-red-100">{actionError}</div>
         </SectionCard>
       ) : null}
+
+      <SectionCard>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
+                  <Cpu className="h-4 w-4" />
+                  YOLOv8 Training
+                </div>
+                <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">训练 worker</h3>
+              </div>
+              <Badge>{trainingRunning ? "运行中" : latestTrainingJob ? trainingStatusLabel(latestTrainingJob.status) : "待训练"}</Badge>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <label className="space-y-2 lg:col-span-2">
+                <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">模型</span>
+                <Input value={trainingModel} onChange={(event) => setTrainingModel(event.target.value)} />
+              </label>
+              <label className="space-y-2">
+                <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Epochs</span>
+                <Input type="number" min={1} max={500} value={trainingEpochs} onChange={(event) => setTrainingEpochs(Number(event.target.value))} />
+              </label>
+              <label className="space-y-2">
+                <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Image</span>
+                <Input type="number" min={64} max={2048} step={32} value={trainingImageSize} onChange={(event) => setTrainingImageSize(Number(event.target.value))} />
+              </label>
+              <label className="space-y-2">
+                <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Batch</span>
+                <Input type="number" min={1} max={256} value={trainingBatchSize} onChange={(event) => setTrainingBatchSize(Number(event.target.value))} />
+              </label>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-neutral-500">
+                <span>Patience</span>
+                <Input
+                  className="w-24"
+                  type="number"
+                  min={0}
+                  max={200}
+                  value={trainingPatience}
+                  onChange={(event) => setTrainingPatience(Number(event.target.value))}
+                />
+              </label>
+              <Button onClick={() => void startTrainingJob()} disabled={isCreatingTrainingJob || dataset.selectedCount === 0 || trainingRunning}>
+                <Play className="mr-2 h-4 w-4" />
+                {isCreatingTrainingJob ? "创建中..." : "开始训练"}
+              </Button>
+              {dataset.selectedCount === 0 ? <span className="text-sm text-neutral-500">请选择样本后再训练。</span> : null}
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">最新训练</div>
+                <div className="mt-2 text-lg text-neutral-900 dark:text-white">
+                  {latestTrainingJob ? trainingStatusLabel(latestTrainingJob.status) : "暂无训练作业"}
+                </div>
+              </div>
+              {latestTrainingJob ? <Badge>{latestTrainingJob.progressPercent}%</Badge> : null}
+            </div>
+
+            {latestTrainingJob ? (
+              <>
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
+                  <div className="h-full rounded-full bg-neutral-900 dark:bg-white" style={{ width: `${latestTrainingJob.progressPercent}%` }} />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-neutral-500">mAP50</div>
+                    <div className="mt-1 text-neutral-900 dark:text-white">{formatMetric(latestTrainingJob.metrics.mAP50)}</div>
+                  </div>
+                  <div>
+                    <div className="text-neutral-500">mAP50-95</div>
+                    <div className="mt-1 text-neutral-900 dark:text-white">{formatMetric(latestTrainingJob.metrics.mAP50_95)}</div>
+                  </div>
+                  <div>
+                    <div className="text-neutral-500">Precision</div>
+                    <div className="mt-1 text-neutral-900 dark:text-white">{formatMetric(latestTrainingJob.metrics.precision)}</div>
+                  </div>
+                  <div>
+                    <div className="text-neutral-500">Recall</div>
+                    <div className="mt-1 text-neutral-900 dark:text-white">{formatMetric(latestTrainingJob.metrics.recall)}</div>
+                  </div>
+                </div>
+                {latestTrainingJob.error ? <div className="mt-4 text-sm text-red-600 dark:text-red-300">{latestTrainingJob.error}</div> : null}
+                {latestTrainingJob.artifacts.length > 0 ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {latestTrainingJob.artifacts.map((artifact) => (
+                      <Button
+                        key={artifact.id}
+                        variant="secondary"
+                        className="max-w-full"
+                        onClick={() => {
+                          if (!token) return;
+                          void downloadWithToken(artifact.downloadUrl, token, artifact.filename);
+                        }}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        <span className="truncate">{artifact.filename}</span>
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="mt-4 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+                训练作业会先生成 YOLO 数据包，再由已注册的训练 worker 拉取执行。
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
 
       {/* Batch Tasks Drawer */}
       {isTasksDrawerOpen ? (
