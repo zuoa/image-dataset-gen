@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 from typing import Any
+import zipfile
 
 from flask import current_app
 
@@ -62,7 +63,7 @@ def import_roboflow_dataset(
         prepared_images, categories, skipped_files = _prepare_roboflow_export(export_root, dataset.categories)
 
         if not prepared_images:
-            raise RoboflowImportError("Roboflow 数据集中没有可导入的图片文件。")
+            raise RoboflowImportError(_empty_export_message(export_root, skipped_files))
 
         return _persist_prepared_images(
             dataset=dataset,
@@ -102,7 +103,7 @@ def _download_roboflow_version(
     export_root = Path(location) if location else target_dir
     if not export_root.exists():
         raise RoboflowImportError("Roboflow 下载完成，但未找到导出目录。")
-    return export_root
+    return _resolve_download_root(export_root)
 
 
 def _make_roboflow_client(api_key: str):
@@ -141,6 +142,36 @@ def _prepare_roboflow_export(
         )
 
     return prepared_images, categories, skipped_files
+
+
+def _resolve_download_root(export_root: Path) -> Path:
+    if export_root.is_file():
+        if export_root.suffix.lower() != ".zip":
+            return export_root
+        extract_root = export_root.parent / f"{export_root.stem}-extracted"
+        _extract_zip_safely(export_root, extract_root)
+        return extract_root
+
+    if (export_root / "data.yaml").exists() or _find_image_paths(export_root):
+        return export_root
+
+    zip_candidates = sorted(path for path in export_root.rglob("*.zip") if path.is_file())
+    if not zip_candidates:
+        return export_root
+
+    extract_root = export_root / "__extracted__"
+    _extract_zip_safely(zip_candidates[0], extract_root)
+    return extract_root
+
+
+def _extract_zip_safely(archive_path: Path, extract_root: Path) -> None:
+    extract_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            target = (extract_root / member.filename).resolve()
+            if not target.is_relative_to(extract_root.resolve()):
+                raise RoboflowImportError("Roboflow 下载包包含不安全的文件路径。")
+        archive.extractall(extract_root)
 
 
 def _persist_prepared_images(
@@ -263,22 +294,42 @@ def _find_dataset_root(export_root: Path) -> Path:
 
 
 def _find_image_paths(dataset_root: Path) -> list[Path]:
-    image_roots = [path for path in dataset_root.rglob("images") if path.is_dir()]
-    if image_roots:
-        paths = [
-            image_path
-            for image_root in image_roots
-            for image_path in image_root.rglob("*")
-            if image_path.is_file() and image_path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
-        ]
-    else:
-        paths = [
-            path
-            for path in dataset_root.rglob("*")
-            if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
-        ]
-
+    paths = [
+        path
+        for path in dataset_root.rglob("*")
+        if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+    ]
     return sorted(paths, key=lambda path: path.relative_to(dataset_root).as_posix())
+
+
+def _empty_export_message(export_root: Path, skipped_files: list[str]) -> str:
+    suffix_counts: dict[str, int] = {}
+    sample_files: list[str] = []
+    if export_root.exists():
+        for path in export_root.rglob("*") if export_root.is_dir() else [export_root]:
+            if not path.is_file():
+                continue
+            suffix = path.suffix.lower() or "<no extension>"
+            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+            if len(sample_files) < 8:
+                try:
+                    sample_files.append(path.relative_to(export_root).as_posix())
+                except ValueError:
+                    sample_files.append(path.name)
+
+    details: list[str] = []
+    if suffix_counts:
+        details.append(
+            "扫描到的文件类型：" + ", ".join(f"{suffix}={count}" for suffix, count in sorted(suffix_counts.items()))
+        )
+    if sample_files:
+        details.append("示例文件：" + ", ".join(sample_files))
+    if skipped_files:
+        details.append("图片解码失败：" + ", ".join(skipped_files[:5]))
+
+    if not details:
+        return "Roboflow 数据集中没有可导入的图片文件。请确认该版本已生成并包含 train/valid/test 图片。"
+    return "Roboflow 数据集中没有可导入的图片文件。" + " ".join(details)
 
 
 def _load_yolo_categories(dataset_root: Path) -> list[str]:

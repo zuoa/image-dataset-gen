@@ -264,6 +264,51 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
     assert stored["detections"][0]["category"] == "umbrella"
 
 
+def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        ROBOFLOW_API_KEY = "roboflow-test-key"
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-roboflow-zip")
+    dataset_id = _create_dataset(client, headers)
+
+    class FakeRoboflowVersion:
+        def download(self, model_format: str, location: str):
+            archive_path = Path(location) / "roboflow-export.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("export/data.yaml", "names: ['pedestrian', 'umbrella']\n")
+                archive.writestr("export/valid/images/sample-a.png", _png_bytes())
+                archive.writestr("export/valid/labels/sample-a.txt", "0 0.500000 0.500000 0.400000 0.400000\n")
+            return SimpleNamespace(location=str(archive_path))
+
+    class FakeRoboflowProject:
+        def version(self, version: int):
+            return FakeRoboflowVersion()
+
+    class FakeRoboflowWorkspace:
+        def project(self, project: str):
+            return FakeRoboflowProject()
+
+    class FakeRoboflowClient:
+        def workspace(self, workspace: str):
+            return FakeRoboflowWorkspace()
+
+    with patch("app.services.roboflow_import_service._make_roboflow_client", return_value=FakeRoboflowClient()):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
+            headers=headers,
+            json={"workspace": "demo-workspace", "project": "street-project", "version": 2},
+        )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["summary"]["importedCount"] == 1
+    assert payload["summary"]["annotatedCount"] == 1
+    assert payload["dataset"]["images"][0]["detections"][0]["category"] == "pedestrian"
+
+
 def test_roboflow_import_requires_configured_api_key(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
