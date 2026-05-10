@@ -9,6 +9,7 @@ import {
   createTrainingJob,
   exportDataset,
   getDataset,
+  importDatasetFromRoboflow,
   importDatasetImagesArchive,
   listTrainingJobs,
   retryDatasetTask,
@@ -160,6 +161,7 @@ export function DatasetDetailPage() {
   const [isAugmentationModalOpen, setIsAugmentationModalOpen] = useState(false);
   const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isCreatingAugmentationTask, setIsCreatingAugmentationTask] = useState(false);
   const [isSubmittingAnnotation, setIsSubmittingAnnotation] = useState(false);
   const [isCreatingExport, setIsCreatingExport] = useState(false);
@@ -178,6 +180,10 @@ export function DatasetDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
+  const [roboflowProject, setRoboflowProject] = useState("");
+  const [roboflowVersion, setRoboflowVersion] = useState(1);
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const [draftDetections, setDraftDetections] = useState<DatasetImage["detections"]>([]);
   const [isSavingAnnotations, setIsSavingAnnotations] = useState(false);
@@ -324,17 +330,20 @@ export function DatasetDetailPage() {
   }, [hasAnnotationChanges, previewImage]);
 
   useEffect(() => {
-    if (!isAugmentationModalOpen && !isAnnotationModalOpen && !isExportModalOpen) return;
+    if (!isAugmentationModalOpen && !isAnnotationModalOpen && !isExportModalOpen && !isImportModalOpen) return;
     const handleKeydown = (event: KeyboardEvent) => {
       if (
         event.key === "Escape" &&
         !isCreatingAugmentationTask &&
         !isSubmittingAnnotation &&
-        !isCreatingExport
+        !isCreatingExport &&
+        !isImporting &&
+        !isImportingRoboflow
       ) {
         setIsAugmentationModalOpen(false);
         setIsAnnotationModalOpen(false);
         setIsExportModalOpen(false);
+        setIsImportModalOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeydown);
@@ -345,6 +354,9 @@ export function DatasetDetailPage() {
     isCreatingAugmentationTask,
     isCreatingExport,
     isExportModalOpen,
+    isImportModalOpen,
+    isImporting,
+    isImportingRoboflow,
     isSubmittingAnnotation,
   ]);
 
@@ -375,18 +387,28 @@ export function DatasetDetailPage() {
     setIsAugmentationModalOpen(true);
     setIsAnnotationModalOpen(false);
     setIsExportModalOpen(false);
+    setIsImportModalOpen(false);
   }
 
   function openAnnotationModal() {
     setIsAnnotationModalOpen(true);
     setIsAugmentationModalOpen(false);
     setIsExportModalOpen(false);
+    setIsImportModalOpen(false);
   }
 
   function openExportModal() {
     setIsExportModalOpen(true);
     setIsAugmentationModalOpen(false);
     setIsAnnotationModalOpen(false);
+    setIsImportModalOpen(false);
+  }
+
+  function openImportModal() {
+    setIsImportModalOpen(true);
+    setIsAugmentationModalOpen(false);
+    setIsAnnotationModalOpen(false);
+    setIsExportModalOpen(false);
   }
 
   async function createAugmentationTask() {
@@ -483,11 +505,46 @@ export function DatasetDetailPage() {
         `已导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
           (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""),
       );
+      setIsImportModalOpen(false);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
       event.target.value = "";
       setIsImporting(false);
+    }
+  }
+
+  async function handleRoboflowImport() {
+    if (!token || !datasetId) return;
+    const workspace = roboflowWorkspace.trim();
+    const project = roboflowProject.trim();
+    if (!workspace || !project || !Number.isFinite(roboflowVersion) || roboflowVersion < 1) {
+      setActionError("请填写 Roboflow workspace、project 和有效的版本号。");
+      return;
+    }
+
+    setIsImportingRoboflow(true);
+    setImportSummary(null);
+    try {
+      const response = await importDatasetFromRoboflow(datasetId, token, {
+        workspace,
+        project,
+        version: Math.floor(roboflowVersion),
+        format: "yolov8",
+      });
+      setDataset(response.dataset);
+      setActionError(null);
+      setImportSummary(
+        `已从 Roboflow 导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
+          `，带标注 ${String(response.summary.annotatedCount ?? 0)} 张` +
+          (Number(response.summary.emptyAnnotationCount ?? 0) > 0 ? `，空标注 ${String(response.summary.emptyAnnotationCount ?? 0)} 张` : "") +
+          (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""),
+      );
+      setIsImportModalOpen(false);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setIsImportingRoboflow(false);
     }
   }
 
@@ -676,7 +733,7 @@ export function DatasetDetailPage() {
                 <Download className="mr-2 h-4 w-4" />
                 导出
               </Button>
-              <Button variant="secondary" onClick={() => archiveInputRef.current?.click()} disabled={isImporting}>
+              <Button variant="secondary" onClick={openImportModal} disabled={isImporting || isImportingRoboflow}>
                 <Upload className="mr-2 h-4 w-4" />
                 导入
               </Button>
@@ -1025,6 +1082,113 @@ export function DatasetDetailPage() {
             ))}
 	          </div>
 	        </SectionCard>
+
+      {isImportModalOpen ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm"
+          onClick={() => {
+            if (!isImporting && !isImportingRoboflow) {
+              setIsImportModalOpen(false);
+            }
+          }}
+        >
+          <SectionCard
+            className="relative z-50 w-full max-w-3xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
+                  <Upload className="h-4 w-4" />
+                  Import
+                </div>
+                <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">导入数据集</h3>
+                <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+                  从本地 ZIP 导入图片，或从 Roboflow 下载 YOLOv8 数据集并同步标注框。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                disabled={isImporting || isImportingRoboflow}
+                className="rounded-full p-1 hover:bg-neutral-100 disabled:opacity-50 dark:hover:bg-white/10"
+              >
+                <X className="h-5 w-5 text-neutral-500" />
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-sm font-medium text-neutral-900 dark:text-white">本地 ZIP</div>
+                <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+                  兼容现有导入方式，只导入压缩包中的图片。
+                </p>
+                <Button
+                  variant="secondary"
+                  className="mt-4 w-full justify-center"
+                  onClick={() => archiveInputRef.current?.click()}
+                  disabled={isImporting || isImportingRoboflow}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {isImporting ? "导入中..." : "选择 ZIP"}
+                </Button>
+              </div>
+
+              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-sm font-medium text-neutral-900 dark:text-white">Roboflow</div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Workspace</span>
+                    <Input
+                      value={roboflowWorkspace}
+                      onChange={(event) => setRoboflowWorkspace(event.target.value)}
+                      placeholder="workspace-id"
+                      disabled={isImportingRoboflow}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Project</span>
+                    <Input
+                      value={roboflowProject}
+                      onChange={(event) => setRoboflowProject(event.target.value)}
+                      placeholder="project-id"
+                      disabled={isImportingRoboflow}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Version</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={roboflowVersion}
+                      onChange={(event) => setRoboflowVersion(Number(event.target.value))}
+                      disabled={isImportingRoboflow}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Format</span>
+                    <Input value="YOLOv8" disabled />
+                  </label>
+                </div>
+                <Button
+                  className="mt-4 w-full justify-center"
+                  onClick={() => void handleRoboflowImport()}
+                  disabled={
+                    isImporting ||
+                    isImportingRoboflow ||
+                    !roboflowWorkspace.trim() ||
+                    !roboflowProject.trim() ||
+                    roboflowVersion < 1
+                  }
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  {isImportingRoboflow ? "下载导入中..." : "从 Roboflow 导入"}
+                </Button>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
 	
 	      {isAugmentationModalOpen ? (
 	        <div

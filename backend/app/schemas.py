@@ -133,6 +133,13 @@ class DatasetExportSchema(Schema):
     include_readme = fields.Boolean(load_default=True)
 
 
+class RoboflowImportSchema(Schema):
+    workspace = fields.String(required=True, validate=validate.Length(min=1, max=120))
+    project = fields.String(required=True, validate=validate.Length(min=1, max=120))
+    version = fields.Integer(required=True, validate=validate.Range(min=1))
+    format = fields.String(load_default="yolov8", validate=validate.OneOf(["yolov8"]))
+
+
 class TrainingJobSchema(Schema):
     model = fields.String(load_default="yolov8n.pt", validate=validate.Length(min=1, max=120))
     epochs = fields.Integer(load_default=50, validate=validate.Range(min=1, max=500))

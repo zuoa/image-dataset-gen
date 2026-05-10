@@ -113,6 +113,26 @@ export function importDatasetImagesArchive(datasetId: string, token: string, arc
   );
 }
 
+export function importDatasetFromRoboflow(
+  datasetId: string,
+  token: string,
+  payload: {
+    workspace: string;
+    project: string;
+    version: number;
+    format?: "yolov8";
+  },
+) {
+  return apiRequest<{ summary: Record<string, unknown>; dataset: Dataset }>(
+    `/datasets/${datasetId}/tasks/import/roboflow`,
+    {
+      method: "POST",
+      token,
+      body: JSON.stringify({ ...payload, format: payload.format ?? "yolov8" }),
+    },
+  );
+}
+
 export function augmentDataset(
   datasetId: string,
   token: string,

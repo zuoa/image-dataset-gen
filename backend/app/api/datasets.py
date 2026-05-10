@@ -17,6 +17,7 @@ from app.schemas import (
     DatasetSelectionSchema,
     GenerationTaskSchema,
     PromptPreviewSchema,
+    RoboflowImportSchema,
     SubjectAssistSchema,
     TaskActionSchema,
 )
@@ -42,6 +43,7 @@ from app.services.image_storage import (
 )
 from app.services.model_profile_service import _resolved_profile_api_key
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
+from app.services.roboflow_import_service import RoboflowImportError, import_roboflow_dataset
 from app.services.subject_assist_service import suggest_subject_fields
 from app.utils.crypto import encrypt_secret
 
@@ -380,6 +382,41 @@ def import_dataset_images(dataset_id: str):
                 "skippedCount": len(skipped_files),
                 "skippedFiles": skipped_files[:10],
             },
+            "task": build_dataset_task_payload(task),
+            "dataset": build_dataset_payload(dataset),
+        }
+    )
+
+
+@datasets_bp.post("/<dataset_id>/tasks/import/roboflow")
+@jwt_required()
+def import_roboflow_dataset_images(dataset_id: str):
+    user_id = get_jwt_identity()
+    payload = RoboflowImportSchema().load(request.get_json() or {})
+    dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    api_key = str(current_app.config.get("ROBOFLOW_API_KEY") or "").strip()
+    if not api_key:
+        return jsonify({"message": "后端未配置 ROBOFLOW_API_KEY，无法从 Roboflow 导入。"}), 400
+
+    try:
+        summary = import_roboflow_dataset(
+            dataset=dataset,
+            user_id=user_id,
+            api_key=api_key,
+            workspace=payload["workspace"].strip(),
+            project=payload["project"].strip(),
+            version=payload["version"],
+            model_format=payload["format"],
+        )
+    except RoboflowImportError as exc:
+        db.session.rollback()
+        return jsonify({"message": str(exc)}), 400
+
+    dataset = _dataset_for_user(dataset.id, user_id)
+    task = dataset.tasks[0] if dataset.tasks else None
+    return jsonify(
+        {
+            "summary": summary,
             "task": build_dataset_task_payload(task),
             "dataset": build_dataset_payload(dataset),
         }

@@ -2,6 +2,7 @@ from io import BytesIO
 from pathlib import Path
 import zipfile
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -9,6 +10,7 @@ from app import create_app
 from app.config import TestConfig
 from app.extensions import db
 from app.models import DatasetImage, DatasetTask
+from app.services.annotation_storage import load_annotation_result
 from app.services.image_storage import save_generated_image
 
 
@@ -183,6 +185,103 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert image_names
     exported_image = Image.open(BytesIO(archive.read(image_names[0])))
     assert exported_image.mode == "RGBA"
+
+
+def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        ROBOFLOW_API_KEY = "roboflow-test-key"
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-roboflow-import")
+    dataset_id = _create_dataset(client, headers)
+
+    class FakeRoboflowVersion:
+        def download(self, model_format: str, location: str):
+            assert model_format == "yolov8"
+            root = Path(location) / "workspace-project-1"
+            images_dir = root / "train" / "images"
+            labels_dir = root / "train" / "labels"
+            images_dir.mkdir(parents=True)
+            labels_dir.mkdir(parents=True)
+            (root / "data.yaml").write_text("names:\n- pedestrian\n- umbrella\n", encoding="utf-8")
+            (images_dir / "sample-a.png").write_bytes(_png_bytes())
+            (labels_dir / "sample-a.txt").write_text("1 0.500000 0.600000 0.250000 0.300000\n", encoding="utf-8")
+            (images_dir / "sample-b.png").write_bytes(_png_bytes((20, 40, 60)))
+            return SimpleNamespace(location=str(root))
+
+    class FakeRoboflowProject:
+        def version(self, version: int):
+            assert version == 1
+            return FakeRoboflowVersion()
+
+    class FakeRoboflowWorkspace:
+        def project(self, project: str):
+            assert project == "street-project"
+            return FakeRoboflowProject()
+
+    class FakeRoboflowClient:
+        def workspace(self, workspace: str):
+            assert workspace == "demo-workspace"
+            return FakeRoboflowWorkspace()
+
+    with patch("app.services.roboflow_import_service._make_roboflow_client", return_value=FakeRoboflowClient()):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
+            headers=headers,
+            json={
+                "workspace": "demo-workspace",
+                "project": "street-project",
+                "version": 1,
+                "format": "yolov8",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["summary"]["importedCount"] == 2
+    assert payload["summary"]["annotatedCount"] == 1
+    assert payload["summary"]["emptyAnnotationCount"] == 1
+    assert payload["task"]["taskType"] == "import"
+    assert payload["task"]["config"]["source"] == "roboflow"
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 2
+    assert dataset["annotation"]["provider"] == "roboflow"
+    assert {image["sourceType"] for image in dataset["images"]} == {"roboflow"}
+
+    annotated_image = next(image for image in dataset["images"] if image["annotationStatus"] == "annotated")
+    assert annotated_image["detections"] == [
+        {
+            "category": "umbrella",
+            "confidence": 1.0,
+            "bbox": [0.5, 0.6, 0.25, 0.3],
+        }
+    ]
+
+    stored = load_annotation_result(str(tmp_path), dataset_id, annotated_image["id"])
+    assert stored is not None
+    assert stored["detections"][0]["category"] == "umbrella"
+
+
+def test_roboflow_import_requires_configured_api_key(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        ROBOFLOW_API_KEY = ""
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-roboflow-missing-key")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
+        headers=headers,
+        json={"workspace": "demo", "project": "project", "version": 1},
+    )
+
+    assert response.status_code == 400
+    assert "ROBOFLOW_API_KEY" in response.get_json()["message"]
 
 
 def test_retry_failed_augmentation_task_resets_augmentation_status(tmp_path: Path):

@@ -67,6 +67,7 @@ class Config:
     OPENAI_COMPAT_API_KEY: str = os.getenv("OPENAI_COMPAT_API_KEY", "")
     OPENAI_COMPAT_BASE_URL: str = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")
     OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "deepseek-chat")
+    ROBOFLOW_API_KEY: str = os.getenv("ROBOFLOW_API_KEY", "")
     IMAGE_BASE_URL: str = os.getenv("IMAGE_BASE_URL", "")
     TRAINING_WORKER_TOKEN: str = os.getenv("TRAINING_WORKER_TOKEN", "")
     TRAINING_DEFAULT_MODEL: str = os.getenv("TRAINING_DEFAULT_MODEL", "yolov8n.pt")
