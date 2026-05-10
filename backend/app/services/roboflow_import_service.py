@@ -89,11 +89,12 @@ def _download_roboflow_version(
 ) -> Path:
     try:
         rf = _make_roboflow_client(api_key)
+        download_dir = target_dir / "download"
         downloaded = (
             rf.workspace(workspace)
             .project(project)
             .version(version)
-            .download(model_format=model_format, location=str(target_dir))
+            .download(model_format=model_format, location=str(download_dir), overwrite=True)
         )
     except Exception as exc:
         current_app.logger.exception("Roboflow dataset download failed")

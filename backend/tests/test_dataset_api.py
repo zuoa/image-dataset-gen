@@ -198,8 +198,10 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
     dataset_id = _create_dataset(client, headers)
 
     class FakeRoboflowVersion:
-        def download(self, model_format: str, location: str):
+        def download(self, model_format: str, location: str, overwrite: bool = False):
             assert model_format == "yolov8"
+            assert overwrite is True
+            assert not Path(location).exists()
             root = Path(location) / "workspace-project-1"
             images_dir = root / "train" / "images"
             labels_dir = root / "train" / "labels"
@@ -275,8 +277,11 @@ def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
     dataset_id = _create_dataset(client, headers)
 
     class FakeRoboflowVersion:
-        def download(self, model_format: str, location: str):
+        def download(self, model_format: str, location: str, overwrite: bool = False):
+            assert overwrite is True
+            assert not Path(location).exists()
             archive_path = Path(location) / "roboflow-export.zip"
+            archive_path.parent.mkdir(parents=True)
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr("export/data.yaml", "names: ['pedestrian', 'umbrella']\n")
                 archive.writestr("export/valid/images/sample-a.png", _png_bytes())
