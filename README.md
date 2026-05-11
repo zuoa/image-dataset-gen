@@ -59,7 +59,7 @@ JWT 说明：
 - API Key 使用 AES-GCM 加密存储
 - `gemini` provider 已接入 Google 官方 Imagen REST 适配层，调用失败会直接暂停生成批次并返回错误
 - `jimeng` provider 已接入火山引擎官方 Seedream 图片生成接口，默认模型为 `doubao-seedream-3-0-t2i-250415`
-- Roboflow 导入使用后端环境变量 `ROBOFLOW_API_KEY`，支持下载 YOLOv8 数据集并导入检测框标注
+- 导入上限默认 `MAX_IMPORTED_IMAGES=2000`，Roboflow 导入支持下载 YOLOv8 数据集并导入检测框标注
 - 标注链路已拆成独立微服务，后续可直接替换为真实 YOLO 推理
 
 主要 REST API：
@@ -116,8 +116,8 @@ Jimeng 生成说明：
 
 Roboflow 导入说明：
 
-- 在 `.env` 中设置 `ROBOFLOW_API_KEY`
-- 前端导入弹窗填写 Roboflow workspace、project 和 version
+- 前端导入弹窗手动填写 Roboflow API Key、workspace、project 和 version；API Key 只随本次请求发送，不保存到后端配置或数据库
+- `MAX_IMPORTED_IMAGES` 控制单次本地 ZIP 或 Roboflow 导入上限，默认 `2000`
 - 当前固定下载 `yolov8` 格式，支持 object detection 的 YOLO 标签；classification、segmentation 和 oriented box 标注不在第一版范围内
 
 ## 前端说明

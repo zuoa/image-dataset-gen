@@ -181,9 +181,10 @@ export function DatasetDetailPage() {
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [roboflowApiKey, setRoboflowApiKey] = useState("");
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
-  const [roboflowVersion, setRoboflowVersion] = useState(1);
+  const [roboflowVersion, setRoboflowVersion] = useState("");
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const [draftDetections, setDraftDetections] = useState<DatasetImage["detections"]>([]);
   const [isSavingAnnotations, setIsSavingAnnotations] = useState(false);
@@ -516,10 +517,12 @@ export function DatasetDetailPage() {
 
   async function handleRoboflowImport() {
     if (!token || !datasetId) return;
+    const apiKey = roboflowApiKey.trim();
     const workspace = roboflowWorkspace.trim();
     const project = roboflowProject.trim();
-    if (!workspace || !project || !Number.isFinite(roboflowVersion) || roboflowVersion < 1) {
-      setActionError("请填写 Roboflow workspace、project 和有效的版本号。");
+    const version = roboflowVersion.trim();
+    if (!apiKey || !workspace || !project || !version) {
+      setActionError("请填写 Roboflow API Key、workspace、project 和 version。");
       return;
     }
 
@@ -527,9 +530,10 @@ export function DatasetDetailPage() {
     setImportSummary(null);
     try {
       const response = await importDatasetFromRoboflow(datasetId, token, {
+        apiKey,
         workspace,
         project,
-        version: Math.floor(roboflowVersion),
+        version,
         format: "yolov8",
       });
       setDataset(response.dataset);
@@ -1137,6 +1141,17 @@ export function DatasetDetailPage() {
               <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div className="text-sm font-medium text-neutral-900 dark:text-white">Roboflow</div>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-2 sm:col-span-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">API Key</span>
+                    <Input
+                      type="password"
+                      value={roboflowApiKey}
+                      onChange={(event) => setRoboflowApiKey(event.target.value)}
+                      placeholder="roboflow_api_key"
+                      autoComplete="off"
+                      disabled={isImportingRoboflow}
+                    />
+                  </label>
                   <label className="space-y-2">
                     <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Workspace</span>
                     <Input
@@ -1158,10 +1173,9 @@ export function DatasetDetailPage() {
                   <label className="space-y-2">
                     <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Version</span>
                     <Input
-                      type="number"
-                      min={1}
                       value={roboflowVersion}
-                      onChange={(event) => setRoboflowVersion(Number(event.target.value))}
+                      onChange={(event) => setRoboflowVersion(event.target.value)}
+                      placeholder="version"
                       disabled={isImportingRoboflow}
                     />
                   </label>
@@ -1176,9 +1190,10 @@ export function DatasetDetailPage() {
                   disabled={
                     isImporting ||
                     isImportingRoboflow ||
+                    !roboflowApiKey.trim() ||
                     !roboflowWorkspace.trim() ||
                     !roboflowProject.trim() ||
-                    roboflowVersion < 1
+                    !roboflowVersion.trim()
                   }
                 >
                   <Download className="mr-2 h-4 w-4" />

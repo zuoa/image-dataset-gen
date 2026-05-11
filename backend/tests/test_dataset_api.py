@@ -190,7 +190,6 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
 def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
-        ROBOFLOW_API_KEY = "roboflow-test-key"
 
     app = create_app(DatasetConfig)
     client = app.test_client()
@@ -214,8 +213,8 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
             return SimpleNamespace(location=str(root))
 
     class FakeRoboflowProject:
-        def version(self, version: int):
-            assert version == 1
+        def version(self, version: str):
+            assert version == "1"
             return FakeRoboflowVersion()
 
     class FakeRoboflowWorkspace:
@@ -233,9 +232,10 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
             f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
             headers=headers,
             json={
+                "apiKey": "roboflow-test-key",
                 "workspace": "demo-workspace",
                 "project": "street-project",
-                "version": 1,
+                "version": "1",
                 "format": "yolov8",
             },
         )
@@ -269,7 +269,6 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
 def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
-        ROBOFLOW_API_KEY = "roboflow-test-key"
 
     app = create_app(DatasetConfig)
     client = app.test_client()
@@ -289,7 +288,8 @@ def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
             return SimpleNamespace(location=str(archive_path))
 
     class FakeRoboflowProject:
-        def version(self, version: int):
+        def version(self, version: str):
+            assert version == "release-v2"
             return FakeRoboflowVersion()
 
     class FakeRoboflowWorkspace:
@@ -304,7 +304,12 @@ def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
         response = client.post(
             f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
             headers=headers,
-            json={"workspace": "demo-workspace", "project": "street-project", "version": 2},
+            json={
+                "apiKey": "roboflow-test-key",
+                "workspace": "demo-workspace",
+                "project": "street-project",
+                "version": "release-v2",
+            },
         )
 
     assert response.status_code == 200
@@ -314,10 +319,9 @@ def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
     assert payload["dataset"]["images"][0]["detections"][0]["category"] == "pedestrian"
 
 
-def test_roboflow_import_requires_configured_api_key(tmp_path: Path):
+def test_roboflow_import_requires_api_key_payload(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
-        ROBOFLOW_API_KEY = ""
 
     app = create_app(DatasetConfig)
     client = app.test_client()
@@ -327,11 +331,11 @@ def test_roboflow_import_requires_configured_api_key(tmp_path: Path):
     response = client.post(
         f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
         headers=headers,
-        json={"workspace": "demo", "project": "project", "version": 1},
+        json={"workspace": "demo", "project": "project", "version": "1"},
     )
 
-    assert response.status_code == 400
-    assert "ROBOFLOW_API_KEY" in response.get_json()["message"]
+    assert response.status_code == 422
+    assert "apiKey" in response.get_json()["errors"]
 
 
 def test_retry_failed_augmentation_task_resets_augmentation_status(tmp_path: Path):

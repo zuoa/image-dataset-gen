@@ -134,9 +134,10 @@ class DatasetExportSchema(Schema):
 
 
 class RoboflowImportSchema(Schema):
+    apiKey = fields.String(required=True, validate=validate.Length(min=1, max=255))
     workspace = fields.String(required=True, validate=validate.Length(min=1, max=120))
     project = fields.String(required=True, validate=validate.Length(min=1, max=120))
-    version = fields.Integer(required=True, validate=validate.Range(min=1))
+    version = fields.String(required=True, validate=validate.Length(min=1, max=120))
     format = fields.String(load_default="yolov8", validate=validate.OneOf(["yolov8"]))
 
 

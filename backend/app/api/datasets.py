@@ -50,7 +50,6 @@ from app.utils.crypto import encrypt_secret
 datasets_bp = Blueprint("datasets", __name__)
 
 ALLOWED_ARCHIVE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
-MAX_IMPORTED_IMAGES = 200
 
 
 def _dataset_for_user(dataset_id: str, user_id: str) -> Dataset:
@@ -64,6 +63,10 @@ def _task_for_dataset(dataset: Dataset, task_id: str) -> DatasetTask:
 def _sync_and_payload(dataset: Dataset) -> dict:
     dataset = sync_dataset(dataset)
     return build_dataset_payload(dataset)
+
+
+def _max_imported_images() -> int:
+    return max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
 
 
 def _dispatch_background_task(task_callable, *args: object) -> None:
@@ -317,7 +320,7 @@ def import_dataset_images(dataset_id: str):
 
     with zip_file:
         for member in zip_file.infolist():
-            if imported_count >= MAX_IMPORTED_IMAGES:
+            if imported_count >= _max_imported_images():
                 break
             if member.is_dir():
                 continue
@@ -394,18 +397,21 @@ def import_roboflow_dataset_images(dataset_id: str):
     user_id = get_jwt_identity()
     payload = RoboflowImportSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
-    api_key = str(current_app.config.get("ROBOFLOW_API_KEY") or "").strip()
-    if not api_key:
-        return jsonify({"message": "后端未配置 ROBOFLOW_API_KEY，无法从 Roboflow 导入。"}), 400
+    api_key = payload["apiKey"].strip()
+    workspace = payload["workspace"].strip()
+    project = payload["project"].strip()
+    version = payload["version"].strip()
+    if not api_key or not workspace or not project or not version:
+        return jsonify({"message": "请填写 Roboflow API Key、workspace、project 和 version。"}), 400
 
     try:
         summary = import_roboflow_dataset(
             dataset=dataset,
             user_id=user_id,
             api_key=api_key,
-            workspace=payload["workspace"].strip(),
-            project=payload["project"].strip(),
-            version=payload["version"],
+            workspace=workspace,
+            project=project,
+            version=version,
             model_format=payload["format"],
         )
     except RoboflowImportError as exc:

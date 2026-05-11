@@ -50,6 +50,7 @@ class Config:
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", _default_encryption_key())
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
+    MAX_IMPORTED_IMAGES: int = int(os.getenv("MAX_IMPORTED_IMAGES", "2000"))
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
     VL_ANNOTATOR_PROVIDER: str = os.getenv("VL_ANNOTATOR_PROVIDER", "gemini")
     VL_ANNOTATOR_MODEL: str = os.getenv("VL_ANNOTATOR_MODEL", "gemini-2.0-flash")
@@ -67,7 +68,6 @@ class Config:
     OPENAI_COMPAT_API_KEY: str = os.getenv("OPENAI_COMPAT_API_KEY", "")
     OPENAI_COMPAT_BASE_URL: str = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.deepseek.com/v1")
     OPENAI_COMPAT_MODEL: str = os.getenv("OPENAI_COMPAT_MODEL", "deepseek-chat")
-    ROBOFLOW_API_KEY: str = os.getenv("ROBOFLOW_API_KEY", "")
     IMAGE_BASE_URL: str = os.getenv("IMAGE_BASE_URL", "")
     TRAINING_WORKER_TOKEN: str = os.getenv("TRAINING_WORKER_TOKEN", "")
     TRAINING_DEFAULT_MODEL: str = os.getenv("TRAINING_DEFAULT_MODEL", "yolov8n.pt")

@@ -22,7 +22,6 @@ from app.services.image_storage import normalize_uploaded_image, preview_data_ur
 
 
 ROBOFLOW_IMPORT_FORMAT = "yolov8"
-MAX_ROBOFLOW_IMPORTED_IMAGES = 200
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -45,7 +44,7 @@ def import_roboflow_dataset(
     api_key: str,
     workspace: str,
     project: str,
-    version: int,
+    version: str,
     model_format: str = ROBOFLOW_IMPORT_FORMAT,
 ) -> dict[str, Any]:
     if model_format != ROBOFLOW_IMPORT_FORMAT:
@@ -83,7 +82,7 @@ def _download_roboflow_version(
     api_key: str,
     workspace: str,
     project: str,
-    version: int,
+    version: str,
     model_format: str,
     target_dir: Path,
 ) -> Path:
@@ -124,9 +123,10 @@ def _prepare_roboflow_export(
     image_paths = _find_image_paths(dataset_root)
     skipped_files: list[str] = []
     prepared_images: list[PreparedRoboflowImage] = []
+    max_imported_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
 
     for image_path in image_paths:
-        if len(prepared_images) >= MAX_ROBOFLOW_IMPORTED_IMAGES:
+        if len(prepared_images) >= max_imported_images:
             break
         normalized = normalize_uploaded_image(image_path.read_bytes())
         if normalized is None:
@@ -184,7 +184,7 @@ def _persist_prepared_images(
     skipped_files: list[str],
     workspace: str,
     project: str,
-    version: int,
+    version: str,
     model_format: str,
 ) -> dict[str, Any]:
     task = DatasetTask(

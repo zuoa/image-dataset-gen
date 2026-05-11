@@ -117,9 +117,10 @@ export function importDatasetFromRoboflow(
   datasetId: string,
   token: string,
   payload: {
+    apiKey: string;
     workspace: string;
     project: string;
-    version: number;
+    version: string;
     format?: "yolov8";
   },
 ) {
