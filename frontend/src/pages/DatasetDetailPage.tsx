@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FileVideo, FlipHorizontal2, Layers, ListChecks, Loader, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FileVideo, FlipHorizontal2, Layers, ListChecks, Loader, PencilRuler, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
@@ -23,12 +23,20 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SectionCard } from "../components/ui/SectionCard";
 import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
+import {
+  boxFromCorners,
+  DEFAULT_BOX_SIZE,
+  detectionStyle,
+  detectionsEqual,
+  fitImageViewport,
+  pointerToStage,
+  type ImageViewport,
+  type ResizeCorner,
+} from "../lib/annotation";
 import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage, TrainingJob } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
-const DEFAULT_BOX_SIZE = 0.22;
-const MIN_BOX_SIZE = 0.04;
 const defaultAugmentationMethods: AugmentationMethod[] = ["flip", "color_jitter", "blur"];
 const defaultAugmentationSettings: AugmentationSettings = {
   flip: { mode: "random" },
@@ -59,80 +67,6 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
 ];
 type VideoOutputFormat = "jpg" | "png";
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
-
-type ResizeCorner = "nw" | "ne" | "sw" | "se";
-type ImageViewport = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
-
-function detectionStyle([xCenter, yCenter, width, height]: [number, number, number, number]) {
-  return {
-    left: `${(xCenter - width / 2) * 100}%`,
-    top: `${(yCenter - height / 2) * 100}%`,
-    width: `${width * 100}%`,
-    height: `${height * 100}%`,
-  };
-}
-
-function clamp(value: number, min = 0, max = 1) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function pointerToStage(rect: DOMRect, clientX: number, clientY: number) {
-  return {
-    x: clamp((clientX - rect.left) / rect.width),
-    y: clamp((clientY - rect.top) / rect.height),
-  };
-}
-
-function fitImageViewport(
-  containerWidth: number,
-  containerHeight: number,
-  imageWidth: number,
-  imageHeight: number,
-): ImageViewport {
-  if (containerWidth <= 0 || containerHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
-    return { left: 0, top: 0, width: 0, height: 0 };
-  }
-
-  const containerAspect = containerWidth / containerHeight;
-  const imageAspect = imageWidth / imageHeight;
-
-  if (imageAspect > containerAspect) {
-    const width = containerWidth;
-    const height = width / imageAspect;
-    return {
-      left: 0,
-      top: (containerHeight - height) / 2,
-      width,
-      height,
-    };
-  }
-
-  const height = containerHeight;
-  const width = height * imageAspect;
-  return {
-    left: (containerWidth - width) / 2,
-    top: 0,
-    width,
-    height,
-  };
-}
-
-function boxFromCorners(startX: number, startY: number, endX: number, endY: number): [number, number, number, number] {
-  const left = clamp(Math.min(startX, endX));
-  const right = clamp(Math.max(startX, endX));
-  const top = clamp(Math.min(startY, endY));
-  const bottom = clamp(Math.max(startY, endY));
-  const width = Math.max(right - left, MIN_BOX_SIZE);
-  const height = Math.max(bottom - top, MIN_BOX_SIZE);
-  const xCenter = clamp((left + right) / 2, width / 2, 1 - width / 2);
-  const yCenter = clamp((top + bottom) / 2, height / 2, 1 - height / 2);
-  return [xCenter, yCenter, width, height];
-}
 
 function formatMetric(value: unknown) {
   if (typeof value !== "number") return "—";
@@ -330,7 +264,7 @@ export function DatasetDetailPage() {
   }, [images, isAddingDetection, previewImage, previewIndex, selectedDetectionIndex]);
 
   const hasAnnotationChanges =
-    previewImage !== null && JSON.stringify(previewImage.detections) !== JSON.stringify(draftDetections);
+    previewImage !== null && !detectionsEqual(previewImage.detections, draftDetections);
 
   useEffect(() => {
     if (!previewImage || !hasAnnotationChanges) return;
@@ -775,6 +709,15 @@ export function DatasetDetailPage() {
                 <Tag className="mr-2 h-4 w-4" />
                 自动标注
               </Button>
+              <Link
+                to={`/datasets/${dataset.id}/annotate`}
+                className={dataset.imageCount === 0 ? "pointer-events-none" : undefined}
+              >
+                <Button variant="secondary" disabled={dataset.imageCount === 0}>
+                  <PencilRuler className="mr-2 h-4 w-4" />
+                  标注模式
+                </Button>
+              </Link>
               <Button
                 variant="secondary"
                 onClick={openExportModal}

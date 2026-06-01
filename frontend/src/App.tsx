@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { authExpiredEvent, sessionExpiredMessage } from "./lib/session";
 import { AuthPage } from "./pages/AuthPage";
+import { DatasetAnnotatePage } from "./pages/DatasetAnnotatePage";
 import { DatasetCreatePage } from "./pages/DatasetCreatePage";
 import { DatasetDetailPage } from "./pages/DatasetDetailPage";
 import { DatasetListPage } from "./pages/DatasetListPage";
@@ -60,6 +61,7 @@ export default function App() {
           <Route index element={<DatasetListPage />} />
           <Route path="datasets/new" element={<DatasetCreatePage />} />
           <Route path="datasets/:datasetId" element={<DatasetDetailPage />} />
+          <Route path="datasets/:datasetId/annotate" element={<DatasetAnnotatePage />} />
           <Route path="datasets/:datasetId/generate" element={<GenerationTaskPage />} />
         </Route>
       </Routes>
