@@ -6,7 +6,7 @@ import types
 import zipfile
 from pathlib import Path
 
-from app.runner import train_yolov8
+from app.runner import _resolve_model_name, train_yolov8
 
 
 class _FakeTrainer:
@@ -43,6 +43,23 @@ class _FakeYOLO:
             callback(_FakeTrainer())
 
 
+class _FakeDownloadResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_FakeDownloadResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int) -> list[bytes]:
+        return [self.body]
+
+
 def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO))
     monkeypatch.setenv("TRAINER_MODEL_DIR", str(tmp_path / "models"))
@@ -68,3 +85,23 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
         "results_csv",
         "metrics",
     }
+
+
+def test_resolve_model_downloads_from_configured_base_url(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "models"
+    calls: list[tuple[str, bool, int]] = []
+
+    def fake_get(url: str, stream: bool, timeout: int) -> _FakeDownloadResponse:
+        calls.append((url, stream, timeout))
+        return _FakeDownloadResponse(b"model-weights")
+
+    monkeypatch.setenv("TRAINER_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("TRAINER_MODEL_BASE_URL", "https://mirror.example.com/ultralytics/v8.3.0/")
+    monkeypatch.setenv("TRAINER_MODEL_DOWNLOAD_TIMEOUT_SECONDS", "12")
+    monkeypatch.setattr("app.runner.requests.get", fake_get)
+
+    resolved = _resolve_model_name("yolov8s.pt")
+
+    assert resolved == str(model_dir / "yolov8s.pt")
+    assert (model_dir / "yolov8s.pt").read_bytes() == b"model-weights"
+    assert calls == [("https://mirror.example.com/ultralytics/v8.3.0/yolov8s.pt", True, 12)]

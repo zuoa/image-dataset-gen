@@ -8,9 +8,12 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
+
 
 ProgressCallback = Callable[[int], None]
 IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+ULTRALYTICS_ASSETS_RELEASE = "v8.3.0"
 
 
 def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_progress: ProgressCallback) -> dict[str, Any]:
@@ -146,7 +149,54 @@ def _resolve_model_name(model_name: str) -> str:
     if cached.exists():
         return str(cached)
 
+    if requested.parent == Path(".") and requested.suffix == ".pt":
+        downloaded = _download_model_from_configured_mirror(requested.name, cached)
+        if downloaded is not None:
+            return str(downloaded)
+
     return model_name
+
+
+def _download_model_from_configured_mirror(filename: str, output_path: Path) -> Path | None:
+    url = _model_download_url(filename)
+    if not url:
+        return None
+
+    timeout = int(os.getenv("TRAINER_MODEL_DOWNLOAD_TIMEOUT_SECONDS", "300"))
+    temp_path = output_path.with_suffix(f"{output_path.suffix}.part")
+    if temp_path.exists():
+        temp_path.unlink()
+
+    try:
+        with requests.get(url, stream=True, timeout=timeout) as response:
+            response.raise_for_status()
+            with temp_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+        if temp_path.stat().st_size == 0:
+            raise RuntimeError("downloaded model file is empty")
+        temp_path.replace(output_path)
+    except Exception as exc:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise RuntimeError(f"failed to download model {filename} from {url}: {exc}") from exc
+
+    return output_path
+
+
+def _model_download_url(filename: str) -> str:
+    release = os.getenv("TRAINER_MODEL_ASSETS_RELEASE", ULTRALYTICS_ASSETS_RELEASE).strip()
+    github_url = f"https://github.com/ultralytics/assets/releases/download/{release}/{filename}"
+    template = os.getenv("TRAINER_MODEL_URL_TEMPLATE", "").strip()
+    if template:
+        return template.format(filename=filename, release=release, github_url=github_url)
+
+    base_url = os.getenv("TRAINER_MODEL_BASE_URL", "").strip()
+    if base_url:
+        return f"{base_url.rstrip('/')}/{filename}"
+
+    return ""
 
 
 def _load_model(yolo_factory: Any, model_name: str) -> Any:
