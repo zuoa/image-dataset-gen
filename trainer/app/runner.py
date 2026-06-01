@@ -20,8 +20,10 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     job_root = work_root / job_id
     dataset_root = job_root / "dataset"
     runs_root = job_root / "runs"
-    if job_root.exists():
-        shutil.rmtree(job_root)
+    job_root.mkdir(parents=True, exist_ok=True)
+    for generated_path in (dataset_root, runs_root):
+        if generated_path.exists():
+            shutil.rmtree(generated_path)
     dataset_root.mkdir(parents=True, exist_ok=True)
     runs_root.mkdir(parents=True, exist_ok=True)
 
