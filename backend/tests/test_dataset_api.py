@@ -370,6 +370,82 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
     assert stored["detections"][0]["category"] == "umbrella"
 
 
+def test_roboflow_import_decodes_labels_with_imported_category_order(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-roboflow-category-order")
+    response = client.post(
+        "/api/v1/datasets",
+        headers=headers,
+        json={
+            "name": "mixed category dataset",
+            "categories": ["vehicle"],
+            "description": "existing categories should not shift imported Roboflow class ids",
+        },
+    )
+    assert response.status_code == 201
+    dataset_id = response.get_json()["dataset"]["id"]
+
+    class FakeRoboflowVersion:
+        def download(self, model_format: str, location: str, overwrite: bool = False):
+            root = Path(location) / "workspace-project-1"
+            images_dir = root / "train" / "images"
+            labels_dir = root / "train" / "labels"
+            images_dir.mkdir(parents=True)
+            labels_dir.mkdir(parents=True)
+            (root / "data.yaml").write_text("names:\n- pedestrian\n- umbrella\n", encoding="utf-8")
+            (images_dir / "sample-a.png").write_bytes(_png_bytes())
+            (labels_dir / "sample-a.txt").write_text("1 0.500000 0.600000 0.250000 0.300000\n", encoding="utf-8")
+            return SimpleNamespace(location=str(root))
+
+    class FakeRoboflowProject:
+        def version(self, version: str):
+            return FakeRoboflowVersion()
+
+    class FakeRoboflowWorkspace:
+        def project(self, project: str):
+            return FakeRoboflowProject()
+
+    class FakeRoboflowClient:
+        def workspace(self, workspace: str):
+            return FakeRoboflowWorkspace()
+
+    with patch("app.services.roboflow_import_service._make_roboflow_client", return_value=FakeRoboflowClient()):
+        import_response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/import/roboflow",
+            headers=headers,
+            json={
+                "apiKey": "roboflow-test-key",
+                "workspace": "demo-workspace",
+                "project": "street-project",
+                "version": "1",
+                "format": "yolov8",
+            },
+        )
+
+    assert import_response.status_code == 200
+    dataset = import_response.get_json()["dataset"]
+    assert dataset["categories"] == ["vehicle", "pedestrian", "umbrella"]
+    assert dataset["images"][0]["detections"][0]["category"] == "umbrella"
+
+    export_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/export",
+        headers=headers,
+        json={"export_format": "yolo", "image_format": "keep"},
+    )
+    assert export_response.status_code == 201
+    download = client.get(
+        f"/api/v1/datasets/{dataset_id}/exports/1/download",
+        headers=headers,
+    )
+    archive = zipfile.ZipFile(BytesIO(download.data))
+    label_name = next(name for name in archive.namelist() if name.endswith(".txt"))
+    assert archive.read(label_name).decode("utf-8").startswith("2 0.500000 0.600000 0.250000 0.300000")
+
+
 def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

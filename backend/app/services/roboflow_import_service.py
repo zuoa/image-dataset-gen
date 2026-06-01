@@ -119,7 +119,9 @@ def _prepare_roboflow_export(
     existing_categories: list[str],
 ) -> tuple[list[PreparedRoboflowImage], list[str], list[str]]:
     dataset_root = _find_dataset_root(export_root)
-    categories = _merge_categories(existing_categories, _load_yolo_categories(dataset_root))
+    imported_categories = _load_yolo_categories(dataset_root)
+    categories = _merge_categories(existing_categories, imported_categories)
+    label_categories = imported_categories or categories
     image_paths = _find_image_paths(dataset_root)
     skipped_files: list[str] = []
     prepared_images: list[PreparedRoboflowImage] = []
@@ -138,7 +140,7 @@ def _prepare_roboflow_export(
                 source_path=image_path,
                 image_bytes=bytes(normalized["image_bytes"]),
                 mime_type=str(normalized["mime_type"]),
-                detections=_load_yolo_detections(image_path, dataset_root, categories),
+                detections=_load_yolo_detections(image_path, dataset_root, label_categories),
             )
         )
 
