@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 import zipfile
@@ -22,6 +23,10 @@ class _FakeYOLO:
         self.callbacks[name] = callback
 
     def train(self, **kwargs: object) -> None:
+        model_dir = Path(os.environ["TRAINER_MODEL_DIR"]).resolve()
+        assert Path.cwd() == model_dir
+        assert kwargs["amp"] is False
+
         data_yaml = Path(str(kwargs["data"]))
         data_yaml_lines = data_yaml.read_text(encoding="utf-8").splitlines()
         expected_path_line = f"path: {json.dumps(str(data_yaml.parent), ensure_ascii=False)}"
@@ -62,7 +67,8 @@ class _FakeDownloadResponse:
 
 def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO))
-    monkeypatch.setenv("TRAINER_MODEL_DIR", str(tmp_path / "models"))
+    model_dir = tmp_path / "models"
+    monkeypatch.setenv("TRAINER_MODEL_DIR", str(model_dir))
 
     job = {"id": "job-1", "config": {"model": "yolov8n.pt", "epochs": 1}}
     job_root = tmp_path / "job-1"

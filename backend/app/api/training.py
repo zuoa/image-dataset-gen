@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -213,6 +214,24 @@ def download_training_artifact(dataset_id: str, job_id: str, artifact_id: str):
         download_name=artifact.filename,
         mimetype="application/octet-stream",
     )
+
+
+@training_bp.delete("/datasets/<dataset_id>/training-jobs/<job_id>")
+@jwt_required()
+def delete_training_job(dataset_id: str, job_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    job = TrainingJob.query.filter_by(id=job_id, dataset_id=dataset.id, user_id=user_id).first_or_404()
+    deleted_job_id = job.id
+
+    if job.worker is not None and job.worker.current_job_id == job.id:
+        job.worker.current_job_id = None
+        job.worker.status = "idle"
+
+    shutil.rmtree(_artifact_root(job.id), ignore_errors=True)
+    db.session.delete(job)
+    db.session.commit()
+    return jsonify({"deletedJobId": deleted_job_id, "dataset": build_dataset_payload(sync_dataset(dataset))})
 
 
 @training_bp.post("/training/workers/register")

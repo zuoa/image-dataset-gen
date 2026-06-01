@@ -217,6 +217,13 @@ export function createTrainingJob(
   });
 }
 
+export function deleteTrainingJob(datasetId: string, jobId: string, token: string) {
+  return apiRequest<{ deletedJobId: string; dataset: Dataset }>(`/datasets/${datasetId}/training-jobs/${jobId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export function updateDatasetSelection(
   datasetId: string,
   token: string,

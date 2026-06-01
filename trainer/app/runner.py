@@ -41,6 +41,7 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     batch_size = int(config.get("batchSize") or 16)
     patience = int(config.get("patience") or 20)
     device = str(config.get("device") or "").strip() or None
+    amp = _training_amp_enabled(config)
 
     model = _load_model(YOLO, model_name)
 
@@ -50,13 +51,15 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
         on_progress(percent)
 
     model.add_callback("on_train_epoch_end", epoch_end)
-    model.train(
+    _train_model(
+        model,
         data=str(data_yaml),
         epochs=epochs,
         imgsz=image_size,
         batch=batch_size,
         patience=patience,
         device=device,
+        amp=amp,
         project=str(runs_root),
         name="train",
         exist_ok=True,
@@ -135,6 +138,32 @@ def _split_has_images(dataset_root: Path, split_value: str) -> bool:
     return any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in split_path.rglob("*"))
 
 
+def _training_amp_enabled(config: dict[str, Any]) -> bool:
+    if "amp" in config:
+        return _as_bool(config.get("amp"), default=False)
+    return _env_bool("TRAINER_YOLO_AMP", default=False)
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return _as_bool(value, default=default)
+
+
+def _as_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _resolve_model_name(model_name: str) -> str:
     model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +238,17 @@ def _load_model(yolo_factory: Any, model_name: str) -> Any:
     os.chdir(model_dir)
     try:
         return yolo_factory(model_name)
+    finally:
+        os.chdir(original_cwd)
+
+
+def _train_model(model: Any, **kwargs: object) -> None:
+    model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
+    model_dir.mkdir(parents=True, exist_ok=True)
+    original_cwd = Path.cwd()
+    os.chdir(model_dir)
+    try:
+        model.train(**kwargs)
     finally:
         os.chdir(original_cwd)
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FileVideo, FlipHorizontal2, Layers, ListChecks, Loader, PencilRuler, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FileVideo, FlipHorizontal2, Layers, ListChecks, Loader, PencilRuler, Play, Sparkles, Square, Tag, Trash2, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
@@ -7,6 +7,7 @@ import {
   annotateDataset,
   augmentDataset,
   createTrainingJob,
+  deleteTrainingJob,
   exportDataset,
   getDataset,
   importDatasetFromRoboflow,
@@ -103,6 +104,7 @@ export function DatasetDetailPage() {
   const [isSubmittingAnnotation, setIsSubmittingAnnotation] = useState(false);
   const [isCreatingExport, setIsCreatingExport] = useState(false);
   const [isCreatingTrainingJob, setIsCreatingTrainingJob] = useState(false);
+  const [deletingTrainingJobId, setDeletingTrainingJobId] = useState<string | null>(null);
   const [multiplier, setMultiplier] = useState(3);
   const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
   const [trainingEpochs, setTrainingEpochs] = useState(50);
@@ -423,6 +425,24 @@ export function DatasetDetailPage() {
       setActionError((error as Error).message);
     } finally {
       setIsCreatingTrainingJob(false);
+    }
+  }
+
+  async function removeTrainingJob(job: TrainingJob) {
+    if (!token || !datasetId) return;
+    const confirmed = window.confirm("删除该训练任务？如果 worker 仍在运行，这不会停止 GPU 上的训练进程。");
+    if (!confirmed) return;
+
+    setDeletingTrainingJobId(job.id);
+    try {
+      const response = await deleteTrainingJob(datasetId, job.id, token);
+      setDataset(response.dataset);
+      setTrainingJobs((current) => current.filter((item) => item.id !== response.deletedJobId));
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setDeletingTrainingJobId(null);
     }
   }
 
@@ -888,6 +908,17 @@ export function DatasetDetailPage() {
                     ))}
                   </div>
                 ) : null}
+                <div className="mt-4 flex justify-end border-t border-neutral-200 pt-4 dark:border-white/10">
+                  <Button
+                    variant="ghost"
+                    className="text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-300 dark:hover:bg-red-950/30 dark:hover:text-red-100"
+                    disabled={deletingTrainingJobId === latestTrainingJob.id}
+                    onClick={() => void removeTrainingJob(latestTrainingJob)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {deletingTrainingJobId === latestTrainingJob.id ? "删除中..." : "删除任务"}
+                  </Button>
+                </div>
               </>
             ) : (
               <div className="mt-4 text-sm leading-7 text-neutral-500 dark:text-neutral-400">

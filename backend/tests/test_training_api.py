@@ -163,3 +163,62 @@ def test_training_worker_requires_shared_token(tmp_path: Path):
     )
 
     assert response.status_code == 401
+
+
+def test_user_can_delete_stuck_training_job_and_create_another(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-delete")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    job_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolov8n.pt", "epochs": 2, "image_size": 320, "batch_size": 1, "patience": 1},
+    )
+    job = job_response.get_json()["job"]
+
+    client.post(
+        "/api/v1/training/workers/register",
+        headers=_worker_headers(),
+        json={"worker_id": "gpu-1", "name": "GPU 1", "capabilities": {"frameworks": ["yolov8"]}},
+    )
+    client.post("/api/v1/training/workers/gpu-1/poll", headers=_worker_headers(), json={})
+    artifact = client.post(
+        f"/api/v1/training/jobs/{job['id']}/artifacts",
+        headers=_worker_headers(),
+        data={"artifact_type": "results_csv", "artifact": (BytesIO(b"epoch,metric\n"), "results.csv")},
+        content_type="multipart/form-data",
+    )
+    assert artifact.status_code == 201
+
+    with app.app_context():
+        stored_job = db.session.get(TrainingJob, job["id"])
+        assert stored_job is not None
+        artifact_dir = Path(app.config["STORAGE_ROOT"]) / "training" / job["id"]
+        assert artifact_dir.exists()
+
+    delete_response = client.delete(
+        f"/api/v1/datasets/{dataset_id}/training-jobs/{job['id']}",
+        headers=headers,
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["deletedJobId"] == job["id"]
+    with app.app_context():
+        assert db.session.get(TrainingJob, job["id"]) is None
+        worker = db.session.get(TrainingWorker, "gpu-1")
+        assert worker is not None and worker.status == "idle" and worker.current_job_id is None
+        assert not artifact_dir.exists()
+
+    replacement_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolov8s.pt", "epochs": 1, "image_size": 320, "batch_size": 1, "patience": 1},
+    )
+    assert replacement_response.status_code == 201
+    assert replacement_response.get_json()["job"]["status"] == "queued"

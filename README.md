@@ -167,6 +167,7 @@ docker compose -f docker-compose.trainer.yml up -d
 - `TRAINER_MODEL_DIR=/app/models`
 - `TRAINER_MODEL_BASE_URL=<YOLO 权重镜像目录，可选>`
 - `TRAINER_MODEL_URL_TEMPLATE=<YOLO 权重下载 URL 模板，可选>`
+- `TRAINER_YOLO_AMP=false`
 
 `docker-compose.trainer.yml` 会持久化 `/app/work` 和 `/app/models`，后者用于缓存 YOLO 权重；如果模型文件已经存在，会优先复用本地文件。
 
@@ -183,6 +184,8 @@ TRAINER_MODEL_URL_TEMPLATE='https://<proxy-host>/{github_url}'
 ```
 
 模板变量包括 `{filename}`、`{release}` 和 `{github_url}`；默认 release 是 `v8.3.0`，可用 `TRAINER_MODEL_ASSETS_RELEASE` 覆盖。
+
+Ultralytics 在 `amp=True` 时会运行 AMP 自检，并可能额外下载 `yolo11n.pt`。trainer 默认设置 `TRAINER_YOLO_AMP=false`，避免这类隐藏 GitHub 下载；如果要启用 AMP，请先把自检权重也放进模型缓存目录，或配置上面的镜像地址。
 
 ## 已知边界
 
