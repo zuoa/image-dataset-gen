@@ -141,6 +141,13 @@ class RoboflowImportSchema(Schema):
     format = fields.String(load_default="yolov8", validate=validate.OneOf(["yolov8"]))
 
 
+class VideoImportSchema(Schema):
+    frame_interval = fields.Integer(load_default=30, validate=validate.Range(min=1, max=10000))
+    output_format = fields.String(load_default="jpg", validate=validate.OneOf(["jpg", "png"]))
+    jpeg_quality = fields.Integer(load_default=95, validate=validate.Range(min=1, max=100))
+    filename_prefix = fields.String(load_default="frame", allow_none=True, validate=validate.Length(max=80))
+
+
 class TrainingJobSchema(Schema):
     model = fields.String(load_default="yolov8n.pt", validate=validate.Length(min=1, max=120))
     epochs = fields.Integer(load_default=50, validate=validate.Range(min=1, max=500))

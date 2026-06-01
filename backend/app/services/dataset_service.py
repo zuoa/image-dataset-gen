@@ -180,6 +180,7 @@ def sync_dataset(dataset: Dataset) -> Dataset:
 
 
 def sync_dataset_task_inplace(task: DatasetTask) -> bool:
+    config = task.config_json or {}
     generated_images = [image for image in task.images]
     generated_count = len(generated_images)
     selected_count = sum(1 for image in generated_images if image.selected)
@@ -205,6 +206,15 @@ def sync_dataset_task_inplace(task: DatasetTask) -> bool:
         if target_count > 0 and generated_count >= target_count and task.status == "running":
             task.status = "completed"
             task.completed_at = now_utc()
+            changed = True
+    elif task.task_type == "import" and config.get("source") == "video":
+        if task.status == "running":
+            progress_percent = 0 if target_count <= 0 else min(99, round(generated_count / max(target_count, 1) * 100))
+            if task.progress_percent != progress_percent:
+                task.progress_percent = progress_percent
+                changed = True
+        elif task.status == "completed" and task.progress_percent != 100:
+            task.progress_percent = 100
             changed = True
     elif task.task_type == "import":
         if task.progress_percent != 100:

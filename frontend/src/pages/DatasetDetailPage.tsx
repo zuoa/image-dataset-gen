@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FlipHorizontal2, Layers, ListChecks, Loader, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
+import { CheckSquare, ChevronLeft, ChevronRight, ClipboardList, Cpu, Download, FileVideo, FlipHorizontal2, Layers, ListChecks, Loader, Play, Sparkles, Square, Tag, Upload, Wand2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
@@ -11,6 +11,7 @@ import {
   getDataset,
   importDatasetFromRoboflow,
   importDatasetImagesArchive,
+  importDatasetVideo,
   listTrainingJobs,
   retryDatasetTask,
   updateDatasetImageAnnotations,
@@ -21,6 +22,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SectionCard } from "../components/ui/SectionCard";
+import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
 import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage, TrainingJob } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
@@ -55,6 +57,7 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
   { value: "voc", label: "VOC" },
   { value: "csv", label: "CSV" },
 ];
+type VideoOutputFormat = "jpg" | "png";
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
@@ -180,7 +183,12 @@ export function DatasetDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [videoFrameInterval, setVideoFrameInterval] = useState(30);
+  const [videoOutputFormat, setVideoOutputFormat] = useState<VideoOutputFormat>("jpg");
+  const [videoJpegQuality, setVideoJpegQuality] = useState(95);
+  const [videoFilenamePrefix, setVideoFilenamePrefix] = useState("frame");
   const [roboflowApiKey, setRoboflowApiKey] = useState("");
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
@@ -197,6 +205,7 @@ export function DatasetDetailPage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
 
@@ -210,6 +219,9 @@ export function DatasetDetailPage() {
   const annotationStatus = String(dataset?.annotation?.status ?? "idle");
   const latestTrainingJob = trainingJobs[0];
   const trainingRunning = trainingJobs.some((job) => activeTrainingStatuses.has(job.status));
+  const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
+  const videoFilenamePrefixPreview = videoFilenamePrefix.trim().replace(/[^A-Za-z0-9_-]/g, "") || "frame";
+  const videoOutputExample = `${videoFilenamePrefixPreview}_000000.${videoOutputFormat}`;
 
   useEffect(() => {
     if (!token || !datasetId) return;
@@ -339,6 +351,7 @@ export function DatasetDetailPage() {
         !isSubmittingAnnotation &&
         !isCreatingExport &&
         !isImporting &&
+        !isImportingVideo &&
         !isImportingRoboflow
       ) {
         setIsAugmentationModalOpen(false);
@@ -357,6 +370,7 @@ export function DatasetDetailPage() {
     isExportModalOpen,
     isImportModalOpen,
     isImporting,
+    isImportingVideo,
     isImportingRoboflow,
     isSubmittingAnnotation,
   ]);
@@ -512,6 +526,38 @@ export function DatasetDetailPage() {
     } finally {
       event.target.value = "";
       setIsImporting(false);
+    }
+  }
+
+  async function handleVideoImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!token || !datasetId || !file) return;
+    const frameInterval = Math.max(1, Math.min(10000, Math.round(videoFrameInterval) || 30));
+    const jpegQuality = Math.max(1, Math.min(100, Math.round(videoJpegQuality) || 95));
+    const filenamePrefix = videoFilenamePrefix.trim() || "frame";
+    setIsImportingVideo(true);
+    setImportSummary(null);
+    try {
+      const response = await importDatasetVideo(datasetId, token, file, {
+        frameInterval,
+        outputFormat: videoOutputFormat,
+        jpegQuality,
+        filenamePrefix,
+      });
+      setDataset(response.dataset);
+      setActionError(null);
+      const importedCount = Number(response.summary.importedCount ?? response.task.imagesGenerated ?? 0);
+      setImportSummary(
+        response.task.status === "running"
+          ? `已创建视频抽帧任务，当前每 ${frameInterval} 帧取一张`
+          : `已从视频抽取 ${importedCount} 张图片`,
+      );
+      setIsImportModalOpen(false);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      event.target.value = "";
+      setIsImportingVideo(false);
     }
   }
 
@@ -737,7 +783,7 @@ export function DatasetDetailPage() {
                 <Download className="mr-2 h-4 w-4" />
                 导出
               </Button>
-              <Button variant="secondary" onClick={openImportModal} disabled={isImporting || isImportingRoboflow}>
+              <Button variant="secondary" onClick={openImportModal} disabled={isAnyImporting}>
                 <Upload className="mr-2 h-4 w-4" />
                 导入
               </Button>
@@ -757,6 +803,13 @@ export function DatasetDetailPage() {
                 数据集功能
               </Button>
               <input ref={archiveInputRef} type="file" accept=".zip" className="hidden" onChange={handleArchiveImport} />
+              <input
+                ref={videoInputRef}
+                type="file"
+                accept="video/*,.mp4,.mov,.avi,.mkv,.webm"
+                className="hidden"
+                onChange={handleVideoImport}
+              />
             </div>
             {importSummary ? <div className="mt-3 text-sm text-neutral-500">{importSummary}</div> : null}
             {selectedOriginalCount === 0 ? (
@@ -1091,13 +1144,13 @@ export function DatasetDetailPage() {
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm"
           onClick={() => {
-            if (!isImporting && !isImportingRoboflow) {
+            if (!isAnyImporting) {
               setIsImportModalOpen(false);
             }
           }}
         >
           <SectionCard
-            className="relative z-50 w-full max-w-3xl"
+            className="relative z-50 max-h-[calc(100vh-3rem)] w-full max-w-4xl overflow-y-auto"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
@@ -1108,20 +1161,106 @@ export function DatasetDetailPage() {
                 </div>
                 <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">导入数据集</h3>
                 <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                  从本地 ZIP 导入图片，或从 Roboflow 下载 YOLOv8 数据集并同步标注框。
+                  上传视频按帧抽取底库图片，也可以继续使用 ZIP 或 Roboflow 导入。
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsImportModalOpen(false)}
-                disabled={isImporting || isImportingRoboflow}
+                disabled={isAnyImporting}
                 className="rounded-full p-1 hover:bg-neutral-100 disabled:opacity-50 dark:hover:bg-white/10"
               >
                 <X className="h-5 w-5 text-neutral-500" />
               </button>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+            <div className="mt-6 rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-neutral-900 dark:text-white">
+                    <FileVideo className="h-4 w-4 text-neutral-500" />
+                    本地视频
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+                    按帧间隔抽取图片，抽出的帧会直接加入当前数据集样本池。
+                  </p>
+                </div>
+                <Button
+                  className="w-full justify-center sm:w-auto"
+                  onClick={() => videoInputRef.current?.click()}
+                  disabled={isAnyImporting}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {isImportingVideo ? "抽帧中..." : "选择视频"}
+                </Button>
+              </div>
+
+              <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_290px]">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">抽帧间隔（帧）</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={videoFrameInterval}
+                      onChange={(event) => setVideoFrameInterval(Number(event.target.value) || 0)}
+                      disabled={isAnyImporting}
+                    />
+                    <span className="block text-xs text-neutral-500">每 {Math.max(1, videoFrameInterval || 30)} 帧取一张</span>
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">文件名前缀</span>
+                    <Input
+                      value={videoFilenamePrefix}
+                      onChange={(event) => setVideoFilenamePrefix(event.target.value)}
+                      placeholder="frame"
+                      disabled={isAnyImporting}
+                    />
+                    <span className="block text-xs text-neutral-500">输出文件名格式：{videoOutputExample}</span>
+                  </label>
+                </div>
+
+                <div className="rounded-[18px] border border-neutral-200 bg-white/75 p-4 dark:border-white/10 dark:bg-black/20">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">输出格式</div>
+                  <div className={`${segmentedGroupClasses} mt-3 w-full`}>
+                    {(["jpg", "png"] as const).map((format) => (
+                      <button
+                        key={format}
+                        type="button"
+                        className={segmentedButtonClasses(videoOutputFormat === format, "flex-1")}
+                        onClick={() => setVideoOutputFormat(format)}
+                        disabled={isAnyImporting}
+                      >
+                        {format.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                  {videoOutputFormat === "jpg" ? (
+                    <label className="mt-4 block space-y-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">
+                        JPEG 质量 {videoJpegQuality}
+                      </span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        value={videoJpegQuality}
+                        onChange={(event) => setVideoJpegQuality(Number(event.target.value) || 0)}
+                        disabled={isAnyImporting}
+                        className="h-2 w-full accent-neutral-900 dark:accent-white"
+                      />
+                    </label>
+                  ) : (
+                    <div className="mt-4 rounded-[14px] border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-white/10">
+                      PNG 会保留无损帧图像，文件体积通常更大。
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
               <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div className="text-sm font-medium text-neutral-900 dark:text-white">本地 ZIP</div>
                 <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
@@ -1131,7 +1270,7 @@ export function DatasetDetailPage() {
                   variant="secondary"
                   className="mt-4 w-full justify-center"
                   onClick={() => archiveInputRef.current?.click()}
-                  disabled={isImporting || isImportingRoboflow}
+                  disabled={isAnyImporting}
                 >
                   <Upload className="mr-2 h-4 w-4" />
                   {isImporting ? "导入中..." : "选择 ZIP"}
@@ -1188,8 +1327,7 @@ export function DatasetDetailPage() {
                   className="mt-4 w-full justify-center"
                   onClick={() => void handleRoboflowImport()}
                   disabled={
-                    isImporting ||
-                    isImportingRoboflow ||
+                    isAnyImporting ||
                     !roboflowApiKey.trim() ||
                     !roboflowWorkspace.trim() ||
                     !roboflowProject.trim() ||

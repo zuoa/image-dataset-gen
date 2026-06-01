@@ -115,7 +115,25 @@ export type DatasetTask = {
   estimatedCost: number;
   spentCost: number;
   apiProvider: string;
-  config: TaskConfig & {
+  config: Partial<TaskConfig> & {
+    source?: "zip" | "video" | "roboflow" | string;
+    sourcePath?: string;
+    video?: {
+      filename: string;
+      frameInterval: number;
+      outputFormat: "jpg" | "png";
+      jpegQuality: number;
+      filenamePrefix: string;
+      totalFrames?: number;
+      expectedFrames?: number;
+      extractedFrames?: number;
+      progressPercent?: number;
+      status?: "running" | "completed" | "failed";
+      error?: string;
+      startedAt?: string;
+      completedAt?: string;
+      updatedAt?: string;
+    };
     augmentation?: {
       multiplier: number;
       methods: AugmentationMethod[];

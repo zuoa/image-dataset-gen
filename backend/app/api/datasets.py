@@ -20,6 +20,7 @@ from app.schemas import (
     RoboflowImportSchema,
     SubjectAssistSchema,
     TaskActionSchema,
+    VideoImportSchema,
 )
 from app.services.annotation_storage import save_annotation_result
 from app.services.dataset_export_service import get_dataset_archive_path
@@ -45,6 +46,15 @@ from app.services.model_profile_service import _resolved_profile_api_key
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.services.roboflow_import_service import RoboflowImportError, import_roboflow_dataset
 from app.services.subject_assist_service import suggest_subject_fields
+from app.services.video_import_service import (
+    DEFAULT_VIDEO_FILENAME_PREFIX,
+    DEFAULT_VIDEO_FRAME_INTERVAL,
+    DEFAULT_VIDEO_JPEG_QUALITY,
+    DEFAULT_VIDEO_OUTPUT_FORMAT,
+    is_allowed_video_filename,
+    sanitize_filename_prefix,
+    save_video_import_source,
+)
 from app.utils.crypto import encrypt_secret
 
 datasets_bp = Blueprint("datasets", __name__)
@@ -228,6 +238,10 @@ def start_dataset_task(dataset_id: str, task_id: str):
         from app.worker_tasks import augment_dataset_task_images
 
         _dispatch_background_task(augment_dataset_task_images, task.id)
+    elif task.task_type == "import" and (task.config_json or {}).get("source") == "video":
+        from app.worker_tasks import extract_dataset_video_frames
+
+        _dispatch_background_task(extract_dataset_video_frames, task.id)
 
     return jsonify({"task": build_dataset_task_payload(task), "dataset": _sync_and_payload(dataset)})
 
@@ -271,6 +285,10 @@ def retry_dataset_task(dataset_id: str, task_id: str):
         from app.worker_tasks import augment_dataset_task_images
 
         _dispatch_background_task(augment_dataset_task_images, task.id)
+    elif task.task_type == "import" and (task.config_json or {}).get("source") == "video":
+        from app.worker_tasks import extract_dataset_video_frames
+
+        _dispatch_background_task(extract_dataset_video_frames, task.id)
 
     return jsonify({"task": build_dataset_task_payload(task), "dataset": _sync_and_payload(dataset)})
 
@@ -388,6 +406,87 @@ def import_dataset_images(dataset_id: str):
             "task": build_dataset_task_payload(task),
             "dataset": build_dataset_payload(dataset),
         }
+    )
+
+
+@datasets_bp.post("/<dataset_id>/tasks/import/video")
+@jwt_required()
+def import_dataset_video(dataset_id: str):
+    user_id = get_jwt_identity()
+    dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    upload = request.files.get("video")
+    if upload is None or not upload.filename:
+        return jsonify({"message": "请上传一个视频文件。"}), 400
+    if not is_allowed_video_filename(upload.filename):
+        return jsonify({"message": "只支持上传 MP4、MOV、AVI、MKV 或 WEBM 视频。"}), 400
+
+    payload = VideoImportSchema().load(request.form.to_dict() or {})
+    frame_interval = int(payload.get("frame_interval") or DEFAULT_VIDEO_FRAME_INTERVAL)
+    output_format = str(payload.get("output_format") or DEFAULT_VIDEO_OUTPUT_FORMAT)
+    jpeg_quality = int(payload.get("jpeg_quality") or DEFAULT_VIDEO_JPEG_QUALITY)
+    filename_prefix = sanitize_filename_prefix(payload.get("filename_prefix") or DEFAULT_VIDEO_FILENAME_PREFIX)
+
+    task = DatasetTask(
+        dataset_id=dataset.id,
+        user_id=user_id,
+        task_type="import",
+        task_name=f"视频抽帧批次 {len(dataset.tasks) + 1}",
+        subject=dataset.name,
+        image_count=0,
+        categories=dataset.categories,
+        config_json={},
+        prompt_json={},
+        status="running",
+        progress_percent=0,
+        api_provider="local",
+        started_at=now_utc(),
+    )
+    db.session.add(task)
+    dataset.tasks.append(task)
+    db.session.flush()
+
+    try:
+        source_path = save_video_import_source(current_app.config["STORAGE_ROOT"], task.id, upload)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Failed to save uploaded video for dataset %s", dataset.id)
+        return jsonify({"message": "视频文件保存失败，请重新上传。"}), 400
+
+    task.config_json = {
+        "source": "video",
+        "sourcePath": source_path,
+        "video": {
+            "filename": Path(upload.filename).name,
+            "frameInterval": frame_interval,
+            "outputFormat": output_format,
+            "jpegQuality": jpeg_quality,
+            "filenamePrefix": filename_prefix,
+            "status": "running",
+            "startedAt": now_utc().isoformat(),
+            "updatedAt": now_utc().isoformat(),
+        },
+    }
+    sync_dataset_stats_inplace(dataset)
+    db.session.commit()
+
+    from app.worker_tasks import extract_dataset_video_frames
+
+    _dispatch_background_task(extract_dataset_video_frames, task.id)
+    dataset = _dataset_for_user(dataset.id, user_id)
+    task = _task_for_dataset(dataset, task.id)
+    return (
+        jsonify(
+            {
+                "summary": {
+                    "importedCount": task.images_generated,
+                    "status": task.status,
+                    "source": "video",
+                },
+                "task": build_dataset_task_payload(task),
+                "dataset": build_dataset_payload(dataset),
+            }
+        ),
+        201,
     )
 
 

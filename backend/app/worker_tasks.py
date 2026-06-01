@@ -18,6 +18,13 @@ from app.services.dataset_service import (
     sync_dataset_task_inplace,
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
+from app.services.video_import_service import (
+    cleanup_video_import_source,
+    expected_extracted_frame_count,
+    iter_video_frames,
+    resolve_video_import_source,
+    video_frame_count,
+)
 from app.utils.crypto import decrypt_secret
 
 
@@ -217,6 +224,154 @@ def augment_dataset_task_images(self, task_id: str) -> None:
     dataset = db.session.get(Dataset, task.dataset_id)
     if dataset is not None:
         _enqueue_auto_annotation_dataset(dataset)
+
+
+@celery.task(bind=True)
+def extract_dataset_video_frames(self, task_id: str) -> None:
+    task = db.session.get(DatasetTask, task_id)
+    if task is None or task.task_type != "import" or (task.config_json or {}).get("source") != "video":
+        return
+    if task.status != "running":
+        return
+
+    dataset = db.session.get(Dataset, task.dataset_id)
+    if dataset is None:
+        return
+
+    config = task.config_json or {}
+    video_config = {**(config.get("video") or {})}
+    source_path_value = str(config.get("sourcePath") or "")
+    storage_root = current_app.config["STORAGE_ROOT"]
+
+    try:
+        source_path = resolve_video_import_source(storage_root, source_path_value)
+        if not source_path.exists():
+            raise RuntimeError("视频源文件不存在，请重新上传。")
+
+        frame_interval = max(1, int(video_config.get("frameInterval", 30)))
+        output_format = "png" if video_config.get("outputFormat") == "png" else "jpg"
+        jpeg_quality = max(1, min(100, int(video_config.get("jpegQuality", 95))))
+        filename_prefix = str(video_config.get("filenamePrefix") or "frame")
+        max_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
+        total_frames = video_frame_count(source_path)
+        expected_count = expected_extracted_frame_count(total_frames, frame_interval, max_images)
+
+        video_config = {
+            **video_config,
+            "totalFrames": total_frames,
+            "expectedFrames": expected_count,
+            "extractedFrames": len(task.images),
+            "status": "running",
+            "updatedAt": now_utc().isoformat(),
+        }
+        task.image_count = expected_count
+        task.config_json = {**config, "video": video_config}
+        sync_dataset_task_inplace(task)
+        sync_dataset_stats_inplace(dataset)
+        db.session.commit()
+
+        existing_count = len(task.images)
+        for extracted in iter_video_frames(
+            source_path,
+            frame_interval=frame_interval,
+            output_format=output_format,
+            jpeg_quality=jpeg_quality,
+            filename_prefix=filename_prefix,
+            max_images=max_images,
+            skip_selected_frames=existing_count,
+        ):
+            task = db.session.get(DatasetTask, task_id)
+            if task is None or task.status != "running":
+                return
+            dataset = db.session.get(Dataset, task.dataset_id)
+            if dataset is None:
+                return
+
+            dataset_ordinal = next_dataset_ordinal(dataset)
+            image_key = f"image-{dataset_ordinal:06d}"
+            save_generated_image(
+                storage_root,
+                dataset.id,
+                image_key,
+                extracted.image_bytes,
+                extracted.mime_type,
+            )
+            image = DatasetImage(
+                dataset_id=dataset.id,
+                source_task_id=task.id,
+                source_type="video",
+                source_ordinal=extracted.source_ordinal,
+                ordinal=dataset_ordinal,
+                status="uploaded",
+                seed=800000 + extracted.source_frame_index,
+                prompt_text=f"video frame: {video_config.get('filename', 'uploaded video')} #{extracted.source_frame_index}",
+                diversity_vars={
+                    "source": "video",
+                    "sourceFrame": str(extracted.source_frame_index),
+                    "outputFilename": extracted.output_filename,
+                },
+                latency_ms=0,
+                preview_svg=preview_data_url(extracted.image_bytes, extracted.mime_type),
+                selected=True,
+                annotation_status="pending",
+                confidence_score=None,
+            )
+            db.session.add(image)
+            dataset.images.append(image)
+            task.images.append(image)
+
+            video_config = {**((task.config_json or {}).get("video") or {})}
+            video_config["extractedFrames"] = len(task.images)
+            video_config["updatedAt"] = now_utc().isoformat()
+            task.config_json = {**(task.config_json or {}), "video": video_config}
+            sync_dataset_task_inplace(task)
+            sync_dataset_stats_inplace(dataset)
+            db.session.commit()
+            _maybe_remove_session(self.request.is_eager)
+
+        task = db.session.get(DatasetTask, task_id)
+        if task is None:
+            return
+        dataset = db.session.get(Dataset, task.dataset_id)
+        if dataset is None:
+            return
+
+        if len(task.images) <= 0:
+            raise RuntimeError("视频中没有可抽取的帧。")
+
+        video_config = {**((task.config_json or {}).get("video") or {})}
+        video_config["status"] = "completed"
+        video_config["extractedFrames"] = len(task.images)
+        video_config["progressPercent"] = 100
+        video_config["completedAt"] = now_utc().isoformat()
+        video_config["updatedAt"] = now_utc().isoformat()
+        task.config_json = {**(task.config_json or {}), "video": video_config}
+        task.image_count = len(task.images)
+        task.status = "completed"
+        task.progress_percent = 100
+        task.completed_at = now_utc()
+        sync_dataset_task_inplace(task)
+        sync_dataset_stats_inplace(dataset)
+        db.session.commit()
+        cleanup_video_import_source(storage_root, source_path_value)
+    except Exception as exc:
+        current_app.logger.exception("Video frame extraction failed for task %s", task_id)
+        task = db.session.get(DatasetTask, task_id)
+        if task is not None:
+            dataset = db.session.get(Dataset, task.dataset_id)
+            video_config = {**((task.config_json or {}).get("video") or {})}
+            video_config["status"] = "failed"
+            video_config["error"] = str(exc)
+            video_config["updatedAt"] = now_utc().isoformat()
+            task.config_json = {**(task.config_json or {}), "video": video_config}
+            task.status = "failed"
+            task.progress_percent = int(task.progress_percent or 0)
+            if dataset is not None:
+                sync_dataset_task_inplace(task)
+                sync_dataset_stats_inplace(dataset)
+            db.session.commit()
+    finally:
+        _maybe_remove_session(self.request.is_eager)
 
 
 @celery.task(bind=True)

@@ -4,6 +4,7 @@ import type {
   AugmentationSettings,
   Dataset,
   DatasetSummary,
+  DatasetTask,
   PromptPreview,
   TaskConfig,
   TrainingJob,
@@ -108,6 +109,30 @@ export function importDatasetImagesArchive(datasetId: string, token: string, arc
   body.append("archive", archive);
   return apiRequestFormData<{ summary: Record<string, unknown>; dataset: Dataset }>(
     `/datasets/${datasetId}/tasks/import`,
+    body,
+    { token, method: "POST" },
+  );
+}
+
+export function importDatasetVideo(
+  datasetId: string,
+  token: string,
+  video: File,
+  settings: {
+    frameInterval: number;
+    outputFormat: "jpg" | "png";
+    jpegQuality: number;
+    filenamePrefix: string;
+  },
+) {
+  const body = new FormData();
+  body.append("video", video);
+  body.append("frame_interval", String(settings.frameInterval));
+  body.append("output_format", settings.outputFormat);
+  body.append("jpeg_quality", String(settings.jpegQuality));
+  body.append("filename_prefix", settings.filenamePrefix);
+  return apiRequestFormData<{ summary: Record<string, unknown>; task: DatasetTask; dataset: Dataset }>(
+    `/datasets/${datasetId}/tasks/import/video`,
     body,
     { token, method: "POST" },
   );

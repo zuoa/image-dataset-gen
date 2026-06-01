@@ -28,6 +28,20 @@ def _transparent_png_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _avi_video_bytes(tmp_path: Path, frame_count: int = 6) -> bytes:
+    import cv2
+    import numpy as np
+
+    video_path = tmp_path / "sample.avi"
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (8, 8))
+    assert writer.isOpened()
+    for index in range(frame_count):
+        frame = np.full((8, 8, 3), (index * 30, 120, 220 - index * 20), dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+    return video_path.read_bytes()
+
+
 def _auth_headers(client, username: str = "dataset-user") -> dict[str, str]:
     register = client.post(
         "/api/v1/auth/register",
@@ -185,6 +199,96 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert image_names
     exported_image = Image.open(BytesIO(archive.read(image_names[0])))
     assert exported_image.mode == "RGBA"
+
+
+def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-import")
+    dataset_id = _create_dataset(client, headers)
+
+    import_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=6)), "sample.avi"),
+            "frame_interval": "2",
+            "output_format": "png",
+            "jpeg_quality": "95",
+            "filename_prefix": "video_frame",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert import_response.status_code == 201
+    payload = import_response.get_json()
+    assert payload["summary"]["importedCount"] == 3
+    assert payload["task"]["taskType"] == "import"
+    assert payload["task"]["status"] == "completed"
+    assert payload["task"]["config"]["source"] == "video"
+    assert payload["task"]["config"]["video"]["frameInterval"] == 2
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 3
+    assert dataset["selectedCount"] == 3
+    assert {image["sourceType"] for image in dataset["images"]} == {"video"}
+    assert dataset["images"][0]["diversityVars"]["outputFilename"] == "video_frame_000000.png"
+
+    second_import_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=6)), "sample-again.avi"),
+            "frame_interval": "2",
+            "output_format": "png",
+            "jpeg_quality": "95",
+            "filename_prefix": "video_frame",
+        },
+        content_type="multipart/form-data",
+    )
+    assert second_import_response.status_code == 201
+
+    export_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/export",
+        headers=headers,
+        json={"export_format": "yolo", "image_format": "keep"},
+    )
+    assert export_response.status_code == 201
+
+    download = client.get(
+        f"/api/v1/datasets/{dataset_id}/exports/1/download",
+        headers=headers,
+    )
+    assert download.status_code == 200
+    archive = zipfile.ZipFile(BytesIO(download.data))
+    image_names = [name for name in archive.namelist() if name.endswith(".png")]
+    label_names = [name for name in archive.namelist() if name.endswith(".txt")]
+    assert len(image_names) == 6
+    assert len(label_names) == 6
+    assert any(name.endswith("video_frame_000000_000001.png") for name in image_names)
+    assert any(name.endswith("video_frame_000000_000004.png") for name in image_names)
+
+
+def test_video_import_rejects_unsupported_file_type(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-invalid")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={"video": (BytesIO(b"not a video"), "sample.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert "只支持上传" in response.get_json()["message"]
 
 
 def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):

@@ -149,8 +149,16 @@ def _build_splits(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
 
 
 def _image_name(dataset_image: DatasetImage, category: str, image_ext: str) -> str:
+    output_filename = (dataset_image.diversity_vars or {}).get("outputFilename")
+    if dataset_image.source_type == "video" and isinstance(output_filename, str) and output_filename.strip():
+        return f"{_safe_filename_stem(Path(output_filename).stem)}_{dataset_image.ordinal:06d}.{image_ext}"
     normalized_category = _slugify(category)
     return f"{normalized_category}_{dataset_image.ordinal:06d}.{image_ext}"
+
+
+def _safe_filename_stem(value: str) -> str:
+    sanitized = "".join(char if char.isalnum() or char in {"_", "-"} else "-" for char in value.strip())
+    return "-".join(filter(None, sanitized.split("-"))) or "frame"
 
 
 def _primary_detection(storage_root: str, dataset: Dataset, dataset_image: DatasetImage) -> dict[str, Any] | None:
