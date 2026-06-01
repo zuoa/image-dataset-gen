@@ -416,7 +416,7 @@ export function DatasetAnnotatePage() {
 
   if (!dataset) {
     return (
-      <div className="flex min-h-[520px] items-center justify-center rounded-[24px] border border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950">
+      <div className="flex min-h-screen items-center justify-center bg-white dark:bg-neutral-950">
         <div className="flex items-center gap-3 text-sm text-neutral-500 dark:text-neutral-400">
           <Loader2 className="h-4 w-4 animate-spin" />
           加载标注工作台...
@@ -427,7 +427,7 @@ export function DatasetAnnotatePage() {
 
   if (images.length === 0) {
     return (
-      <div className="flex min-h-[520px] items-center justify-center rounded-[24px] border border-neutral-200 bg-white p-8 text-center dark:border-white/10 dark:bg-neutral-950">
+      <div className="flex min-h-screen items-center justify-center bg-white p-8 text-center dark:bg-neutral-950">
         <div>
           <ImageOff className="mx-auto h-10 w-10 text-neutral-400" />
           <h2 className="mt-4 text-2xl text-neutral-900 dark:text-white">暂无可标注图片</h2>
@@ -444,58 +444,62 @@ export function DatasetAnnotatePage() {
   }
 
   return (
-    <div className="min-h-[720px] overflow-hidden rounded-[28px] border border-neutral-200 bg-neutral-100 text-neutral-900 shadow-[0_22px_60px_rgba(15,23,42,0.08)] dark:border-white/10 dark:bg-neutral-950 dark:text-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-neutral-950">
-        <div className="flex min-w-0 flex-wrap items-center gap-3">
-          <Link to={`/datasets/${dataset.id}`}>
-            <Button variant="ghost" className="h-9 px-3" title="返回数据集">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-              <PencilRuler className="h-4 w-4" />
-              Annotation Mode
+    <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-neutral-100 text-neutral-900 dark:bg-neutral-950 dark:text-white">
+      <div className="shrink-0 border-b border-neutral-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-neutral-950">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <Link to={`/datasets/${dataset.id}`}>
+              <Button variant="ghost" className="h-9 px-3" title="返回数据集">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </Link>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                <PencilRuler className="h-4 w-4" />
+                Annotation Mode
+              </div>
+              <h2 className="truncate text-lg font-medium text-neutral-900 dark:text-white">{dataset.name}</h2>
             </div>
-            <h2 className="truncate text-lg font-medium text-neutral-900 dark:text-white">{dataset.name}</h2>
+            <Badge>{processedCount} / {images.length}</Badge>
+            {hasAnnotationChanges ? (
+              <Badge>未保存</Badge>
+            ) : activeImage && !isProcessed(activeImage.annotationStatus) ? (
+              <Badge>待确认</Badge>
+            ) : (
+              <Badge>已同步</Badge>
+            )}
           </div>
-          <Badge>{processedCount} / {images.length}</Badge>
-          {hasAnnotationChanges ? (
-            <Badge>未保存</Badge>
-          ) : activeImage && !isProcessed(activeImage.annotationStatus) ? (
-            <Badge>待确认</Badge>
-          ) : (
-            <Badge>已同步</Badge>
-          )}
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {actionError ? <span className="max-w-[280px] truncate text-sm text-red-600 dark:text-red-300">{actionError}</span> : null}
-          <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(-1)} disabled={activeIndex <= 0}>
-            <ChevronLeft className="mr-1.5 h-4 w-4" />
-            上一张
-          </Button>
-          <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(1)} disabled={activeIndex >= images.length - 1}>
-            下一张
-            <ChevronRight className="ml-1.5 h-4 w-4" />
-          </Button>
-          <Button onClick={() => void saveAnnotations()} disabled={isSaving || !canSave}>
-            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-            保存
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {actionError ? <span className="max-w-[280px] truncate text-sm text-red-600 dark:text-red-300">{actionError}</span> : null}
+            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(-1)} disabled={activeIndex <= 0}>
+              <ChevronLeft className="mr-1.5 h-4 w-4" />
+              上一张
+            </Button>
+            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(1)} disabled={activeIndex >= images.length - 1}>
+              下一张
+              <ChevronRight className="ml-1.5 h-4 w-4" />
+            </Button>
+            <Button onClick={() => void saveAnnotations()} disabled={isSaving || !canSave}>
+              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              保存
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="grid min-h-[calc(100vh-12rem)] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-        <aside className="border-b border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-b-0 xl:border-r">
-          <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-white/10">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</div>
-              <div className="text-sm text-neutral-900 dark:text-white">{images.length} 张样本</div>
+      <div className="grid min-h-0 flex-1 overflow-hidden xl:grid-cols-[300px_minmax(0,1fr)_390px]">
+        <aside className="flex min-h-0 flex-col border-b border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-b-0 xl:border-r">
+          <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</div>
+                <div className="text-sm text-neutral-900 dark:text-white">{images.length} 张样本</div>
+              </div>
+              <CheckCircle2 className="h-5 w-5 text-neutral-400" />
             </div>
-            <CheckCircle2 className="h-5 w-5 text-neutral-400" />
           </div>
-          <div className="max-h-[260px] space-y-2 overflow-y-auto p-3 xl:max-h-[calc(100vh-16rem)]">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {images.map((image, index) => {
               const active = image.id === activeImage?.id;
               return (
@@ -530,8 +534,8 @@ export function DatasetAnnotatePage() {
           </div>
         </aside>
 
-        <main className="flex min-h-[560px] flex-col bg-neutral-950">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
+        <main className="flex min-h-0 flex-col bg-neutral-950">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
             <div className="flex min-w-0 items-center gap-3">
               <MousePointer2 className="h-4 w-4 text-neutral-400" />
               <div className="min-w-0">
@@ -555,7 +559,7 @@ export function DatasetAnnotatePage() {
             </div>
           </div>
 
-          <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-4">
+          <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-5">
             {activeImage && imageViewport && imageViewport.width > 0 && imageViewport.height > 0 ? (
               <div
                 ref={viewportRef}
@@ -635,8 +639,8 @@ export function DatasetAnnotatePage() {
           </div>
         </main>
 
-        <aside className="border-t border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-l xl:border-t-0">
-          <div className="border-b border-neutral-200 px-4 py-4 dark:border-white/10">
+        <aside className="flex min-h-0 flex-col border-t border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-l xl:border-t-0">
+          <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
             <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Categories</div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               {(categories.length > 0 ? categories : ["object"]).map((category, index) => {
@@ -666,7 +670,7 @@ export function DatasetAnnotatePage() {
             </div>
           </div>
 
-          <div className="border-b border-neutral-200 px-4 py-4 dark:border-white/10">
+          <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Current Image</div>
@@ -677,7 +681,7 @@ export function DatasetAnnotatePage() {
             <p className="mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">{activeImage?.promptText}</p>
           </div>
 
-          <div className="max-h-[420px] overflow-y-auto p-4 xl:max-h-[calc(100vh-30rem)]">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Annotations</div>

@@ -50,6 +50,14 @@ export default function App() {
       <Routes>
         <Route path="/auth" element={<AuthPage />} />
         <Route
+          path="/datasets/:datasetId/annotate"
+          element={
+            <ProtectedRoute>
+              <DatasetAnnotatePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/"
           element={
             <ProtectedRoute>
@@ -61,7 +69,6 @@ export default function App() {
           <Route index element={<DatasetListPage />} />
           <Route path="datasets/new" element={<DatasetCreatePage />} />
           <Route path="datasets/:datasetId" element={<DatasetDetailPage />} />
-          <Route path="datasets/:datasetId/annotate" element={<DatasetAnnotatePage />} />
           <Route path="datasets/:datasetId/generate" element={<GenerationTaskPage />} />
         </Route>
       </Routes>

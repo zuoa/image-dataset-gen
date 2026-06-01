@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,12 @@ class BackendClient:
         response.raise_for_status()
         return response.json().get("job")
 
+    def dataset_download_url(self, job_id: str) -> str:
+        return f"{self.base_url}/training/jobs/{job_id}/dataset.zip"
+
+    def download_job_dataset(self, job_id: str, output_path: Path) -> None:
+        self.download_dataset(self.dataset_download_url(job_id), output_path)
+
     def update_status(
         self,
         job_id: str,
@@ -68,12 +75,27 @@ class BackendClient:
 
     def download_dataset(self, url: str, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        status_code = 0
+        content_type = ""
+        bytes_written = 0
         with self.session.get(url, stream=True, timeout=self.timeout) as response:
+            status_code = response.status_code
+            content_type = response.headers.get("content-type", "")
             response.raise_for_status()
             with output_path.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         handle.write(chunk)
+                        bytes_written += len(chunk)
+
+        if not zipfile.is_zipfile(output_path):
+            with output_path.open("rb") as handle:
+                prefix = handle.read(160)
+            raise RuntimeError(
+                "downloaded dataset is not a zip file "
+                f"(url={url}, status={status_code}, content_type={content_type or 'unknown'}, "
+                f"size_bytes={bytes_written}, first_bytes={prefix!r})"
+            )
 
     def upload_artifact(self, job_id: str, artifact_type: str, path: Path) -> None:
         with path.open("rb") as handle:

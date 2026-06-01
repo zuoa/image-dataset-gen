@@ -71,13 +71,12 @@ def main() -> None:
 
 def _run_job(client: BackendClient, job: dict[str, Any], work_root: Path) -> None:
     job_id = str(job["id"])
-    dataset_url = str(job["datasetDownloadUrl"])
     job_root = work_root / job_id
     dataset_zip = job_root / "dataset.zip"
     job_root.mkdir(parents=True, exist_ok=True)
 
     client.update_status(job_id, "preparing", progress_percent=1)
-    client.download_dataset(dataset_url, dataset_zip)
+    client.download_job_dataset(job_id, dataset_zip)
 
     def report_progress(percent: int) -> None:
         client.update_status(job_id, "running", progress_percent=percent)
