@@ -92,15 +92,21 @@ JWT 说明：
 - `GET /api/v1/datasets/:id/training-jobs`
 - `GET /api/v1/datasets/:id/training-jobs/:jobId`
 - `GET /api/v1/datasets/:id/training-jobs/:jobId/artifacts/:artifactId/download`
+- `POST /api/v1/datasets/:id/training-jobs/:jobId/test`
+- `GET /api/v1/datasets/:id/training-jobs/:jobId/tests/:testId`
 
 训练 worker API 使用 `X-Training-Worker-Token: <TRAINING_WORKER_TOKEN>`：
 
 - `POST /api/v1/training/workers/register`
 - `POST /api/v1/training/workers/:workerId/heartbeat`
 - `POST /api/v1/training/workers/:workerId/poll`
+- `POST /api/v1/training/workers/:workerId/inference/poll`
 - `GET /api/v1/training/jobs/:jobId/dataset.zip`
 - `PATCH /api/v1/training/jobs/:jobId/status`
 - `POST /api/v1/training/jobs/:jobId/artifacts`
+- `GET /api/v1/training/inference-jobs/:testId/model`
+- `GET /api/v1/training/inference-jobs/:testId/image`
+- `PATCH /api/v1/training/workers/:workerId/inference-jobs/:testId/status`
 
 Gemini 生成说明：
 
@@ -129,7 +135,7 @@ Roboflow 导入说明：
 - 数据集创建页支持先定义长期信息，再在详情页内管理批次
 - 生成批次页支持实时 Prompt 预览
 - 数据集详情页统一串联导入、增强、标注、导出与批次追踪
-- 数据集详情页支持创建 YOLOv8 检测训练作业、查看进度、指标和下载模型产物
+- 数据集详情页通过“训练”按钮打开 YOLOv8 检测训练面板，支持创建训练作业、查看进度、指标、下载模型产物，以及上传单张图片测试模型并查看带框结果图
 - 下载动作通过带 token 的 blob 流方式完成，适配跨端口部署
 
 ## 训练 worker
@@ -141,6 +147,7 @@ Roboflow 导入说明：
 3. GPU 服务器上的 `trainer` 服务用共享 `TRAINING_WORKER_TOKEN` 注册到后端。
 4. worker 轮询任务，下载 ZIP，执行 Ultralytics 训练。
 5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
+6. 页面上传图片测试训练结果时，后端创建测试任务；已注册的 trainer worker 继续通过轮询领取测试任务，下载模型产物和测试图片，执行推理后上传检测结果，后端渲染带框结果图。
 
 训练作业默认使用 `epochs=200`、`patience=50`、`dropout=0.1`、`mixup=0.15`、`weight_decay=0.001`；可在创建作业时用 `classes` 选择类别索引，worker 会在训练时传给 Ultralytics 做类别过滤。
 

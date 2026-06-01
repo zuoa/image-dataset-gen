@@ -119,3 +119,21 @@ export async function downloadWithToken(path: string, token: string, filename: s
   anchor.remove();
   URL.revokeObjectURL(blobUrl);
 }
+
+export async function fetchTextWithToken(path: string, token: string) {
+  const response = await fetch(resolveApiUrl(path), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    const errorMessage = await parseErrorMessage(response);
+    if (response.status === 401) {
+      notifyAuthExpired(errorMessage || sessionExpiredMessage);
+      throw new Error(errorMessage || sessionExpiredMessage);
+    }
+    throw new Error(errorMessage || `Request failed with ${response.status}`);
+  }
+
+  return response.text();
+}

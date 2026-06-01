@@ -45,6 +45,15 @@ class BackendClient:
         response.raise_for_status()
         return response.json().get("job")
 
+    def poll_inference(self, worker_id: str) -> dict[str, Any] | None:
+        response = self.session.post(
+            f"{self.base_url}/training/workers/{worker_id}/inference/poll",
+            json={},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json().get("test")
+
     def dataset_download_url(self, job_id: str) -> str:
         return f"{self.base_url}/training/jobs/{job_id}/dataset.zip"
 
@@ -72,6 +81,35 @@ class BackendClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
+
+    def update_inference_status(
+        self,
+        worker_id: str,
+        test_id: str,
+        status: str,
+        detections: list[dict[str, Any]] | None = None,
+        error: str = "",
+    ) -> None:
+        payload: dict[str, Any] = {"status": status}
+        if detections is not None:
+            payload["detections"] = detections
+        if error:
+            payload["error"] = error[:2000]
+        response = self.session.patch(
+            f"{self.base_url}/training/workers/{worker_id}/inference-jobs/{test_id}/status",
+            json=payload,
+            timeout=max(self.timeout, 120),
+        )
+        response.raise_for_status()
+
+    def download_file(self, url: str, output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.session.get(url, stream=True, timeout=self.timeout) as response:
+            response.raise_for_status()
+            with output_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
 
     def download_dataset(self, url: str, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)

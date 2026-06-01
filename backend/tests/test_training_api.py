@@ -7,7 +7,7 @@ from PIL import Image
 from app import create_app
 from app.config import TestConfig
 from app.extensions import db
-from app.models import DatasetImage, TrainingArtifact, TrainingJob, TrainingWorker
+from app.models import DatasetImage, TrainingArtifact, TrainingInferenceJob, TrainingJob, TrainingWorker
 from app.services.image_storage import save_generated_image
 
 
@@ -221,6 +221,145 @@ def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Pat
         assert stored_job is not None and stored_job.status == "completed"
         assert stored_worker is not None and stored_worker.status == "idle"
         assert stored_artifact is not None and Path(stored_artifact.storage_path).exists()
+
+
+def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-test")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    job_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolov8n.pt", "epochs": 1, "image_size": 320, "batch_size": 1},
+    )
+    job = job_response.get_json()["job"]
+    artifact_response = client.post(
+        f"/api/v1/training/jobs/{job['id']}/artifacts",
+        headers=_worker_headers(),
+        data={"artifact_type": "best_model", "artifact": (BytesIO(b"model-weights"), "best.pt")},
+        content_type="multipart/form-data",
+    )
+    artifact_id = artifact_response.get_json()["artifact"]["id"]
+    client.patch(
+        f"/api/v1/training/jobs/{job['id']}/status",
+        headers=_worker_headers(),
+        json={"status": "completed", "metrics": {"mAP50": 0.5}},
+    )
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs/{job['id']}/test",
+        headers=headers,
+        data={
+            "artifact_id": artifact_id,
+            "confidence_threshold": "0.4",
+            "image_size": "512",
+            "image": (BytesIO(_png_bytes()), "sample.png"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    test_job = response.get_json()["test"]
+    assert test_job["status"] == "queued"
+    assert test_job["artifact"]["id"] == artifact_id
+    assert test_job["confidenceThreshold"] == 0.4
+    assert test_job["imageSize"] == 512
+
+    client.post(
+        "/api/v1/training/workers/register",
+        headers=_worker_headers(),
+        json={"worker_id": "gpu-1", "name": "GPU 1", "capabilities": {"frameworks": ["yolov8"]}},
+    )
+    poll = client.post("/api/v1/training/workers/gpu-1/inference/poll", headers=_worker_headers(), json={})
+    assert poll.status_code == 200
+    assigned = poll.get_json()["test"]
+    assert assigned["id"] == test_job["id"]
+    assert assigned["modelDownloadUrl"].endswith(f"/api/v1/training/inference-jobs/{test_job['id']}/model")
+    assert assigned["imageDownloadUrl"].endswith(f"/api/v1/training/inference-jobs/{test_job['id']}/image")
+    assert assigned["categories"] == ["widget"]
+
+    model_download = client.get(
+        f"/api/v1/training/inference-jobs/{test_job['id']}/model",
+        headers=_worker_headers(),
+    )
+    assert model_download.status_code == 200
+    assert model_download.data == b"model-weights"
+
+    image_download = client.get(
+        f"/api/v1/training/inference-jobs/{test_job['id']}/image",
+        headers=_worker_headers(),
+    )
+    assert image_download.status_code == 200
+    assert image_download.data
+
+    running = client.patch(
+        f"/api/v1/training/workers/gpu-1/inference-jobs/{test_job['id']}/status",
+        headers=_worker_headers(),
+        json={"status": "running"},
+    )
+    assert running.status_code == 200
+    assert running.get_json()["test"]["status"] == "running"
+
+    completed = client.patch(
+        f"/api/v1/training/workers/gpu-1/inference-jobs/{test_job['id']}/status",
+        headers=_worker_headers(),
+        json={
+            "status": "completed",
+            "detections": [
+                {"category": "widget", "classId": 0, "confidence": 0.91, "bbox": [0.5, 0.5, 0.5, 0.5]}
+            ],
+        },
+    )
+    assert completed.status_code == 200
+    completed_test = completed.get_json()["test"]
+    assert completed_test["status"] == "completed"
+    assert completed_test["result"]["detections"][0]["category"] == "widget"
+    assert completed_test["result"]["annotatedImage"].startswith("data:image/jpeg;base64,")
+
+    result_response = client.get(
+        f"/api/v1/datasets/{dataset_id}/training-jobs/{job['id']}/tests/{test_job['id']}",
+        headers=headers,
+    )
+    assert result_response.status_code == 200
+    assert result_response.get_json()["test"]["result"]["artifact"]["id"] == artifact_id
+
+    with app.app_context():
+        stored_test = db.session.get(TrainingInferenceJob, test_job["id"])
+        assert stored_test is not None and stored_test.status == "completed"
+        assert Path(stored_test.result_storage_path).exists()
+
+
+def test_training_model_test_requires_completed_job(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-test-not-ready")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    job_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolov8n.pt", "epochs": 1, "image_size": 320, "batch_size": 1},
+    )
+    job = job_response.get_json()["job"]
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs/{job['id']}/test",
+        headers=headers,
+        data={"image": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 409
 
 
 def test_training_worker_requires_shared_token(tmp_path: Path):

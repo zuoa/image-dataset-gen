@@ -19,6 +19,8 @@ import {
   updateDatasetSelection,
 } from "../api/datasets";
 import { AuthImage } from "../components/AuthImage";
+import { TrainingModelTestPanel } from "../components/TrainingModelTestPanel";
+import { TrainingResultsPanel } from "../components/TrainingResultsPanel";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -179,6 +181,7 @@ export function DatasetDetailPage() {
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [isAddingDetection, setIsAddingDetection] = useState(false);
   const [isTasksExpanded, setIsTasksExpanded] = useState(false);
+  const [isTrainingPanelOpen, setIsTrainingPanelOpen] = useState(false);
   const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
   const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
@@ -858,6 +861,18 @@ export function DatasetDetailPage() {
               </Button>
               <Button
                 variant="secondary"
+                onClick={() => setIsTrainingPanelOpen(true)}
+              >
+                <Cpu className="mr-2 h-4 w-4" />
+                训练
+                {latestTrainingJob ? (
+                  <span className="ml-1.5 text-xs text-neutral-400">
+                    {trainingRunning ? "运行中" : trainingStatusLabel(latestTrainingJob.status)}
+                  </span>
+                ) : null}
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={() => setIsTasksDrawerOpen(true)}
               >
                 <ClipboardList className="mr-2 h-4 w-4" />
@@ -908,6 +923,7 @@ export function DatasetDetailPage() {
         </SectionCard>
       ) : null}
 
+      {isTrainingPanelOpen ? (
       <SectionCard>
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div>
@@ -919,7 +935,17 @@ export function DatasetDetailPage() {
                 </div>
                 <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">训练 worker</h3>
               </div>
-              <Badge>{trainingRunning ? "运行中" : latestTrainingJob ? trainingStatusLabel(latestTrainingJob.status) : "待训练"}</Badge>
+              <div className="flex items-center gap-2">
+                <Badge>{trainingRunning ? "运行中" : latestTrainingJob ? trainingStatusLabel(latestTrainingJob.status) : "待训练"}</Badge>
+                <button
+                  type="button"
+                  onClick={() => setIsTrainingPanelOpen(false)}
+                  className="rounded-full p-1 hover:bg-neutral-100 dark:hover:bg-white/10"
+                  aria-label="关闭训练面板"
+                >
+                  <X className="h-5 w-5 text-neutral-500" />
+                </button>
+              </div>
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -1100,7 +1126,15 @@ export function DatasetDetailPage() {
             )}
           </div>
         </div>
+
+        {latestTrainingJob ? (
+          <>
+            <TrainingResultsPanel job={latestTrainingJob} token={token} />
+            <TrainingModelTestPanel job={latestTrainingJob} token={token} />
+          </>
+        ) : null}
       </SectionCard>
+      ) : null}
 
       {/* Batch Tasks Drawer */}
       {isTasksDrawerOpen ? (

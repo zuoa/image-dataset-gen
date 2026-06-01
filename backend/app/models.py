@@ -189,6 +189,7 @@ class TrainingWorker(TimestampMixin, db.Model):
     current_job_id = db.Column(db.String(36), nullable=True, index=True)
 
     jobs = db.relationship("TrainingJob", back_populates="worker")
+    inference_jobs = db.relationship("TrainingInferenceJob", back_populates="worker")
 
 
 class TrainingJob(TimestampMixin, db.Model):
@@ -216,6 +217,12 @@ class TrainingJob(TimestampMixin, db.Model):
         cascade="all, delete-orphan",
         order_by="TrainingArtifact.created_at.asc()",
     )
+    inference_jobs = db.relationship(
+        "TrainingInferenceJob",
+        back_populates="training_job",
+        cascade="all, delete-orphan",
+        order_by="TrainingInferenceJob.created_at.desc()",
+    )
 
 
 class TrainingArtifact(TimestampMixin, db.Model):
@@ -229,3 +236,33 @@ class TrainingArtifact(TimestampMixin, db.Model):
     size_bytes = db.Column(db.Integer, nullable=False, default=0)
 
     job = db.relationship("TrainingJob", back_populates="artifacts")
+    inference_jobs = db.relationship("TrainingInferenceJob", back_populates="artifact")
+
+
+class TrainingInferenceJob(TimestampMixin, db.Model):
+    __tablename__ = "training_inference_jobs"
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    training_job_id = db.Column(db.String(36), db.ForeignKey("training_jobs.id"), nullable=False, index=True)
+    dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
+    artifact_id = db.Column(db.String(36), db.ForeignKey("training_artifacts.id"), nullable=False, index=True)
+    worker_id = db.Column(db.String(64), db.ForeignKey("training_workers.id"), nullable=True, index=True)
+    status = db.Column(db.String(32), nullable=False, default="queued", index=True)
+    confidence_threshold = db.Column(db.Float, nullable=False, default=0.25)
+    image_size = db.Column(db.Integer, nullable=False, default=640)
+    input_filename = db.Column(db.String(255), nullable=False, default="")
+    input_mime_type = db.Column(db.String(64), nullable=False, default="image/jpeg")
+    input_storage_path = db.Column(db.String(512), nullable=False, default="")
+    input_width = db.Column(db.Integer, nullable=False, default=0)
+    input_height = db.Column(db.Integer, nullable=False, default=0)
+    result_mime_type = db.Column(db.String(64), nullable=False, default="")
+    result_storage_path = db.Column(db.String(512), nullable=False, default="")
+    detections_json = db.Column(db.JSON, nullable=False, default=list)
+    error_message = db.Column(db.Text, nullable=False, default="")
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    training_job = db.relationship("TrainingJob", back_populates="inference_jobs")
+    artifact = db.relationship("TrainingArtifact", back_populates="inference_jobs")
+    worker = db.relationship("TrainingWorker", back_populates="inference_jobs")

@@ -92,6 +92,26 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     return {"metrics": metrics, "artifacts": artifacts}
 
 
+def predict_yolov8(
+    model_path: Path,
+    image_path: Path,
+    *,
+    categories: list[str] | None = None,
+    confidence_threshold: float = 0.25,
+    image_size: int = 640,
+) -> dict[str, Any]:
+    from ultralytics import YOLO
+
+    model = _load_model(YOLO, str(model_path))
+    results = model.predict(
+        source=str(image_path),
+        conf=confidence_threshold,
+        imgsz=image_size,
+        verbose=False,
+    )
+    return {"detections": _detections_from_ultralytics_results(results, categories or [])}
+
+
 def _find_data_yaml(dataset_root: Path) -> Path:
     matches = sorted(dataset_root.rglob("data.yaml"))
     if not matches:
@@ -321,3 +341,58 @@ def _collect_artifacts(run_dir: Path, metrics_path: Path) -> list[tuple[str, Pat
     if metrics_path.exists():
         candidates.append(("metrics", metrics_path))
     return candidates
+
+
+def _detections_from_ultralytics_results(results: object, categories: list[str]) -> list[dict[str, Any]]:
+    result_list = list(results or [])
+    if not result_list:
+        return []
+    result = result_list[0]
+    boxes = getattr(result, "boxes", None)
+    if boxes is None:
+        return []
+
+    xywhn_values = _to_plain_list(getattr(boxes, "xywhn", []))
+    confidence_values = _to_plain_list(getattr(boxes, "conf", []))
+    class_values = _to_plain_list(getattr(boxes, "cls", []))
+    names = getattr(result, "names", {}) or {}
+
+    detections: list[dict[str, Any]] = []
+    for index, bbox in enumerate(xywhn_values):
+        class_id = int(class_values[index]) if index < len(class_values) else -1
+        confidence = float(confidence_values[index]) if index < len(confidence_values) else 0.0
+        detections.append(
+            {
+                "category": _category_name(class_id, categories, names),
+                "classId": class_id,
+                "confidence": round(confidence, 6),
+                "bbox": [_clamp(float(value)) for value in list(bbox)[:4]],
+            }
+        )
+    return detections
+
+
+def _category_name(class_id: int, categories: list[str], names: object) -> str:
+    if 0 <= class_id < len(categories):
+        return str(categories[class_id])
+    if isinstance(names, dict):
+        value = names.get(class_id) or names.get(str(class_id))
+        if value:
+            return str(value)
+    return f"class_{class_id}" if class_id >= 0 else "object"
+
+
+def _to_plain_list(value: object) -> list:
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    if value is None:
+        return []
+    return list(value)  # type: ignore[arg-type]
+
+
+def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    return min(max(value, minimum), maximum)

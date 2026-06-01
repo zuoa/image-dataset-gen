@@ -7,6 +7,7 @@ import type {
   DatasetTask,
   PromptPreview,
   TaskConfig,
+  TrainingInferenceTest,
   TrainingJob,
 } from "../lib/types";
 
@@ -226,6 +227,38 @@ export function deleteTrainingJob(datasetId: string, jobId: string, token: strin
     method: "DELETE",
     token,
   });
+}
+
+export function createTrainingInferenceTest(
+  datasetId: string,
+  jobId: string,
+  token: string,
+  payload: {
+    image: File;
+    artifactId?: string;
+    confidenceThreshold: number;
+    imageSize: number;
+  },
+) {
+  const body = new FormData();
+  body.append("image", payload.image);
+  body.append("confidence_threshold", String(payload.confidenceThreshold));
+  body.append("image_size", String(payload.imageSize));
+  if (payload.artifactId) {
+    body.append("artifact_id", payload.artifactId);
+  }
+  return apiRequestFormData<{ test: TrainingInferenceTest }>(
+    `/datasets/${datasetId}/training-jobs/${jobId}/test`,
+    body,
+    { token, method: "POST" },
+  );
+}
+
+export function getTrainingInferenceTest(datasetId: string, jobId: string, testId: string, token: string) {
+  return apiRequest<{ test: TrainingInferenceTest }>(
+    `/datasets/${datasetId}/training-jobs/${jobId}/tests/${testId}`,
+    { token },
+  );
 }
 
 export function updateDatasetSelection(

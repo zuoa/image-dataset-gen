@@ -233,6 +233,54 @@ export type TrainingJob = {
   completedAt?: string | null;
 };
 
+export type TrainingInferenceResult = {
+  artifact: {
+    id: string;
+    type: string;
+    filename: string;
+  };
+  image: {
+    width: number;
+    height: number;
+  };
+  confidenceThreshold: number;
+  imageSize: number;
+  detections: Array<{
+    category: string;
+    classId: number;
+    confidence: number;
+    bbox: [number, number, number, number];
+  }>;
+  annotatedImage: string;
+};
+
+export type TrainingInferenceTest = {
+  id: string;
+  trainingJobId: string;
+  datasetId: string;
+  artifact: {
+    id: string;
+    type: string;
+    filename: string;
+  };
+  workerId?: string | null;
+  status: "queued" | "assigned" | "running" | "completed" | "failed" | string;
+  confidenceThreshold: number;
+  imageSize: number;
+  image: {
+    filename: string;
+    width: number;
+    height: number;
+  };
+  detections: TrainingInferenceResult["detections"];
+  error: string;
+  result?: TrainingInferenceResult | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
 export type Dataset = {
   id: string;
   name: string;

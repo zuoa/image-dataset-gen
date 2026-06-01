@@ -10,7 +10,7 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from app.extensions import db
-from app.models import Dataset, DatasetExport, TrainingArtifact, TrainingJob, TrainingWorker
+from app.models import Dataset, DatasetExport, TrainingArtifact, TrainingInferenceJob, TrainingJob, TrainingWorker
 from app.schemas import (
     TrainingJobSchema,
     TrainingJobStatusSchema,
@@ -25,10 +25,18 @@ from app.services.dataset_service import (
     now_utc,
     sync_dataset,
 )
+from app.services.training_inference_service import (
+    TrainingInferenceError,
+    build_training_inference_payload,
+    complete_training_inference_job,
+    create_training_inference_job,
+    fail_training_inference_job,
+)
 
 training_bp = Blueprint("training", __name__)
 
 ACTIVE_JOB_STATUSES = {"assigned", "preparing", "running", "uploading"}
+ACTIVE_INFERENCE_STATUSES = {"assigned", "running"}
 
 
 def _dispatch_background_task(task_callable, *args: object) -> None:
@@ -63,6 +71,25 @@ def _require_worker_token() -> tuple[dict[str, str], int] | None:
 
 def _artifact_root(job_id: str) -> Path:
     return Path(current_app.config["STORAGE_ROOT"]) / "training" / job_id
+
+
+def _inference_download_url(test_job: TrainingInferenceJob, kind: str) -> str:
+    return (
+        f"{request.url_root.rstrip('/')}{current_app.config['API_PREFIX']}"
+        f"/training/inference-jobs/{test_job.id}/{kind}"
+    )
+
+
+def _build_training_inference_assignment(test_job: TrainingInferenceJob) -> dict[str, Any]:
+    payload = build_training_inference_payload(test_job)
+    payload.update(
+        {
+            "modelDownloadUrl": _inference_download_url(test_job, "model"),
+            "imageDownloadUrl": _inference_download_url(test_job, "image"),
+            "categories": test_job.training_job.dataset.categories if test_job.training_job and test_job.training_job.dataset else [],
+        }
+    )
+    return payload
 
 
 def _artifact_download_url(job: TrainingJob, artifact: TrainingArtifact) -> str:
@@ -224,6 +251,55 @@ def download_training_artifact(dataset_id: str, job_id: str, artifact_id: str):
     )
 
 
+@training_bp.post("/datasets/<dataset_id>/training-jobs/<job_id>/test")
+@jwt_required()
+def test_training_job_model(dataset_id: str, job_id: str):
+    user_id = get_jwt_identity()
+    _dataset_for_user(dataset_id, user_id)
+    job = TrainingJob.query.filter_by(id=job_id, dataset_id=dataset_id, user_id=user_id).first_or_404()
+    if job.status != "completed":
+        return jsonify({"message": "训练完成后才能测试模型。"}), 409
+
+    uploaded: FileStorage | None = request.files.get("image")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"message": "请上传一张测试图片。"}), 400
+
+    image_bytes = uploaded.read()
+    if not image_bytes:
+        return jsonify({"message": "上传的测试图片为空。"}), 400
+
+    try:
+        confidence_threshold = _bounded_form_float("confidence_threshold", default=0.25, minimum=0.01, maximum=1.0)
+        image_size = _bounded_form_int("image_size", default=640, minimum=64, maximum=2048)
+        test_job = create_training_inference_job(
+            job,
+            image_bytes,
+            filename=uploaded.filename,
+            artifact_id=(request.form.get("artifact_id") or "").strip(),
+            confidence_threshold=confidence_threshold,
+            image_size=image_size,
+        )
+    except TrainingInferenceError as exc:
+        return jsonify({"message": str(exc)}), exc.status_code
+
+    db.session.commit()
+    return jsonify({"test": build_training_inference_payload(test_job)}), 201
+
+
+@training_bp.get("/datasets/<dataset_id>/training-jobs/<job_id>/tests/<test_id>")
+@jwt_required()
+def get_training_inference_job(dataset_id: str, job_id: str, test_id: str):
+    user_id = get_jwt_identity()
+    _dataset_for_user(dataset_id, user_id)
+    test_job = TrainingInferenceJob.query.filter_by(
+        id=test_id,
+        training_job_id=job_id,
+        dataset_id=dataset_id,
+        user_id=user_id,
+    ).first_or_404()
+    return jsonify({"test": build_training_inference_payload(test_job)})
+
+
 @training_bp.delete("/datasets/<dataset_id>/training-jobs/<job_id>")
 @jwt_required()
 def delete_training_job(dataset_id: str, job_id: str):
@@ -240,6 +316,32 @@ def delete_training_job(dataset_id: str, job_id: str):
     db.session.delete(job)
     db.session.commit()
     return jsonify({"deletedJobId": deleted_job_id, "dataset": build_dataset_payload(sync_dataset(dataset))})
+
+
+def _bounded_form_float(name: str, *, default: float, minimum: float, maximum: float) -> float:
+    raw_value = request.form.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise TrainingInferenceError(f"{name} must be a number", 422) from exc
+    if value < minimum or value > maximum:
+        raise TrainingInferenceError(f"{name} must be between {minimum} and {maximum}", 422)
+    return value
+
+
+def _bounded_form_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw_value = request.form.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise TrainingInferenceError(f"{name} must be an integer", 422) from exc
+    if value < minimum or value > maximum:
+        raise TrainingInferenceError(f"{name} must be between {minimum} and {maximum}", 422)
+    return value
 
 
 @training_bp.post("/training/workers/register")
@@ -326,6 +428,138 @@ def poll_training_job(worker_id: str):
     worker.status = "idle"
     db.session.commit()
     return jsonify({"job": None})
+
+
+@training_bp.post("/training/workers/<worker_id>/inference/poll")
+def poll_training_inference_job(worker_id: str):
+    token_error = _require_worker_token()
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+
+    worker = db.session.get(TrainingWorker, worker_id)
+    if worker is None:
+        return jsonify({"message": "worker not registered"}), 404
+
+    worker.last_heartbeat_at = now_utc()
+    if worker.current_job_id:
+        active_job = db.session.get(TrainingJob, worker.current_job_id)
+        if active_job is not None and active_job.status in ACTIVE_JOB_STATUSES:
+            worker.status = "busy"
+            db.session.commit()
+            return jsonify({"test": None})
+        worker.current_job_id = None
+
+    active_test = (
+        TrainingInferenceJob.query.filter_by(worker_id=worker.id)
+        .filter(TrainingInferenceJob.status.in_(ACTIVE_INFERENCE_STATUSES))
+        .order_by(TrainingInferenceJob.created_at.asc())
+        .first()
+    )
+    if active_test is not None:
+        worker.status = "busy"
+        db.session.commit()
+        return jsonify({"test": _build_training_inference_assignment(active_test)})
+
+    queued_test = (
+        TrainingInferenceJob.query.filter_by(status="queued")
+        .order_by(TrainingInferenceJob.created_at.asc())
+        .first()
+    )
+    if queued_test is None:
+        worker.status = "idle"
+        db.session.commit()
+        return jsonify({"test": None})
+
+    queued_test.status = "assigned"
+    queued_test.worker_id = worker.id
+    worker.status = "busy"
+    db.session.commit()
+    return jsonify({"test": _build_training_inference_assignment(queued_test)})
+
+
+@training_bp.get("/training/inference-jobs/<test_id>/model")
+def download_training_inference_model(test_id: str):
+    token_error = _require_worker_token()
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+
+    test_job = db.session.get(TrainingInferenceJob, test_id)
+    if test_job is None:
+        return jsonify({"message": "test job not found"}), 404
+    artifact = test_job.artifact
+    if artifact is None:
+        return jsonify({"message": "model artifact not found"}), 404
+    artifact_path = Path(artifact.storage_path)
+    if not artifact_path.exists():
+        return jsonify({"message": "model artifact file not found"}), 409
+    return send_file(
+        artifact_path,
+        as_attachment=True,
+        download_name=artifact.filename,
+        mimetype="application/octet-stream",
+    )
+
+
+@training_bp.get("/training/inference-jobs/<test_id>/image")
+def download_training_inference_image(test_id: str):
+    token_error = _require_worker_token()
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+
+    test_job = db.session.get(TrainingInferenceJob, test_id)
+    if test_job is None:
+        return jsonify({"message": "test job not found"}), 404
+    input_path = Path(test_job.input_storage_path)
+    if not input_path.exists():
+        return jsonify({"message": "test image file not found"}), 409
+    return send_file(
+        input_path,
+        as_attachment=True,
+        download_name=test_job.input_filename or input_path.name,
+        mimetype=test_job.input_mime_type,
+    )
+
+
+@training_bp.patch("/training/workers/<worker_id>/inference-jobs/<test_id>/status")
+def update_training_inference_job_status(worker_id: str, test_id: str):
+    token_error = _require_worker_token()
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+
+    worker = db.session.get(TrainingWorker, worker_id)
+    if worker is None:
+        return jsonify({"message": "worker not registered"}), 404
+    test_job = db.session.get(TrainingInferenceJob, test_id)
+    if test_job is None:
+        return jsonify({"message": "test job not found"}), 404
+
+    payload = request.get_json() or {}
+    next_status = str(payload.get("status") or "").strip()
+    if next_status not in {"running", "completed", "failed"}:
+        return jsonify({"message": "status must be running, completed or failed"}), 422
+
+    test_job.worker_id = worker.id
+    if next_status == "running":
+        test_job.status = "running"
+        if test_job.started_at is None:
+            test_job.started_at = now_utc()
+        worker.status = "busy"
+    elif next_status == "completed":
+        try:
+            complete_training_inference_job(test_job, payload.get("detections") or [])
+        except TrainingInferenceError as exc:
+            return jsonify({"message": str(exc)}), exc.status_code
+        worker.status = "idle"
+    elif next_status == "failed":
+        fail_training_inference_job(test_job, str(payload.get("error") or "prediction_failed"))
+        worker.status = "idle"
+
+    db.session.commit()
+    return jsonify({"test": build_training_inference_payload(test_job)})
 
 
 @training_bp.get("/training/jobs/<job_id>/dataset.zip")
