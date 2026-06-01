@@ -1,0 +1,41 @@
+services:
+  trainer:
+    image: ${TRAINER_IMAGE:-ghcr.io/zuoa/dataset-gen-trainer:latest}
+    init: true
+    restart: unless-stopped
+    shm_size: "2gb"
+    environment:
+      TRAINER_BACKEND_URL: ${TRAINER_BACKEND_URL:?set TRAINER_BACKEND_URL to the platform API base URL, for example https://example.com/api/v1}
+      TRAINER_WORKER_TOKEN: ${TRAINER_WORKER_TOKEN:?set TRAINER_WORKER_TOKEN to match backend TRAINING_WORKER_TOKEN}
+      TRAINER_WORKER_ID: ${TRAINER_WORKER_ID:-local-trainer}
+      TRAINER_WORKER_NAME: ${TRAINER_WORKER_NAME:-Local YOLO Trainer}
+      TRAINER_POLL_INTERVAL_SECONDS: ${TRAINER_POLL_INTERVAL_SECONDS:-5}
+      TRAINER_WORK_ROOT: /app/work
+      TRAINER_MODEL_DIR: /app/models
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      YOLO_CONFIG_DIR: /app/models/.ultralytics
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8010/health")'
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - trainer_work:/app/work
+      - trainer_models:/app/models
+
+volumes:
+  trainer_work:
+  trainer_models:

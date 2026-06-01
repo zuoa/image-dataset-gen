@@ -22,7 +22,10 @@ def main() -> None:
     worker_name = os.getenv("TRAINER_WORKER_NAME", f"trainer-{worker_id}")
     poll_interval = float(os.getenv("TRAINER_POLL_INTERVAL_SECONDS", "5"))
     work_root = Path(os.getenv("TRAINER_WORK_ROOT", "/app/work")).resolve()
+    model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
     health_port = int(os.getenv("TRAINER_HEALTH_PORT", "8010"))
+    work_root.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     _start_health_server(health_port)
 
@@ -38,6 +41,8 @@ def main() -> None:
             "frameworks": ["yolov8"],
             "tasks": ["detect"],
             "artifacts": ["best.pt", "last.pt", "results.csv", "metrics.json"],
+            "runtime": "cuda",
+            "modelCacheDir": str(model_dir),
         },
     )
     worker_id = worker["id"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -28,14 +29,14 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
         archive.extractall(dataset_root)
 
     data_yaml = _find_data_yaml(dataset_root)
-    model_name = str(config.get("model") or "yolov8n.pt")
+    model_name = _resolve_model_name(str(config.get("model") or "yolov8n.pt"))
     epochs = int(config.get("epochs") or 50)
     image_size = int(config.get("imageSize") or 640)
     batch_size = int(config.get("batchSize") or 16)
     patience = int(config.get("patience") or 20)
     device = str(config.get("device") or "").strip() or None
 
-    model = YOLO(model_name)
+    model = _load_model(YOLO, model_name)
 
     def epoch_end(trainer: Any) -> None:
         current_epoch = int(getattr(trainer, "epoch", 0)) + 1
@@ -69,6 +70,37 @@ def _find_data_yaml(dataset_root: Path) -> Path:
     if not matches:
         raise RuntimeError("data.yaml not found in dataset archive")
     return matches[0]
+
+
+def _resolve_model_name(model_name: str) -> str:
+    model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    requested = Path(model_name)
+    if requested.is_absolute() and requested.exists():
+        return str(requested)
+    if requested.parent != Path(".") and requested.exists():
+        return str(requested.resolve())
+
+    cached = model_dir / requested.name
+    if cached.exists():
+        return str(cached)
+
+    return model_name
+
+
+def _load_model(yolo_factory: Any, model_name: str) -> Any:
+    requested = Path(model_name)
+    if requested.is_absolute() or requested.parent != Path("."):
+        return yolo_factory(model_name)
+
+    model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
+    original_cwd = Path.cwd()
+    os.chdir(model_dir)
+    try:
+        return yolo_factory(model_name)
+    finally:
+        os.chdir(original_cwd)
 
 
 def _read_metrics(run_dir: Path) -> dict[str, Any]:

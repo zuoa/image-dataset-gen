@@ -141,18 +141,31 @@ Roboflow 导入说明：
 4. worker 轮询任务，下载 ZIP，执行 Ultralytics 训练。
 5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
 
-本地启动训练 worker：
+训练 worker 作为独立 GPU 服务部署，不再放在主 `docker-compose.yml` 的 profile 中。镜像由单独的 GitHub Actions workflow 发布到 GHCR：
+
+- `ghcr.io/<owner>/dataset-gen-trainer:latest`
+- `ghcr.io/<owner>/dataset-gen-trainer:sha-<commit>`
+
+本地或远端 GPU 服务器启动训练 worker：
 
 ```bash
-TRAINING_WORKER_TOKEN=change-me-training-worker-token docker compose --profile training up --build
+TRAINER_BACKEND_URL=http://<backend-host>/api/v1 \
+TRAINER_WORKER_TOKEN=<与后端 TRAINING_WORKER_TOKEN 一致> \
+TRAINER_WORKER_ID=<稳定 worker id> \
+docker compose -f docker-compose.trainer.yml up -d
 ```
 
-跨服务器部署时，在 GPU 服务器构建并运行 `trainer/` 镜像，配置：
+跨服务器部署时，在 GPU 服务器安装 NVIDIA Container Toolkit，并配置：
 
-- `TRAINER_BACKEND_URL=http://<backend-host>/api/v1`
+- `TRAINER_IMAGE=ghcr.io/<owner>/dataset-gen-trainer:latest`
+- `TRAINER_BACKEND_URL=https://<platform-host>/api/v1`
 - `TRAINER_WORKER_TOKEN=<与后端 TRAINING_WORKER_TOKEN 一致>`
 - `TRAINER_WORKER_ID=<稳定 worker id>`
+- `TRAINER_WORKER_NAME=<展示名>`
 - `TRAINER_WORK_ROOT=/app/work`
+- `TRAINER_MODEL_DIR=/app/models`
+
+`docker-compose.trainer.yml` 会持久化 `/app/work` 和 `/app/models`，后者用于缓存 YOLO 权重；如果模型文件已经存在，会优先复用本地文件。
 
 ## 已知边界
 

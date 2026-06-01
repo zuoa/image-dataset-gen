@@ -109,36 +109,6 @@ services:
     volumes:
       - generated_images:/usr/share/nginx/html/images:ro
 
-  trainer:
-    profiles: ["training"]
-    build:
-      context: ./trainer
-    init: true
-    restart: unless-stopped
-    environment:
-      TRAINER_BACKEND_URL: ${TRAINER_BACKEND_URL:-http://backend:8000/api/v1}
-      TRAINER_WORKER_TOKEN: ${TRAINING_WORKER_TOKEN:-change-me-training-worker-token}
-      TRAINER_WORKER_ID: ${TRAINER_WORKER_ID:-local-trainer}
-      TRAINER_WORKER_NAME: ${TRAINER_WORKER_NAME:-Local YOLO Trainer}
-      TRAINER_POLL_INTERVAL_SECONDS: ${TRAINER_POLL_INTERVAL_SECONDS:-5}
-      TRAINER_WORK_ROOT: /app/work
-    depends_on:
-      backend:
-        condition: service_healthy
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8010/health")'
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    volumes:
-      - trainer_work:/app/work
-
 volumes:
   backend_storage:
   generated_images:
-  trainer_work:
