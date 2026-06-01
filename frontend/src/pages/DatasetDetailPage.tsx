@@ -68,6 +68,44 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
 ];
 type VideoOutputFormat = "jpg" | "png";
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
+type SamplePoolSplit = "train" | "val" | "test" | "unselected";
+type SamplePoolSplitFilter = "" | SamplePoolSplit;
+const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> = [
+  { value: "train", label: "训练集" },
+  { value: "val", label: "验证集" },
+  { value: "test", label: "测试集" },
+  { value: "unselected", label: "未选" },
+];
+
+function buildSamplePoolSplitMap(images: DatasetImage[]) {
+  const selectedImages = images.filter((image) => image.selected).sort((a, b) => a.ordinal - b.ordinal);
+  const splitMap = new Map<string, SamplePoolSplit>();
+  const total = selectedImages.length;
+  if (total <= 1) {
+    selectedImages.forEach((image) => splitMap.set(image.id, "train"));
+    return splitMap;
+  }
+  if (total <= 3) {
+    selectedImages.slice(0, -1).forEach((image) => splitMap.set(image.id, "train"));
+    selectedImages.slice(-1).forEach((image) => splitMap.set(image.id, "val"));
+    return splitMap;
+  }
+
+  const trainCutoff = Math.max(1, Math.floor(total * 0.7));
+  const valCutoff = Math.min(total, Math.max(trainCutoff + 1, Math.floor(total * 0.9)));
+  selectedImages.slice(0, trainCutoff).forEach((image) => splitMap.set(image.id, "train"));
+  selectedImages.slice(trainCutoff, valCutoff).forEach((image) => splitMap.set(image.id, "val"));
+  selectedImages.slice(valCutoff).forEach((image) => splitMap.set(image.id, "test"));
+  return splitMap;
+}
+
+function samplePoolSplitLabel(split: SamplePoolSplit) {
+  return samplePoolSplitOptions.find((option) => option.value === split)?.label ?? split;
+}
+
+function samplePoolSplitForImage(image: DatasetImage, splitMap: Map<string, SamplePoolSplit>) {
+  return image.selected ? splitMap.get(image.id) ?? "train" : "unselected";
+}
 
 function formatMetric(value: unknown) {
   if (typeof value !== "number") return "—";
@@ -115,6 +153,8 @@ export function DatasetDetailPage() {
   const [trainingMixup, setTrainingMixup] = useState(0.15);
   const [trainingWeightDecay, setTrainingWeightDecay] = useState(0.001);
   const [trainingClassIndices, setTrainingClassIndices] = useState<number[]>([]);
+  const [samplePoolClassFilter, setSamplePoolClassFilter] = useState("");
+  const [samplePoolSplitFilter, setSamplePoolSplitFilter] = useState<SamplePoolSplitFilter>("");
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -150,6 +190,41 @@ export function DatasetDetailPage() {
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
 
   const images = dataset?.images ?? [];
+  const samplePoolSplitMap = buildSamplePoolSplitMap(images);
+  const samplePoolClassCounts = new Map<string, number>();
+  const samplePoolSplitCounts = new Map<SamplePoolSplit, number>([
+    ["train", 0],
+    ["val", 0],
+    ["test", 0],
+    ["unselected", 0],
+  ]);
+  for (const category of dataset?.categories ?? []) {
+    samplePoolClassCounts.set(category, 0);
+  }
+  for (const image of images) {
+    const split = samplePoolSplitForImage(image, samplePoolSplitMap);
+    samplePoolSplitCounts.set(split, (samplePoolSplitCounts.get(split) ?? 0) + 1);
+    for (const category of new Set(image.detections.map((detection) => detection.category))) {
+      if (samplePoolClassCounts.has(category)) {
+        samplePoolClassCounts.set(category, (samplePoolClassCounts.get(category) ?? 0) + 1);
+      }
+    }
+  }
+  const filteredImages = samplePoolClassFilter
+    ? images.filter((image) => {
+        const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
+        return (
+          image.detections.some((detection) => detection.category === samplePoolClassFilter) &&
+          (!samplePoolSplitFilter || imageSplit === samplePoolSplitFilter)
+        );
+      })
+    : images.filter((image) => {
+        const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
+        return !samplePoolSplitFilter || imageSplit === samplePoolSplitFilter;
+      });
+  const filteredImageIds = filteredImages.map((image) => image.id);
+  const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
+  const samplePoolFilterActive = Boolean(samplePoolClassFilter || samplePoolSplitFilter);
   const previewIndex = previewImageId ? images.findIndex((image) => image.id === previewImageId) : -1;
   const previewImage = previewIndex >= 0 ? images[previewIndex] : null;
   const runningTask = dataset?.tasks.some((task) => task.status === "running");
@@ -207,6 +282,12 @@ export function DatasetDetailPage() {
     const categoryCount = dataset?.categories.length ?? 0;
     setTrainingClassIndices((current) => current.filter((index) => index < categoryCount));
   }, [dataset?.categories.length]);
+
+  useEffect(() => {
+    if (samplePoolClassFilter && !(dataset?.categories ?? []).includes(samplePoolClassFilter)) {
+      setSamplePoolClassFilter("");
+    }
+  }, [dataset?.categories, samplePoolClassFilter]);
 
   useEffect(() => {
     setDraftDetections(previewImage?.detections ?? []);
@@ -468,7 +549,7 @@ export function DatasetDetailPage() {
 
   async function applySelection(
     payload:
-      | { mode: "all" | "none" | "invert" }
+      | { mode: "all" | "none" | "invert"; image_ids?: string[] }
       | { mode: "single"; image_id: string; selected: boolean },
   ) {
     if (!token || !datasetId) return;
@@ -479,6 +560,11 @@ export function DatasetDetailPage() {
     } catch (error) {
       setActionError((error as Error).message);
     }
+  }
+
+  function applySamplePoolSelection(mode: "all" | "none" | "invert") {
+    const payload = samplePoolFilterActive ? { mode, image_ids: filteredImageIds } : { mode };
+    void applySelection(payload);
   }
 
   async function handleArchiveImport(event: ChangeEvent<HTMLInputElement>) {
@@ -1149,20 +1235,108 @@ export function DatasetDetailPage() {
       ) : null}
 
       <SectionCard>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
+              <div className="mt-2 text-sm text-neutral-500">
+                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "all" })}><CheckSquare className="mr-2 h-4 w-4" />全选</Button>
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "invert" })}><FlipHorizontal2 className="mr-2 h-4 w-4" />反选</Button>
-              <Button variant="secondary" onClick={() => void applySelection({ mode: "none" })}><Square className="mr-2 h-4 w-4" />清空</Button>
+              <Button
+                variant="secondary"
+                onClick={() => applySamplePoolSelection("all")}
+                disabled={samplePoolFilterActive && filteredImages.length === 0}
+              >
+                <CheckSquare className="mr-2 h-4 w-4" />
+                {samplePoolFilterActive ? "全选当前" : "全选"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => applySamplePoolSelection("invert")}
+                disabled={samplePoolFilterActive && filteredImages.length === 0}
+              >
+                <FlipHorizontal2 className="mr-2 h-4 w-4" />
+                {samplePoolFilterActive ? "反选当前" : "反选"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => applySamplePoolSelection("none")}
+                disabled={samplePoolFilterActive && filteredImages.length === 0}
+              >
+                <Square className="mr-2 h-4 w-4" />
+                {samplePoolFilterActive ? "清空当前" : "清空"}
+              </Button>
             </div>
-          </div>
+        </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {images.map((image) => (
+        <div className="mt-5 space-y-4">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">Class</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSamplePoolClassFilter("")}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    samplePoolClassFilter === ""
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                      : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                  }`}
+                >
+                  全部 {images.length}
+                </button>
+                {dataset.categories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setSamplePoolClassFilter(category)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      samplePoolClassFilter === category
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                    }`}
+                  >
+                    {category} {samplePoolClassCounts.get(category) ?? 0}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">Split</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSamplePoolSplitFilter("")}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    samplePoolSplitFilter === ""
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                      : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                  }`}
+                >
+                  全部 {images.length}
+                </button>
+                {samplePoolSplitOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSamplePoolSplitFilter(option.value)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      samplePoolSplitFilter === option.value
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                    }`}
+                  >
+                    {option.label} {samplePoolSplitCounts.get(option.value) ?? 0}
+                  </button>
+                ))}
+              </div>
+            </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            {filteredImages.map((image) => (
               <button
                 key={image.id}
                 type="button"
@@ -1191,6 +1365,7 @@ export function DatasetDetailPage() {
                   <div className="absolute bottom-3 left-3 right-3 text-white">
                     <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
                       <span>{image.sourceType}</span>
+                      <span>{samplePoolSplitLabel(samplePoolSplitForImage(image, samplePoolSplitMap))}</span>
                       <span>#{image.ordinal}</span>
                     </div>
                     <div className="mt-2 line-clamp-2 text-sm">{image.promptText}</div>
@@ -1198,8 +1373,13 @@ export function DatasetDetailPage() {
                 </div>
               </button>
             ))}
-	          </div>
-	        </SectionCard>
+            {filteredImages.length === 0 ? (
+              <div className="col-span-full rounded-[22px] border border-dashed border-neutral-200 px-5 py-8 text-sm text-neutral-500 dark:border-white/10">
+                当前 class/split 条件下没有样本。
+              </div>
+            ) : null}
+        </div>
+      </SectionCard>
 
       {isImportModalOpen ? (
         <div

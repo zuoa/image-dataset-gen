@@ -232,7 +232,7 @@ export function updateDatasetSelection(
   datasetId: string,
   token: string,
   payload:
-    | { mode: "all" | "none" | "invert" }
+    | { mode: "all" | "none" | "invert"; image_ids?: string[] }
     | { mode: "single"; image_id: string; selected: boolean },
 ) {
   return apiRequest<{ dataset: Dataset }>(`/datasets/${datasetId}/selection`, {

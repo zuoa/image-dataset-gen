@@ -201,6 +201,42 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert exported_image.mode == "RGBA"
 
 
+def test_selection_can_target_visible_image_scope(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-selection-scope")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample-a.png", _transparent_png_bytes())
+        archive.writestr("sample-b.png", _transparent_png_bytes())
+    archive_buffer.seek(0)
+
+    import_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert import_response.status_code == 200
+    image_ids = [image["id"] for image in import_response.get_json()["dataset"]["images"]]
+
+    response = client.patch(
+        f"/api/v1/datasets/{dataset_id}/selection",
+        headers=headers,
+        json={"mode": "none", "image_ids": [image_ids[0]]},
+    )
+
+    assert response.status_code == 200
+    dataset = response.get_json()["dataset"]
+    assert [image["selected"] for image in dataset["images"]] == [False, True]
+    assert dataset["selectedCount"] == 1
+
+
 def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

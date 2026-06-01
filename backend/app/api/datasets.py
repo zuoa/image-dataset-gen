@@ -682,6 +682,13 @@ def update_dataset_selection(dataset_id: str):
     user_id = get_jwt_identity()
     payload = DatasetSelectionSchema().load(request.get_json() or {})
     dataset = _dataset_for_user(dataset_id, user_id)
+    scoped_ids = payload.get("image_ids")
+    target_images = dataset.images
+    if scoped_ids is not None:
+        scoped_id_set = set(scoped_ids)
+        target_images = [image for image in dataset.images if image.id in scoped_id_set]
+        if len(target_images) != len(scoped_id_set):
+            return jsonify({"message": "one or more images not found"}), 404
 
     if payload["mode"] == "single":
         image = next((candidate for candidate in dataset.images if candidate.id == payload.get("image_id")), None)
@@ -689,13 +696,13 @@ def update_dataset_selection(dataset_id: str):
             return jsonify({"message": "image not found"}), 404
         image.selected = bool(payload.get("selected"))
     elif payload["mode"] == "all":
-        for image in dataset.images:
+        for image in target_images:
             image.selected = True
     elif payload["mode"] == "none":
-        for image in dataset.images:
+        for image in target_images:
             image.selected = False
     elif payload["mode"] == "invert":
-        for image in dataset.images:
+        for image in target_images:
             image.selected = not image.selected
 
     sync_dataset_stats_inplace(dataset)
