@@ -217,6 +217,10 @@ export type TrainingJob = {
     imageSize: number;
     batchSize: number;
     patience: number;
+    dropout: number;
+    mixup: number;
+    weightDecay: number;
+    classes: number[];
     device?: string;
   };
   metrics: Record<string, number | string | null>;

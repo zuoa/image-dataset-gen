@@ -158,6 +158,10 @@ def create_training_job(dataset_id: str):
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
     if not any(image.selected for image in dataset.images):
         return jsonify({"message": "no images selected for training"}), 400
+    classes = sorted(dict.fromkeys(int(index) for index in payload["classes"]))
+    invalid_classes = [index for index in classes if index >= len(dataset.categories)]
+    if invalid_classes:
+        return jsonify({"message": "training classes contain indexes outside dataset categories"}), 400
 
     export_job = _create_yolo_export(dataset)
     job = TrainingJob(
@@ -174,6 +178,10 @@ def create_training_job(dataset_id: str):
             "imageSize": payload["image_size"],
             "batchSize": payload["batch_size"],
             "patience": payload["patience"],
+            "dropout": payload["dropout"],
+            "mixup": payload["mixup"],
+            "weightDecay": payload["weight_decay"],
+            "classes": classes,
             "device": payload.get("device") or "",
         },
     )

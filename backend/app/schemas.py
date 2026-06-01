@@ -150,10 +150,14 @@ class VideoImportSchema(Schema):
 
 class TrainingJobSchema(Schema):
     model = fields.String(load_default="yolov8n.pt", validate=validate.Length(min=1, max=120))
-    epochs = fields.Integer(load_default=50, validate=validate.Range(min=1, max=500))
+    epochs = fields.Integer(load_default=200, validate=validate.Range(min=1, max=500))
     image_size = fields.Integer(load_default=640, validate=validate.Range(min=64, max=2048))
     batch_size = fields.Integer(load_default=16, validate=validate.Range(min=1, max=256))
-    patience = fields.Integer(load_default=20, validate=validate.Range(min=0, max=200))
+    patience = fields.Integer(load_default=50, validate=validate.Range(min=0, max=200))
+    dropout = fields.Float(load_default=0.1, validate=validate.Range(min=0, max=1))
+    mixup = fields.Float(load_default=0.15, validate=validate.Range(min=0, max=1))
+    weight_decay = fields.Float(load_default=0.001, validate=validate.Range(min=0, max=1))
+    classes = fields.List(fields.Integer(validate=validate.Range(min=0)), load_default=list)
     device = fields.String(load_default="", allow_none=True, validate=validate.Length(max=80))
 
 

@@ -64,6 +64,80 @@ def _create_dataset_with_image(app, client, headers: dict[str, str]) -> str:
     return dataset_id
 
 
+def test_training_job_uses_default_training_parameters(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-defaults")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={},
+    )
+
+    assert response.status_code == 201
+    config = response.get_json()["job"]["config"]
+    assert config["epochs"] == 200
+    assert config["patience"] == 50
+    assert config["dropout"] == 0.1
+    assert config["mixup"] == 0.15
+    assert config["weightDecay"] == 0.001
+    assert config["classes"] == []
+
+
+def test_training_job_accepts_regularization_and_class_filter(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-class-filter")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={
+            "dropout": 0.2,
+            "mixup": 0.25,
+            "weight_decay": 0.002,
+            "classes": [0],
+        },
+    )
+
+    assert response.status_code == 201
+    config = response.get_json()["job"]["config"]
+    assert config["dropout"] == 0.2
+    assert config["mixup"] == 0.25
+    assert config["weightDecay"] == 0.002
+    assert config["classes"] == [0]
+
+
+def test_training_job_rejects_unknown_class_index(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-invalid-class")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"classes": [1]},
+    )
+
+    assert response.status_code == 400
+
+
 def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Path):
     class TrainingConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

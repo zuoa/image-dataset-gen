@@ -207,6 +207,10 @@ export function createTrainingJob(
     image_size: number;
     batch_size: number;
     patience: number;
+    dropout: number;
+    mixup: number;
+    weight_decay: number;
+    classes: number[];
     device?: string;
   },
 ) {

@@ -107,10 +107,14 @@ export function DatasetDetailPage() {
   const [deletingTrainingJobId, setDeletingTrainingJobId] = useState<string | null>(null);
   const [multiplier, setMultiplier] = useState(3);
   const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
-  const [trainingEpochs, setTrainingEpochs] = useState(50);
+  const [trainingEpochs, setTrainingEpochs] = useState(200);
   const [trainingImageSize, setTrainingImageSize] = useState(640);
   const [trainingBatchSize, setTrainingBatchSize] = useState(16);
-  const [trainingPatience, setTrainingPatience] = useState(20);
+  const [trainingPatience, setTrainingPatience] = useState(50);
+  const [trainingDropout, setTrainingDropout] = useState(0.1);
+  const [trainingMixup, setTrainingMixup] = useState(0.15);
+  const [trainingWeightDecay, setTrainingWeightDecay] = useState(0.001);
+  const [trainingClassIndices, setTrainingClassIndices] = useState<number[]>([]);
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -155,6 +159,7 @@ export function DatasetDetailPage() {
   const annotationStatus = String(dataset?.annotation?.status ?? "idle");
   const latestTrainingJob = trainingJobs[0];
   const trainingRunning = trainingJobs.some((job) => activeTrainingStatuses.has(job.status));
+  const trainingClassIndexSet = new Set(trainingClassIndices);
   const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
   const videoFilenamePrefixPreview = videoFilenamePrefix.trim().replace(/[^A-Za-z0-9_-]/g, "") || "frame";
   const videoOutputExample = `${videoFilenamePrefixPreview}_000000.${videoOutputFormat}`;
@@ -197,6 +202,11 @@ export function DatasetDetailPage() {
       window.clearInterval(interval);
     };
   }, [annotationRunning, datasetId, runningTask, token, trainingRunning]);
+
+  useEffect(() => {
+    const categoryCount = dataset?.categories.length ?? 0;
+    setTrainingClassIndices((current) => current.filter((index) => index < categoryCount));
+  }, [dataset?.categories.length]);
 
   useEffect(() => {
     setDraftDetections(previewImage?.detections ?? []);
@@ -334,6 +344,12 @@ export function DatasetDetailPage() {
     );
   }
 
+  function toggleTrainingClass(index: number) {
+    setTrainingClassIndices((current) =>
+      current.includes(index) ? current.filter((item) => item !== index) : [...current, index].sort((a, b) => a - b),
+    );
+  }
+
   function openAugmentationModal() {
     setIsAugmentationModalOpen(true);
     setIsAnnotationModalOpen(false);
@@ -417,6 +433,10 @@ export function DatasetDetailPage() {
         image_size: trainingImageSize,
         batch_size: trainingBatchSize,
         patience: trainingPatience,
+        dropout: trainingDropout,
+        mixup: trainingMixup,
+        weight_decay: trainingWeightDecay,
+        classes: trainingClassIndices,
       });
       setDataset(response.dataset);
       setTrainingJobs((current) => [response.job, ...current.filter((job) => job.id !== response.job.id)]);
@@ -835,6 +855,37 @@ export function DatasetDetailPage() {
               </label>
             </div>
 
+            <div className="mt-4 space-y-2">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Classes</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTrainingClassIndices([])}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    trainingClassIndices.length === 0
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                      : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                  }`}
+                >
+                  全部
+                </button>
+                {dataset.categories.map((category, index) => (
+                  <button
+                    key={`${index}-${category}`}
+                    type="button"
+                    onClick={() => toggleTrainingClass(index)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      trainingClassIndexSet.has(index)
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                    }`}
+                  >
+                    {index}: {category}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-sm text-neutral-500">
                 <span>Patience</span>
@@ -845,6 +896,42 @@ export function DatasetDetailPage() {
                   max={200}
                   value={trainingPatience}
                   onChange={(event) => setTrainingPatience(Number(event.target.value))}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-neutral-500">
+                <span>Dropout</span>
+                <Input
+                  className="w-24"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={trainingDropout}
+                  onChange={(event) => setTrainingDropout(Number(event.target.value))}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-neutral-500">
+                <span>Mixup</span>
+                <Input
+                  className="w-24"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={trainingMixup}
+                  onChange={(event) => setTrainingMixup(Number(event.target.value))}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-neutral-500">
+                <span>Weight decay</span>
+                <Input
+                  className="w-28"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.0001}
+                  value={trainingWeightDecay}
+                  onChange={(event) => setTrainingWeightDecay(Number(event.target.value))}
                 />
               </label>
               <Button onClick={() => void startTrainingJob()} disabled={isCreatingTrainingJob || dataset.selectedCount === 0 || trainingRunning}>

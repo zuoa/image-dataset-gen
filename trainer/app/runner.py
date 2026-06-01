@@ -16,6 +16,14 @@ IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 ULTRALYTICS_ASSETS_RELEASE = "v8.3.0"
 
 
+def _config_value(config: dict[str, Any], *keys: str, default: object) -> object:
+    for key in keys:
+        value = config.get(key)
+        if value is not None and value != "":
+            return value
+    return default
+
+
 def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_progress: ProgressCallback) -> dict[str, Any]:
     from ultralytics import YOLO
 
@@ -36,10 +44,15 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
 
     data_yaml = _prepare_data_yaml(_find_data_yaml(dataset_root))
     model_name = _resolve_model_name(str(config.get("model") or "yolov8n.pt"))
-    epochs = int(config.get("epochs") or 50)
-    image_size = int(config.get("imageSize") or 640)
-    batch_size = int(config.get("batchSize") or 16)
-    patience = int(config.get("patience") or 20)
+    epochs = int(_config_value(config, "epochs", default=200))
+    image_size = int(_config_value(config, "imageSize", default=640))
+    batch_size = int(_config_value(config, "batchSize", default=16))
+    patience = int(_config_value(config, "patience", default=50))
+    dropout = float(_config_value(config, "dropout", default=0.1))
+    mixup = float(_config_value(config, "mixup", default=0.15))
+    weight_decay = float(_config_value(config, "weightDecay", "weight_decay", default=0.001))
+    classes_config = config.get("classes") or []
+    classes = [int(class_index) for class_index in classes_config] if classes_config else None
     device = str(config.get("device") or "").strip() or None
     amp = _training_amp_enabled(config)
 
@@ -51,19 +64,24 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
         on_progress(percent)
 
     model.add_callback("on_train_epoch_end", epoch_end)
-    _train_model(
-        model,
-        data=str(data_yaml),
-        epochs=epochs,
-        imgsz=image_size,
-        batch=batch_size,
-        patience=patience,
-        device=device,
-        amp=amp,
-        project=str(runs_root),
-        name="train",
-        exist_ok=True,
-    )
+    train_kwargs: dict[str, object] = {
+        "data": str(data_yaml),
+        "epochs": epochs,
+        "imgsz": image_size,
+        "batch": batch_size,
+        "patience": patience,
+        "dropout": dropout,
+        "mixup": mixup,
+        "weight_decay": weight_decay,
+        "device": device,
+        "amp": amp,
+        "project": str(runs_root),
+        "name": "train",
+        "exist_ok": True,
+    }
+    if classes is not None:
+        train_kwargs["classes"] = classes
+    _train_model(model, **train_kwargs)
 
     run_dir = runs_root / "train"
     metrics = _read_metrics(run_dir)

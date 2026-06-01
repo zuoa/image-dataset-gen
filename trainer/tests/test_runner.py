@@ -15,6 +15,8 @@ class _FakeTrainer:
 
 
 class _FakeYOLO:
+    expected_train_kwargs: dict[str, object] = {}
+
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self.callbacks: dict[str, object] = {}
@@ -26,6 +28,8 @@ class _FakeYOLO:
         model_dir = Path(os.environ["TRAINER_MODEL_DIR"]).resolve()
         assert Path.cwd() == model_dir
         assert kwargs["amp"] is False
+        for key, value in self.expected_train_kwargs.items():
+            assert kwargs[key] == value
 
         data_yaml = Path(str(kwargs["data"]))
         data_yaml_lines = data_yaml.read_text(encoding="utf-8").splitlines()
@@ -67,10 +71,15 @@ class _FakeDownloadResponse:
 
 def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO))
+    monkeypatch.setattr(
+        _FakeYOLO,
+        "expected_train_kwargs",
+        {"epochs": 200, "patience": 50, "dropout": 0.1, "mixup": 0.15, "weight_decay": 0.001},
+    )
     model_dir = tmp_path / "models"
     monkeypatch.setenv("TRAINER_MODEL_DIR", str(model_dir))
 
-    job = {"id": "job-1", "config": {"model": "yolov8n.pt", "epochs": 1}}
+    job = {"id": "job-1", "config": {"model": "yolov8n.pt"}}
     job_root = tmp_path / "job-1"
     job_root.mkdir()
     dataset_zip = job_root / "dataset.zip"
@@ -83,7 +92,7 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
     result = train_yolov8(job, dataset_zip, tmp_path, progress_updates.append)
 
     assert dataset_zip.exists()
-    assert progress_updates == [95]
+    assert progress_updates == [5]
     assert result["metrics"]["precision"] == 0.9
     assert {artifact_type for artifact_type, _ in result["artifacts"]} == {
         "best_model",
@@ -91,6 +100,39 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
         "results_csv",
         "metrics",
     }
+
+
+def test_train_yolov8_passes_regularization_and_class_filter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO))
+    monkeypatch.setattr(
+        _FakeYOLO,
+        "expected_train_kwargs",
+        {"dropout": 0.2, "mixup": 0.25, "weight_decay": 0.002, "classes": [0]},
+    )
+    model_dir = tmp_path / "models"
+    monkeypatch.setenv("TRAINER_MODEL_DIR", str(model_dir))
+
+    job = {
+        "id": "job-1",
+        "config": {
+            "model": "yolov8n.pt",
+            "dropout": 0.2,
+            "mixup": 0.25,
+            "weightDecay": 0.002,
+            "classes": [0],
+        },
+    }
+    job_root = tmp_path / "job-1"
+    job_root.mkdir()
+    dataset_zip = job_root / "dataset.zip"
+    with zipfile.ZipFile(dataset_zip, "w") as archive:
+        archive.writestr("sample/data.yaml", "path: .\ntrain: images/train\nval: images/val\nnames:\n  0: object\n")
+        archive.writestr("sample/images/train/object_000001.jpg", b"image")
+        archive.writestr("sample/labels/train/object_000001.txt", "0 0.5 0.5 1 1\n")
+
+    result = train_yolov8(job, dataset_zip, tmp_path, lambda _: None)
+
+    assert result["metrics"]["mAP50"] == 0.7
 
 
 def test_resolve_model_downloads_from_configured_base_url(tmp_path: Path, monkeypatch) -> None:

@@ -142,6 +142,8 @@ Roboflow 导入说明：
 4. worker 轮询任务，下载 ZIP，执行 Ultralytics 训练。
 5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
 
+训练作业默认使用 `epochs=200`、`patience=50`、`dropout=0.1`、`mixup=0.15`、`weight_decay=0.001`；可在创建作业时用 `classes` 选择类别索引，worker 会在训练时传给 Ultralytics 做类别过滤。
+
 训练 worker 作为独立 GPU 服务部署，不再放在主 `docker-compose.yml` 的 profile 中。镜像由单独的 GitHub Actions workflow 发布到 GHCR：
 
 - `ghcr.io/<owner>/dataset-gen-trainer:latest`
