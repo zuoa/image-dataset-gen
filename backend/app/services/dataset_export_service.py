@@ -54,7 +54,7 @@ def build_dataset_export_archive(
             _write_readme(temp_root, dataset, export_format, len(selected_images), image_format_summary)
 
         if export_format == "yolo":
-            _write_data_yaml(temp_root, categories)
+            _write_data_yaml(temp_root, categories, split_assignments)
 
         if archive_path.exists():
             archive_path.unlink()
@@ -136,11 +136,11 @@ def _build_splits(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
     total = len(ordered)
     if total <= 1:
         return {"train": ordered, "val": [], "test": []}
-    if total == 2:
-        return {"train": ordered[:1], "val": ordered[1:], "test": []}
+    if total <= 3:
+        return {"train": ordered[:-1], "val": ordered[-1:], "test": []}
 
-    train_cutoff = math.floor(total * 0.7)
-    val_cutoff = math.floor(total * 0.9)
+    train_cutoff = max(1, math.floor(total * 0.7))
+    val_cutoff = min(total, max(train_cutoff + 1, math.floor(total * 0.9)))
     return {
         "train": ordered[:train_cutoff],
         "val": ordered[train_cutoff:val_cutoff],
@@ -463,12 +463,17 @@ def _write_readme(
     (temp_root / "README.md").write_text(readme, encoding="utf-8")
 
 
-def _write_data_yaml(temp_root: Path, categories: list[str]) -> None:
+def _write_data_yaml(
+    temp_root: Path,
+    categories: list[str],
+    split_assignments: dict[str, list[DatasetImage]],
+) -> None:
+    val_path = "images/val" if split_assignments.get("val") else "images/train"
     lines = [
-        "path: .",
         "train: images/train",
-        "val: images/val",
-        "test: images/test",
+        f"val: {val_path}",
         f"names: {json.dumps(categories, ensure_ascii=False)}",
     ]
+    if split_assignments.get("test"):
+        lines.insert(2, "test: images/test")
     (temp_root / "data.yaml").write_text("\n".join(lines), encoding="utf-8")

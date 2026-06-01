@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
 import zipfile
@@ -21,6 +22,12 @@ class _FakeYOLO:
         self.callbacks[name] = callback
 
     def train(self, **kwargs: object) -> None:
+        data_yaml = Path(str(kwargs["data"]))
+        data_yaml_lines = data_yaml.read_text(encoding="utf-8").splitlines()
+        expected_path_line = f"path: {json.dumps(str(data_yaml.parent), ensure_ascii=False)}"
+        assert expected_path_line in data_yaml_lines
+        assert "val: images/train" in data_yaml_lines
+
         run_dir = Path(str(kwargs["project"])) / str(kwargs["name"])
         weights_dir = run_dir / "weights"
         weights_dir.mkdir(parents=True, exist_ok=True)
@@ -46,6 +53,8 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
     dataset_zip = job_root / "dataset.zip"
     with zipfile.ZipFile(dataset_zip, "w") as archive:
         archive.writestr("sample/data.yaml", "path: .\ntrain: images/train\nval: images/val\nnames:\n  0: object\n")
+        archive.writestr("sample/images/train/object_000001.jpg", b"image")
+        archive.writestr("sample/labels/train/object_000001.txt", "0 0.5 0.5 1 1\n")
 
     progress_updates: list[int] = []
     result = train_yolov8(job, dataset_zip, tmp_path, progress_updates.append)

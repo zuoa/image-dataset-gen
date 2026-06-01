@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 
 ProgressCallback = Callable[[int], None]
+IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
 
 def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_progress: ProgressCallback) -> dict[str, Any]:
@@ -30,7 +31,7 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     with zipfile.ZipFile(dataset_zip) as archive:
         archive.extractall(dataset_root)
 
-    data_yaml = _find_data_yaml(dataset_root)
+    data_yaml = _prepare_data_yaml(_find_data_yaml(dataset_root))
     model_name = _resolve_model_name(str(config.get("model") or "yolov8n.pt"))
     epochs = int(config.get("epochs") or 50)
     image_size = int(config.get("imageSize") or 640)
@@ -72,6 +73,63 @@ def _find_data_yaml(dataset_root: Path) -> Path:
     if not matches:
         raise RuntimeError("data.yaml not found in dataset archive")
     return matches[0]
+
+
+def _prepare_data_yaml(data_yaml: Path) -> Path:
+    dataset_path = json.dumps(str(data_yaml.parent.resolve()), ensure_ascii=False)
+    path_line = f"path: {dataset_path}"
+    lines = data_yaml.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("path:"):
+            lines[index] = path_line
+            break
+    else:
+        lines.insert(0, path_line)
+
+    train_value = _find_yaml_value(lines, "train")
+    val_value = _find_yaml_value(lines, "val")
+    if train_value and _split_has_images(data_yaml.parent, train_value):
+        if not val_value or not _split_has_images(data_yaml.parent, val_value):
+            _set_yaml_value(lines, "val", train_value, after_key="train")
+
+    data_yaml.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return data_yaml
+
+
+def _find_yaml_value(lines: list[str], key: str) -> str:
+    prefix = f"{key}:"
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.removeprefix(prefix).strip().strip("\"'")
+    return ""
+
+
+def _set_yaml_value(lines: list[str], key: str, value: str, after_key: str) -> None:
+    replacement = f"{key}: {value}"
+    key_prefix = f"{key}:"
+    for index, line in enumerate(lines):
+        if line.strip().startswith(key_prefix):
+            lines[index] = replacement
+            return
+
+    after_prefix = f"{after_key}:"
+    for index, line in enumerate(lines):
+        if line.strip().startswith(after_prefix):
+            lines.insert(index + 1, replacement)
+            return
+    lines.append(replacement)
+
+
+def _split_has_images(dataset_root: Path, split_value: str) -> bool:
+    split_path = Path(split_value)
+    if not split_path.is_absolute():
+        split_path = dataset_root / split_path
+    if split_path.is_file():
+        return True
+    if not split_path.exists():
+        return False
+    return any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in split_path.rglob("*"))
 
 
 def _resolve_model_name(model_name: str) -> str:

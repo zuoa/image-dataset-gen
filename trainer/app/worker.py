@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import socket
 import threading
@@ -7,12 +9,28 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app import create_app
 from app.client import BackendClient
 from app.runner import train_yolov8
 
 
 VERSION = "0.1.0"
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path != "/health":
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        payload = b'{"status":"ok","service":"trainer"}\n'
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
 
 
 def main() -> None:
@@ -90,13 +108,14 @@ def _run_job(client: BackendClient, job: dict[str, Any], work_root: Path) -> Non
     client.update_status(job_id, "completed", progress_percent=100, metrics=result.get("metrics") or {})
 
 
-def _start_health_server(port: int) -> None:
-    app = create_app()
+def _start_health_server(port: int) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)
     thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=port, use_reloader=False),
+        target=server.serve_forever,
         daemon=True,
     )
     thread.start()
+    return server
 
 
 if __name__ == "__main__":

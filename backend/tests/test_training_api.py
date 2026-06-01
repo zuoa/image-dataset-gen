@@ -101,7 +101,10 @@ def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Pat
     dataset_download = client.get(f"/api/v1/training/jobs/{job['id']}/dataset.zip", headers=_worker_headers())
     assert dataset_download.status_code == 200
     archive = zipfile.ZipFile(BytesIO(dataset_download.data))
-    assert any(name.endswith("data.yaml") for name in archive.namelist())
+    data_yaml_name = next(name for name in archive.namelist() if name.endswith("data.yaml"))
+    data_yaml = archive.read(data_yaml_name).decode("utf-8")
+    assert "path:" not in data_yaml
+    assert "val: images/train" in data_yaml
 
     status = client.patch(
         f"/api/v1/training/jobs/{job['id']}/status",
