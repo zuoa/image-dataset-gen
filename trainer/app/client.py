@@ -57,6 +57,12 @@ class BackendClient:
     def dataset_download_url(self, job_id: str) -> str:
         return f"{self.base_url}/training/jobs/{job_id}/dataset.zip"
 
+    def inference_model_download_url(self, test_id: str) -> str:
+        return f"{self.base_url}/training/inference-jobs/{test_id}/model"
+
+    def inference_image_download_url(self, test_id: str) -> str:
+        return f"{self.base_url}/training/inference-jobs/{test_id}/image"
+
     def download_job_dataset(self, job_id: str, output_path: Path) -> None:
         self.download_dataset(self.dataset_download_url(job_id), output_path)
 

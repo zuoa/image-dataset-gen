@@ -37,6 +37,19 @@ def test_dataset_download_url_uses_configured_backend_base_url() -> None:
     )
 
 
+def test_inference_download_urls_use_configured_backend_base_url() -> None:
+    client = BackendClient("https://platform.example.com:4173/api/v1", "token")
+
+    assert (
+        client.inference_model_download_url("test-1")
+        == "https://platform.example.com:4173/api/v1/training/inference-jobs/test-1/model"
+    )
+    assert (
+        client.inference_image_download_url("test-1")
+        == "https://platform.example.com:4173/api/v1/training/inference-jobs/test-1/image"
+    )
+
+
 def test_download_dataset_rejects_non_zip_response(tmp_path: Path) -> None:
     client = BackendClient("https://platform.example.com/api/v1", "token")
     body = b"<!doctype html><html><body>app shell</body></html>"

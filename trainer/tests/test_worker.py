@@ -32,12 +32,20 @@ def test_run_inference_downloads_files_and_uploads_detections(tmp_path, monkeypa
             assert test_id == "test-1"
             self.statuses.append((status, detections))
 
+        def inference_model_download_url(self, test_id) -> str:
+            assert test_id == "test-1"
+            return "https://backend.example.com/api/v1/training/inference-jobs/test-1/model"
+
+        def inference_image_download_url(self, test_id) -> str:
+            assert test_id == "test-1"
+            return "https://backend.example.com/api/v1/training/inference-jobs/test-1/image"
+
         def download_model(self, url, output_path) -> None:
-            assert url.endswith("/model")
+            assert url == "https://backend.example.com/api/v1/training/inference-jobs/test-1/model"
             output_path.write_bytes(b"model-weights")
 
         def download_image(self, url, output_path) -> None:
-            assert url.endswith("/image")
+            assert url == "https://backend.example.com/api/v1/training/inference-jobs/test-1/image"
             output_path.write_bytes(b"image-bytes")
 
     def fake_predict_yolov8(model_path, image_path, *, categories, confidence_threshold, image_size):
@@ -65,8 +73,8 @@ def test_run_inference_downloads_files_and_uploads_detections(tmp_path, monkeypa
         "gpu-1",
         {
             "id": "test-1",
-            "modelDownloadUrl": "https://example.com/model",
-            "imageDownloadUrl": "https://example.com/image",
+            "modelDownloadUrl": "https://wrong.example.com/model",
+            "imageDownloadUrl": "https://wrong.example.com/image",
             "artifact": {"filename": "best.pt"},
             "image": {"filename": "sample.jpg", "mimeType": "image/jpeg"},
             "categories": ["widget"],

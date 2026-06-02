@@ -118,8 +118,8 @@ def _run_inference(client: BackendClient, worker_id: str, test_job: dict[str, An
     test_root.mkdir(parents=True, exist_ok=True)
 
     client.update_inference_status(worker_id, test_id, "running")
-    client.download_model(str(test_job["modelDownloadUrl"]), model_path)
-    client.download_image(str(test_job["imageDownloadUrl"]), image_path)
+    client.download_model(client.inference_model_download_url(test_id), model_path)
+    client.download_image(client.inference_image_download_url(test_id), image_path)
 
     result = predict_yolov8(
         model_path,
