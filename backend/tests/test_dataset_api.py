@@ -11,7 +11,7 @@ from app.config import TestConfig
 from app.extensions import db
 from app.models import DatasetImage, DatasetTask
 from app.services.annotation_storage import load_annotation_result
-from app.services.image_storage import save_generated_image
+from app.services.image_storage import existing_generated_image, save_generated_image
 
 
 def _png_bytes(color: tuple[int, int, int] = (255, 255, 255)) -> bytes:
@@ -235,6 +235,100 @@ def test_selection_can_target_visible_image_scope(tmp_path: Path):
     dataset = response.get_json()["dataset"]
     assert [image["selected"] for image in dataset["images"]] == [False, True]
     assert dataset["selectedCount"] == 1
+
+
+def test_delete_single_dataset_image_updates_pool_stats_and_assets(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-delete-single")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample-a.png", _transparent_png_bytes())
+        archive.writestr("sample-b.png", _transparent_png_bytes())
+    archive_buffer.seek(0)
+
+    import_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert import_response.status_code == 200
+    image = import_response.get_json()["dataset"]["images"][0]
+    image_path = existing_generated_image(str(tmp_path), dataset_id, f"image-{image['ordinal']:06d}")
+    assert image_path is not None
+    assert image_path.exists()
+
+    annotation_response = client.patch(
+        f"/api/v1/datasets/{dataset_id}/images/{image['id']}/annotations",
+        headers=headers,
+        json={"detections": [{"category": "pedestrian", "confidence": 0.8, "bbox": [0.5, 0.5, 0.2, 0.2]}]},
+    )
+    assert annotation_response.status_code == 200
+    annotation_path = Path(tmp_path) / "annotations" / dataset_id / f"{image['id']}.json"
+    assert annotation_path.exists()
+
+    delete_response = client.delete(f"/api/v1/datasets/{dataset_id}/images/{image['id']}", headers=headers)
+
+    assert delete_response.status_code == 200
+    payload = delete_response.get_json()
+    assert payload["deletedImageIds"] == [image["id"]]
+    assert payload["deletedCount"] == 1
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 1
+    assert dataset["selectedCount"] == 1
+    assert dataset["tasks"][0]["imagesGenerated"] == 1
+    assert dataset["tasks"][0]["selectedCount"] == 1
+    assert all(item["id"] != image["id"] for item in dataset["images"])
+    assert not image_path.exists()
+    assert not annotation_path.exists()
+
+
+def test_delete_multiple_dataset_images_clears_pool(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-delete-bulk")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample-a.png", _transparent_png_bytes())
+        archive.writestr("sample-b.png", _transparent_png_bytes())
+    archive_buffer.seek(0)
+
+    import_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert import_response.status_code == 200
+    image_ids = [image["id"] for image in import_response.get_json()["dataset"]["images"]]
+
+    delete_response = client.delete(
+        f"/api/v1/datasets/{dataset_id}/images",
+        headers=headers,
+        json={"image_ids": image_ids},
+    )
+
+    assert delete_response.status_code == 200
+    payload = delete_response.get_json()
+    assert payload["deletedImageIds"] == image_ids
+    assert payload["deletedCount"] == 2
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 0
+    assert dataset["selectedCount"] == 0
+    assert dataset["tasks"][0]["imagesGenerated"] == 0
+    assert dataset["tasks"][0]["selectedCount"] == 0
+    assert dataset["images"] == []
 
 
 def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_path: Path):

@@ -271,6 +271,14 @@ class DatasetSelectionSchema(SelectionSchema):
     pass
 
 
+class DatasetImageDeleteSchema(Schema):
+    image_ids = fields.List(
+        fields.String(required=True, validate=validate.Length(min=1, max=64)),
+        required=True,
+        validate=validate.Length(min=1, max=5000),
+    )
+
+
 class AnnotationDetectionSchema(Schema):
     category = fields.String(required=True, validate=validate.Length(min=1, max=120))
     confidence = fields.Float(required=True, validate=validate.Range(min=0, max=1))

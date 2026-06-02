@@ -7,6 +7,8 @@ import {
   annotateDataset,
   augmentDataset,
   createTrainingJob,
+  deleteDatasetImage,
+  deleteDatasetImages,
   deleteTrainingJob,
   exportDataset,
   getDataset,
@@ -145,6 +147,8 @@ export function DatasetDetailPage() {
   const [isCreatingExport, setIsCreatingExport] = useState(false);
   const [isCreatingTrainingJob, setIsCreatingTrainingJob] = useState(false);
   const [deletingTrainingJobId, setDeletingTrainingJobId] = useState<string | null>(null);
+  const [deleteSelectionIds, setDeleteSelectionIds] = useState<string[]>([]);
+  const [deletingImageIds, setDeletingImageIds] = useState<string[]>([]);
   const [multiplier, setMultiplier] = useState(3);
   const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
   const [trainingEpochs, setTrainingEpochs] = useState(200);
@@ -227,6 +231,11 @@ export function DatasetDetailPage() {
       });
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
+  const imageIdSet = new Set(images.map((image) => image.id));
+  const deleteSelectionIdSet = new Set(deleteSelectionIds);
+  const deletingImageIdSet = new Set(deletingImageIds);
+  const deleteSelectionCount = deleteSelectionIds.filter((imageId) => imageIdSet.has(imageId)).length;
+  const filteredDeleteSelectionCount = filteredImages.filter((image) => deleteSelectionIdSet.has(image.id)).length;
   const samplePoolFilterActive = Boolean(samplePoolClassFilter || samplePoolSplitFilter);
   const previewIndex = previewImageId ? images.findIndex((image) => image.id === previewImageId) : -1;
   const previewImage = previewIndex >= 0 ? images[previewIndex] : null;
@@ -285,6 +294,11 @@ export function DatasetDetailPage() {
     const categoryCount = dataset?.categories.length ?? 0;
     setTrainingClassIndices((current) => current.filter((index) => index < categoryCount));
   }, [dataset?.categories.length]);
+
+  useEffect(() => {
+    const currentImageIds = new Set((dataset?.images ?? []).map((image) => image.id));
+    setDeleteSelectionIds((current) => current.filter((imageId) => currentImageIds.has(imageId)));
+  }, [dataset?.images]);
 
   useEffect(() => {
     if (samplePoolClassFilter && !(dataset?.categories ?? []).includes(samplePoolClassFilter)) {
@@ -568,6 +582,58 @@ export function DatasetDetailPage() {
   function applySamplePoolSelection(mode: "all" | "none" | "invert") {
     const payload = samplePoolFilterActive ? { mode, image_ids: filteredImageIds } : { mode };
     void applySelection(payload);
+  }
+
+  function toggleDeleteSelection(imageId: string) {
+    setDeleteSelectionIds((current) =>
+      current.includes(imageId) ? current.filter((item) => item !== imageId) : [...current, imageId],
+    );
+  }
+
+  function selectFilteredForDelete() {
+    setDeleteSelectionIds((current) => Array.from(new Set([...current, ...filteredImageIds])));
+  }
+
+  async function removeDatasetImages(imageIds: string[], label: string) {
+    if (!token || !datasetId) return;
+    const uniqueImageIds = Array.from(new Set(imageIds)).filter((imageId) => imageIdSet.has(imageId));
+    if (uniqueImageIds.length === 0) return;
+    if (previewImageId && uniqueImageIds.includes(previewImageId) && !confirmDiscardChanges()) return;
+
+    const confirmed = window.confirm(
+      uniqueImageIds.length === 1
+        ? `删除${label}？图片文件和标注也会一起移除。`
+        : `删除已勾选的 ${uniqueImageIds.length} 张样本？图片文件和标注也会一起移除。`,
+    );
+    if (!confirmed) return;
+
+    setDeletingImageIds(uniqueImageIds);
+    try {
+      const response =
+        uniqueImageIds.length === 1
+          ? await deleteDatasetImage(datasetId, uniqueImageIds[0], token)
+          : await deleteDatasetImages(datasetId, uniqueImageIds, token);
+      const deletedIdSet = new Set(response.deletedImageIds);
+      setDataset(response.dataset);
+      setDeleteSelectionIds((current) => current.filter((imageId) => !deletedIdSet.has(imageId)));
+      if (previewImageId && deletedIdSet.has(previewImageId)) {
+        setPreviewImageId(null);
+      }
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setDeletingImageIds([]);
+    }
+  }
+
+  function removeDatasetImage(image: DatasetImage) {
+    void removeDatasetImages([image.id], `样本 #${image.ordinal}`);
+  }
+
+  function removeDeleteSelection() {
+    const imageIds = deleteSelectionIds.filter((imageId) => imageIdSet.has(imageId));
+    void removeDatasetImages(imageIds, "");
   }
 
   async function handleArchiveImport(event: ChangeEvent<HTMLInputElement>) {
@@ -1274,7 +1340,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
               <div className="mt-2 text-sm text-neutral-500">
-                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张
+                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张，当前范围待删 {filteredDeleteSelectionCount} 张
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1301,6 +1367,31 @@ export function DatasetDetailPage() {
               >
                 <Square className="mr-2 h-4 w-4" />
                 {samplePoolFilterActive ? "清空当前" : "清空"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={selectFilteredForDelete}
+                disabled={filteredImages.length === 0 || isAnyImporting || deletingImageIds.length > 0}
+              >
+                <CheckSquare className="mr-2 h-4 w-4" />
+                勾选当前
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setDeleteSelectionIds([])}
+                disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
+              >
+                <X className="mr-2 h-4 w-4" />
+                清除勾选
+              </Button>
+              <Button
+                variant="secondary"
+                className="border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
+                onClick={removeDeleteSelection}
+                disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {deletingImageIds.length > 0 ? "删除中..." : `删除勾选 ${deleteSelectionCount}`}
               </Button>
             </div>
         </div>
@@ -1370,43 +1461,77 @@ export function DatasetDetailPage() {
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {filteredImages.map((image) => (
-              <button
-                key={image.id}
-                type="button"
-                className={`group overflow-hidden rounded-[24px] border text-left transition ${
-                  image.selected
-                    ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.03]"
-                    : "border-neutral-200 bg-white opacity-80 dark:border-white/10 dark:bg-black/20"
-                }`}
-                onClick={() => openPreview(image.id)}
-              >
-                <div className="relative aspect-square overflow-hidden">
-                  <AuthImage src={image.previewSvg} alt={image.promptText} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
-                  <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,rgba(10,10,10,0.72))]" />
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void applySelection({ mode: "single", image_id: image.id, selected: !image.selected });
-                    }}
-                    className={`absolute right-3 top-3 rounded-full px-3 py-1 text-xs ${
-                      image.selected ? "bg-white text-neutral-900" : "bg-black/65 text-white"
-                    }`}
-                  >
-                    {image.selected ? "已保留" : "未选中"}
-                  </button>
-                  <div className="absolute bottom-3 left-3 right-3 text-white">
-                    <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
-                      <span>{image.sourceType}</span>
-                      <span>{samplePoolSplitLabel(samplePoolSplitForImage(image, samplePoolSplitMap))}</span>
-                      <span>#{image.ordinal}</span>
-                    </div>
-                    <div className="mt-2 line-clamp-2 text-sm">{image.promptText}</div>
+            {filteredImages.map((image) => {
+              const isQueuedForDelete = deleteSelectionIdSet.has(image.id);
+              const isDeletingImage = deletingImageIdSet.has(image.id);
+              return (
+                <article
+                  key={image.id}
+                  className={`group overflow-hidden rounded-[24px] border text-left transition ${
+                    isQueuedForDelete
+                      ? "border-red-300 bg-red-50 dark:border-red-300/50 dark:bg-red-500/10"
+                      : image.selected
+                        ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.03]"
+                        : "border-neutral-200 bg-white opacity-80 dark:border-white/10 dark:bg-black/20"
+                  } ${isDeletingImage ? "opacity-50" : ""}`}
+                >
+                  <div className="relative aspect-square overflow-hidden">
+                    <button
+                      type="button"
+                      className="absolute inset-0 text-left"
+                      onClick={() => openPreview(image.id)}
+                      disabled={isDeletingImage}
+                    >
+                      <AuthImage src={image.previewSvg} alt={image.promptText} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                      <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,rgba(10,10,10,0.72))]" />
+                      <div className="absolute bottom-3 left-3 right-3 text-white">
+                        <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                          <span>{image.sourceType}</span>
+                          <span>{samplePoolSplitLabel(samplePoolSplitForImage(image, samplePoolSplitMap))}</span>
+                          <span>#{image.ordinal}</span>
+                        </div>
+                        <div className="mt-2 line-clamp-2 text-sm">{image.promptText}</div>
+                      </div>
+                    </button>
+                    <label
+                      className={`absolute left-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border transition ${
+                        isQueuedForDelete
+                          ? "border-red-300 bg-red-600 text-white"
+                          : "border-white/60 bg-black/45 text-white hover:bg-black/65"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isQueuedForDelete}
+                        onChange={() => toggleDeleteSelection(image.id)}
+                        disabled={deletingImageIds.length > 0}
+                        aria-label={`勾选删除样本 #${image.ordinal}`}
+                        className="h-4 w-4 rounded border-white/60"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void applySelection({ mode: "single", image_id: image.id, selected: !image.selected })}
+                      disabled={isDeletingImage}
+                      className={`absolute right-3 top-3 z-10 rounded-full px-3 py-1 text-xs ${
+                        image.selected ? "bg-white text-neutral-900" : "bg-black/65 text-white"
+                      }`}
+                    >
+                      {image.selected ? "已保留" : "未选中"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeDatasetImage(image)}
+                      disabled={deletingImageIds.length > 0}
+                      aria-label={`删除样本 #${image.ordinal}`}
+                      className="absolute right-3 top-12 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-red-600 text-white shadow-lg transition hover:bg-red-500 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                </div>
-              </button>
-            ))}
+                </article>
+              );
+            })}
             {filteredImages.length === 0 ? (
               <div className="col-span-full rounded-[22px] border border-dashed border-neutral-200 px-5 py-8 text-sm text-neutral-500 dark:border-white/10">
                 当前 class/split 条件下没有样本。
@@ -2157,12 +2282,21 @@ export function DatasetDetailPage() {
                 <Badge>{previewImage.annotationStatus}</Badge>
               </div>
 
-              <div className="mt-6 flex gap-3">
+              <div className="mt-6 flex flex-wrap gap-3">
                 <Button variant="secondary" onClick={() => setIsAddingDetection((current) => !current)}>
                   {isAddingDetection ? "取消新增框" : "新增框"}
                 </Button>
                 <Button onClick={() => void saveAnnotations()} disabled={isSavingAnnotations}>
                   保存标注
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
+                  onClick={() => removeDatasetImage(previewImage)}
+                  disabled={deletingImageIds.length > 0 || isSavingAnnotations}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除样本
                 </Button>
               </div>
 

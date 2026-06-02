@@ -275,6 +275,27 @@ export function updateDatasetSelection(
   });
 }
 
+export function deleteDatasetImage(datasetId: string, imageId: string, token: string) {
+  return apiRequest<{ deletedImageIds: string[]; deletedCount: number; dataset: Dataset }>(
+    `/datasets/${datasetId}/images/${imageId}`,
+    {
+      method: "DELETE",
+      token,
+    },
+  );
+}
+
+export function deleteDatasetImages(datasetId: string, imageIds: string[], token: string) {
+  return apiRequest<{ deletedImageIds: string[]; deletedCount: number; dataset: Dataset }>(
+    `/datasets/${datasetId}/images`,
+    {
+      method: "DELETE",
+      token,
+      body: JSON.stringify({ image_ids: imageIds }),
+    },
+  );
+}
+
 export function updateDatasetImageAnnotations(
   datasetId: string,
   imageId: string,

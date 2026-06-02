@@ -13,6 +13,7 @@ from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, ModelP
 from app.schemas import (
     AnnotationUpdateSchema,
     DatasetExportSchema,
+    DatasetImageDeleteSchema,
     DatasetSchema,
     DatasetSelectionSchema,
     GenerationTaskSchema,
@@ -22,7 +23,7 @@ from app.schemas import (
     TaskActionSchema,
     VideoImportSchema,
 )
-from app.services.annotation_storage import save_annotation_result
+from app.services.annotation_storage import annotation_path, save_annotation_result
 from app.services.dataset_export_service import get_dataset_archive_path
 from app.services.dataset_service import (
     build_dataset_export_payload,
@@ -73,6 +74,41 @@ def _task_for_dataset(dataset: Dataset, task_id: str) -> DatasetTask:
 def _sync_and_payload(dataset: Dataset) -> dict:
     dataset = sync_dataset(dataset)
     return build_dataset_payload(dataset)
+
+
+def _delete_dataset_image_assets(dataset: Dataset, image: DatasetImage) -> None:
+    image_path = existing_generated_image(
+        current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
+    )
+    if image_path is not None:
+        image_path.unlink(missing_ok=True)
+
+    annotation_file = annotation_path(current_app.config["STORAGE_ROOT"], dataset.id, image.id)
+    annotation_file.unlink(missing_ok=True)
+
+
+def _delete_dataset_images(dataset: Dataset, images: list[DatasetImage]) -> dict:
+    deleted_ids = [image.id for image in images]
+
+    for image in images:
+        _delete_dataset_image_assets(dataset, image)
+        if image.source_task is not None and image in image.source_task.images:
+            image.source_task.images.remove(image)
+        if image in dataset.images:
+            dataset.images.remove(image)
+        db.session.delete(image)
+
+    db.session.flush()
+    sync_dataset_stats_inplace(dataset)
+    for task in dataset.tasks:
+        sync_dataset_task_inplace(task)
+    db.session.commit()
+
+    return {
+        "deletedImageIds": deleted_ids,
+        "deletedCount": len(deleted_ids),
+        "dataset": build_dataset_payload(sync_dataset(dataset)),
+    }
 
 
 def _max_imported_images() -> int:
@@ -651,6 +687,33 @@ def preview_dataset_image(dataset_id: str, image_id: str):
         return jsonify({"message": "image file not found"}), 404
     mimetype = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
     return send_file(path, mimetype=mimetype)
+
+
+@datasets_bp.delete("/<dataset_id>/images/<image_id>")
+@jwt_required()
+def delete_dataset_image(dataset_id: str, image_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    image = next((candidate for candidate in dataset.images if candidate.id == image_id), None)
+    if image is None:
+        return jsonify({"message": "image not found"}), 404
+
+    return jsonify(_delete_dataset_images(dataset, [image]))
+
+
+@datasets_bp.delete("/<dataset_id>/images")
+@jwt_required()
+def delete_dataset_images(dataset_id: str):
+    user_id = get_jwt_identity()
+    payload = DatasetImageDeleteSchema().load(request.get_json() or {})
+    image_ids = list(dict.fromkeys(payload["image_ids"]))
+    dataset = _dataset_for_user(dataset_id, user_id)
+    image_by_id = {image.id: image for image in dataset.images}
+    missing_ids = [image_id for image_id in image_ids if image_id not in image_by_id]
+    if missing_ids:
+        return jsonify({"message": "one or more images not found"}), 404
+
+    return jsonify(_delete_dataset_images(dataset, [image_by_id[image_id] for image_id in image_ids]))
 
 
 @datasets_bp.patch("/<dataset_id>/images/<image_id>/annotations")
