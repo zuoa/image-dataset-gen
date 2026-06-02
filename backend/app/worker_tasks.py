@@ -22,13 +22,16 @@ from app.services.dataset_service import (
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
 from app.services.video_import_service import (
+    DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
     cleanup_video_import_source,
     expected_extracted_frame_count,
     iter_video_frames,
+    normalize_video_frame_interval_mode,
     normalize_video_target_size,
     resolve_video_import_source,
     video_target_size_max_dimension,
     video_frame_count,
+    video_frame_rate,
 )
 from app.utils.crypto import decrypt_secret
 
@@ -292,7 +295,14 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         if not source_path.exists():
             raise RuntimeError("视频源文件不存在，请重新上传。")
 
+        frame_interval_mode = normalize_video_frame_interval_mode(
+            str(video_config.get("frameIntervalMode") or "frames")
+        )
         frame_interval = max(1, int(video_config.get("frameInterval", 30)))
+        frame_interval_seconds = max(
+            0.01,
+            float(video_config.get("frameIntervalSeconds") or DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS),
+        )
         output_format = "png" if video_config.get("outputFormat") == "png" else "jpg"
         jpeg_quality = max(1, min(100, int(video_config.get("jpegQuality", 95))))
         filename_prefix = str(video_config.get("filenamePrefix") or "frame")
@@ -300,10 +310,21 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         target_max_dimension = video_target_size_max_dimension(target_size)
         max_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
         total_frames = video_frame_count(source_path)
-        expected_count = expected_extracted_frame_count(total_frames, frame_interval, max_images)
+        frame_rate = video_frame_rate(source_path)
+        effective_frame_interval = frame_interval
+        if frame_interval_mode == "seconds":
+            if frame_rate <= 0:
+                raise RuntimeError("无法读取视频帧率，不能按秒抽帧。")
+            effective_frame_interval = max(1, round(frame_rate * frame_interval_seconds))
+        expected_count = expected_extracted_frame_count(total_frames, effective_frame_interval, max_images)
 
         video_config = {
             **video_config,
+            "frameIntervalMode": frame_interval_mode,
+            "frameInterval": frame_interval,
+            "frameIntervalSeconds": frame_interval_seconds,
+            "effectiveFrameInterval": effective_frame_interval,
+            "frameRate": frame_rate,
             "targetSize": target_size,
             "targetMaxDimension": target_max_dimension,
             "totalFrames": total_frames,
@@ -322,7 +343,7 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         existing_count = len(task.images)
         for extracted in iter_video_frames(
             source_path,
-            frame_interval=frame_interval,
+            frame_interval=effective_frame_interval,
             output_format=output_format,
             jpeg_quality=jpeg_quality,
             filename_prefix=filename_prefix,

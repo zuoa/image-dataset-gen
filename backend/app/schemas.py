@@ -142,7 +142,9 @@ class RoboflowImportSchema(Schema):
 
 
 class VideoImportSchema(Schema):
+    frame_interval_mode = fields.String(load_default="frames", validate=validate.OneOf(["frames", "seconds"]))
     frame_interval = fields.Integer(load_default=30, validate=validate.Range(min=1, max=10000))
+    frame_interval_seconds = fields.Float(load_default=1.0, validate=validate.Range(min=0.01, max=3600))
     output_format = fields.String(load_default="jpg", validate=validate.OneOf(["jpg", "png"]))
     jpeg_quality = fields.Integer(load_default=95, validate=validate.Range(min=1, max=100))
     filename_prefix = fields.String(load_default="frame", allow_none=True, validate=validate.Length(max=80))

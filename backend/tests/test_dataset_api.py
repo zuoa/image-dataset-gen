@@ -404,6 +404,44 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
     assert any(name.endswith("video_frame_000000_000004.png") for name in image_names)
 
 
+def test_video_import_supports_seconds_interval(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-seconds-import")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=6)), "sample.avi"),
+            "frame_interval_mode": "seconds",
+            "frame_interval_seconds": "0.4",
+            "output_format": "png",
+            "jpeg_quality": "95",
+            "filename_prefix": "second_frame",
+            "target_size": "original",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    video_config = payload["task"]["config"]["video"]
+    assert video_config["frameIntervalMode"] == "seconds"
+    assert video_config["frameIntervalSeconds"] == 0.4
+    assert video_config["frameRate"] == 5.0
+    assert video_config["effectiveFrameInterval"] == 2
+    assert video_config["expectedFrames"] == 3
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 3
+    assert [image["diversityVars"]["sourceFrame"] for image in dataset["images"]] == ["0", "2", "4"]
+    assert dataset["images"][0]["diversityVars"]["outputFilename"] == "second_frame_000000.png"
+
+
 def test_video_import_resizes_frames_to_target_size(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

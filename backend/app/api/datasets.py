@@ -51,10 +51,13 @@ from app.services.subject_assist_service import suggest_subject_fields
 from app.services.video_import_service import (
     DEFAULT_VIDEO_FILENAME_PREFIX,
     DEFAULT_VIDEO_FRAME_INTERVAL,
+    DEFAULT_VIDEO_FRAME_INTERVAL_MODE,
+    DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
     DEFAULT_VIDEO_JPEG_QUALITY,
     DEFAULT_VIDEO_OUTPUT_FORMAT,
     DEFAULT_VIDEO_TARGET_SIZE,
     is_allowed_video_filename,
+    normalize_video_frame_interval_mode,
     normalize_video_target_size,
     sanitize_filename_prefix,
     save_video_import_source,
@@ -459,7 +462,13 @@ def import_dataset_video(dataset_id: str):
         return jsonify({"message": "只支持上传 MP4、MOV、AVI、MKV 或 WEBM 视频。"}), 400
 
     payload = VideoImportSchema().load(request.form.to_dict() or {})
+    frame_interval_mode = normalize_video_frame_interval_mode(
+        payload.get("frame_interval_mode") or DEFAULT_VIDEO_FRAME_INTERVAL_MODE
+    )
     frame_interval = int(payload.get("frame_interval") or DEFAULT_VIDEO_FRAME_INTERVAL)
+    frame_interval_seconds = float(
+        payload.get("frame_interval_seconds") or DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS
+    )
     output_format = str(payload.get("output_format") or DEFAULT_VIDEO_OUTPUT_FORMAT)
     jpeg_quality = int(payload.get("jpeg_quality") or DEFAULT_VIDEO_JPEG_QUALITY)
     filename_prefix = sanitize_filename_prefix(payload.get("filename_prefix") or DEFAULT_VIDEO_FILENAME_PREFIX)
@@ -497,7 +506,9 @@ def import_dataset_video(dataset_id: str):
         "sourcePath": source_path,
         "video": {
             "filename": Path(upload.filename).name,
+            "frameIntervalMode": frame_interval_mode,
             "frameInterval": frame_interval,
+            "frameIntervalSeconds": frame_interval_seconds,
             "outputFormat": output_format,
             "jpegQuality": jpeg_quality,
             "filenamePrefix": filename_prefix,

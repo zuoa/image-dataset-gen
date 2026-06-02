@@ -72,6 +72,7 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
 ];
 type VideoOutputFormat = "jpg" | "png";
 type VideoTargetSize = "original" | "1080p" | "720p" | "640";
+type VideoFrameIntervalMode = "frames" | "seconds";
 type ImportTab = "video" | "zip" | "roboflow";
 const videoTargetSizeOptions: Array<{ value: VideoTargetSize; label: string }> = [
   { value: "original", label: "原图" },
@@ -194,7 +195,9 @@ export function DatasetDetailPage() {
   const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
   const [activeImportTab, setActiveImportTab] = useState<ImportTab>("video");
+  const [videoFrameIntervalMode, setVideoFrameIntervalMode] = useState<VideoFrameIntervalMode>("frames");
   const [videoFrameInterval, setVideoFrameInterval] = useState(30);
+  const [videoFrameIntervalSeconds, setVideoFrameIntervalSeconds] = useState(1);
   const [videoOutputFormat, setVideoOutputFormat] = useState<VideoOutputFormat>("jpg");
   const [videoJpegQuality, setVideoJpegQuality] = useState(95);
   const [videoFilenamePrefix, setVideoFilenamePrefix] = useState("frame");
@@ -275,6 +278,12 @@ export function DatasetDetailPage() {
   const trainingRunning = trainingJobs.some((job) => activeTrainingStatuses.has(job.status));
   const trainingClassIndexSet = new Set(trainingClassIndices);
   const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
+  const normalizedVideoFrameInterval = Math.max(1, Math.min(10000, Math.round(videoFrameInterval) || 30));
+  const normalizedVideoFrameIntervalSeconds = Math.max(0.01, Math.min(3600, Number(videoFrameIntervalSeconds) || 1));
+  const videoFrameIntervalHint =
+    videoFrameIntervalMode === "seconds"
+      ? `每 ${normalizedVideoFrameIntervalSeconds.toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 秒取一张`
+      : `每 ${normalizedVideoFrameInterval} 帧取一张`;
   const videoFilenamePrefixPreview = videoFilenamePrefix.trim().replace(/[^A-Za-z0-9_-]/g, "") || "frame";
   const videoOutputExample = `${videoFilenamePrefixPreview}_000000.${videoOutputFormat}`;
   const videoTargetSizeLabel = videoTargetSizeOptions.find((option) => option.value === videoTargetSize)?.label ?? "原图";
@@ -695,14 +704,17 @@ export function DatasetDetailPage() {
   async function handleVideoImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!token || !datasetId || !file) return;
-    const frameInterval = Math.max(1, Math.min(10000, Math.round(videoFrameInterval) || 30));
+    const frameInterval = normalizedVideoFrameInterval;
+    const frameIntervalSeconds = normalizedVideoFrameIntervalSeconds;
     const jpegQuality = Math.max(1, Math.min(100, Math.round(videoJpegQuality) || 95));
     const filenamePrefix = videoFilenamePrefix.trim() || "frame";
     setIsImportingVideo(true);
     setImportSummary(null);
     try {
       const response = await importDatasetVideo(datasetId, token, file, {
+        frameIntervalMode: videoFrameIntervalMode,
         frameInterval,
+        frameIntervalSeconds,
         outputFormat: videoOutputFormat,
         jpegQuality,
         filenamePrefix,
@@ -713,7 +725,7 @@ export function DatasetDetailPage() {
       const importedCount = Number(response.summary.importedCount ?? response.task.imagesGenerated ?? 0);
       setImportSummary(
         response.task.status === "running"
-          ? `已创建视频抽帧任务，每 ${frameInterval} 帧取一张，尺寸 ${videoTargetSizeLabel}`
+          ? `已创建视频抽帧任务，${videoFrameIntervalHint}，尺寸 ${videoTargetSizeLabel}`
           : `已从视频抽取 ${importedCount} 张图片`,
       );
       setIsImportModalOpen(false);
@@ -1667,7 +1679,7 @@ export function DatasetDetailPage() {
                         本地视频
                       </div>
                       <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                        按帧间隔抽取图片，抽出的帧会直接加入当前数据集样本池。
+                        按固定帧数或固定秒数抽取图片，抽出的帧会直接加入当前数据集样本池。
                       </p>
                     </div>
                     <Button
@@ -1682,17 +1694,50 @@ export function DatasetDetailPage() {
 
                   <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
                     <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2 sm:col-span-2">
+                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">抽帧方式</span>
+                        <div className={`${segmentedGroupClasses} w-full max-w-md`}>
+                          {([
+                            { value: "frames", label: "按帧数" },
+                            { value: "seconds", label: "按秒数" },
+                          ] as const).map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={segmentedButtonClasses(videoFrameIntervalMode === option.value, "flex-1")}
+                              onClick={() => setVideoFrameIntervalMode(option.value)}
+                              disabled={isAnyImporting}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <label className="space-y-2">
-                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">抽帧间隔（帧）</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={10000}
-                          value={videoFrameInterval}
-                          onChange={(event) => setVideoFrameInterval(Number(event.target.value) || 0)}
-                          disabled={isAnyImporting}
-                        />
-                        <span className="block text-xs text-neutral-500">每 {Math.max(1, videoFrameInterval || 30)} 帧取一张</span>
+                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">
+                          {videoFrameIntervalMode === "seconds" ? "抽帧间隔（秒）" : "抽帧间隔（帧）"}
+                        </span>
+                        {videoFrameIntervalMode === "seconds" ? (
+                          <Input
+                            type="number"
+                            min={0.01}
+                            max={3600}
+                            step={0.1}
+                            value={videoFrameIntervalSeconds}
+                            onChange={(event) => setVideoFrameIntervalSeconds(Number(event.target.value) || 0)}
+                            disabled={isAnyImporting}
+                          />
+                        ) : (
+                          <Input
+                            type="number"
+                            min={1}
+                            max={10000}
+                            value={videoFrameInterval}
+                            onChange={(event) => setVideoFrameInterval(Number(event.target.value) || 0)}
+                            disabled={isAnyImporting}
+                          />
+                        )}
+                        <span className="block text-xs text-neutral-500">{videoFrameIntervalHint}</span>
                       </label>
                       <label className="space-y-2">
                         <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">文件名前缀</span>

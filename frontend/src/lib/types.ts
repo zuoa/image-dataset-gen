@@ -120,7 +120,11 @@ export type DatasetTask = {
     sourcePath?: string;
     video?: {
       filename: string;
+      frameIntervalMode?: "frames" | "seconds";
       frameInterval: number;
+      frameIntervalSeconds?: number;
+      effectiveFrameInterval?: number;
+      frameRate?: number;
       outputFormat: "jpg" | "png";
       jpegQuality: number;
       filenamePrefix: string;

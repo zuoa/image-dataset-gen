@@ -12,6 +12,8 @@ from werkzeug.utils import secure_filename
 
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 DEFAULT_VIDEO_FRAME_INTERVAL = 30
+DEFAULT_VIDEO_FRAME_INTERVAL_MODE = "frames"
+DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
 DEFAULT_VIDEO_OUTPUT_FORMAT = "jpg"
 DEFAULT_VIDEO_JPEG_QUALITY = 95
 DEFAULT_VIDEO_FILENAME_PREFIX = "frame"
@@ -46,6 +48,11 @@ def sanitize_filename_prefix(value: str | None) -> str:
 def normalize_video_target_size(value: str | None) -> str:
     normalized = (value or DEFAULT_VIDEO_TARGET_SIZE).strip().lower()
     return normalized if normalized in VIDEO_TARGET_SIZE_MAX_DIMENSIONS else DEFAULT_VIDEO_TARGET_SIZE
+
+
+def normalize_video_frame_interval_mode(value: str | None) -> str:
+    normalized = (value or DEFAULT_VIDEO_FRAME_INTERVAL_MODE).strip().lower()
+    return "seconds" if normalized == "seconds" else DEFAULT_VIDEO_FRAME_INTERVAL_MODE
 
 
 def video_target_size_max_dimension(value: str | None) -> int | None:
@@ -144,6 +151,21 @@ def video_frame_count(source_path: Path) -> int:
         raise RuntimeError("无法读取上传的视频文件。")
     try:
         return max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+    finally:
+        capture.release()
+
+
+def video_frame_rate(source_path: Path) -> float:
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
+
+    capture = cv2.VideoCapture(str(source_path))
+    if not capture.isOpened():
+        raise RuntimeError("无法读取上传的视频文件。")
+    try:
+        return max(0.0, float(capture.get(cv2.CAP_PROP_FPS) or 0))
     finally:
         capture.release()
 

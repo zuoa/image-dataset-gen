@@ -120,7 +120,9 @@ export function importDatasetVideo(
   token: string,
   video: File,
   settings: {
+    frameIntervalMode: "frames" | "seconds";
     frameInterval: number;
+    frameIntervalSeconds: number;
     outputFormat: "jpg" | "png";
     jpegQuality: number;
     filenamePrefix: string;
@@ -129,7 +131,9 @@ export function importDatasetVideo(
 ) {
   const body = new FormData();
   body.append("video", video);
+  body.append("frame_interval_mode", settings.frameIntervalMode);
   body.append("frame_interval", String(settings.frameInterval));
+  body.append("frame_interval_seconds", String(settings.frameIntervalSeconds));
   body.append("output_format", settings.outputFormat);
   body.append("jpeg_quality", String(settings.jpegQuality));
   body.append("filename_prefix", settings.filenamePrefix);
