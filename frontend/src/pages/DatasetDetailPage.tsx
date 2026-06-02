@@ -92,7 +92,7 @@ const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> =
   { value: "train", label: "训练集" },
   { value: "val", label: "验证集" },
   { value: "test", label: "测试集" },
-  { value: "unselected", label: "未选" },
+  { value: "unselected", label: "不保留" },
 ];
 
 function buildSamplePoolSplitMap(images: DatasetImage[]) {
@@ -258,15 +258,18 @@ export function DatasetDetailPage() {
       });
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
+  const retainedImageCount = images.filter((image) => image.selected).length;
+  const unretainedImageCount = images.length - retainedImageCount;
   const unannotatedImageIds = images.filter((image) => !isImageAnnotated(image)).map((image) => image.id);
-  const filteredUnannotatedImageIds = filteredImages.filter((image) => !isImageAnnotated(image)).map((image) => image.id);
+  const unretainedUnannotatedImageIds = images
+    .filter((image) => !isImageAnnotated(image) && !image.selected)
+    .map((image) => image.id);
   const annotatedImageCount = images.length - unannotatedImageIds.length;
   const imageIdSet = new Set(images.map((image) => image.id));
   const deleteSelectionIdSet = new Set(deleteSelectionIds);
   const deletingImageIdSet = new Set(deletingImageIds);
   const deleteSelectionCount = deleteSelectionIds.filter((imageId) => imageIdSet.has(imageId)).length;
   const filteredDeleteSelectionCount = filteredImages.filter((image) => deleteSelectionIdSet.has(image.id)).length;
-  const samplePoolFilterActive = Boolean(samplePoolClassFilter || samplePoolSplitFilter);
   const previewIndex = previewImageId ? images.findIndex((image) => image.id === previewImageId) : -1;
   const previewImage = previewIndex >= 0 ? images[previewIndex] : null;
   const runningTask = dataset?.tasks.some((task) => task.status === "running");
@@ -616,15 +619,27 @@ export function DatasetDetailPage() {
     }
   }
 
-  function applySamplePoolSelection(mode: "all" | "none" | "invert") {
-    const payload = samplePoolFilterActive ? { mode, image_ids: filteredImageIds } : { mode };
-    void applySelection(payload);
+  function applySamplePoolRetention(mode: "all" | "none" | "invert") {
+    if (images.length === 0) return;
+
+    const confirmMessage =
+      mode === "all"
+        ? `确认将全部 ${images.length} 张样本标记为保留？当前有 ${unretainedImageCount} 张会从不保留变为保留。`
+        : mode === "invert"
+          ? `确认反转全部 ${images.length} 张样本的保留状态？当前 ${retainedImageCount} 张会变为不保留，${unretainedImageCount} 张会变为保留。`
+          : `确认将全部 ${images.length} 张样本标记为不保留？当前 ${retainedImageCount} 张保留样本会被移出训练和导出。`;
+    if (!window.confirm(confirmMessage)) return;
+
+    void applySelection({ mode });
   }
 
-  function selectUnannotatedSamplePoolImages() {
-    const imageIds = samplePoolFilterActive ? filteredUnannotatedImageIds : unannotatedImageIds;
-    if (imageIds.length === 0) return;
-    void applySelection({ mode: "all", image_ids: imageIds });
+  function retainUnannotatedSamplePoolImages() {
+    if (unretainedUnannotatedImageIds.length === 0) return;
+    const confirmed = window.confirm(
+      `确认将 ${unretainedUnannotatedImageIds.length} 张未标注且当前不保留的样本标记为保留？`,
+    );
+    if (!confirmed) return;
+    void applySelection({ mode: "all", image_ids: unretainedUnannotatedImageIds });
   }
 
   function toggleDeleteSelection(imageId: string) {
@@ -1010,14 +1025,14 @@ export function DatasetDetailPage() {
             </div>
             {importSummary ? <div className="mt-3 text-sm text-neutral-500">{importSummary}</div> : null}
             {selectedOriginalCount === 0 ? (
-              <div className="mt-3 text-sm text-neutral-500">当前没有已选中的原始样本，暂时不能创建增强批次。</div>
+              <div className="mt-3 text-sm text-neutral-500">当前没有保留的原始样本，暂时不能创建增强批次。</div>
             ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: "样本池", value: String(dataset.imageCount) },
-              { label: "已选样本", value: String(dataset.selectedCount) },
+              { label: "保留样本", value: String(dataset.selectedCount) },
               { label: "任务批次", value: String(dataset.taskCount) },
               { label: "累计成本", value: formatCurrency(dataset.spentCost) },
             ].map((metric) => (
@@ -1163,7 +1178,7 @@ export function DatasetDetailPage() {
                 <Play className="mr-2 h-4 w-4" />
                 {isCreatingTrainingJob ? "创建中..." : "开始训练"}
               </Button>
-              {dataset.selectedCount === 0 ? <span className="text-sm text-neutral-500">请选择样本后再训练。</span> : null}
+              {dataset.selectedCount === 0 ? <span className="text-sm text-neutral-500">请先保留样本后再训练。</span> : null}
             </div>
           </div>
 
@@ -1351,7 +1366,7 @@ export function DatasetDetailPage() {
                     {latestExport ? `v${latestExport.version} · ${String(latestExport.status)}` : "未创建导出包"}
                   </div>
                   <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                    当前已选中 {dataset.selectedCount} 张样本，可导出为 {exportFormat.toUpperCase()} 数据集。
+                    当前保留 {dataset.selectedCount} 张样本，可导出为 {exportFormat.toUpperCase()} 数据集。
                   </div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <Button
@@ -1387,67 +1402,73 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
               <div className="mt-2 text-sm text-neutral-500">
-                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张，已标注 {annotatedImageCount} 张，未标注 {unannotatedImageIds.length} 张，当前范围待删 {filteredDeleteSelectionCount} 张
+                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已保留 {filteredSelectedCount} 张，已标注 {annotatedImageCount} 张，未标注 {unannotatedImageIds.length} 张，当前范围勾选待删 {filteredDeleteSelectionCount} 张
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => applySamplePoolSelection("all")}
-                disabled={samplePoolFilterActive && filteredImages.length === 0}
-              >
-                <CheckSquare className="mr-2 h-4 w-4" />
-                {samplePoolFilterActive ? "全选当前" : "全选"}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => applySamplePoolSelection("invert")}
-                disabled={samplePoolFilterActive && filteredImages.length === 0}
-              >
-                <FlipHorizontal2 className="mr-2 h-4 w-4" />
-                {samplePoolFilterActive ? "反选当前" : "反选"}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => applySamplePoolSelection("none")}
-                disabled={samplePoolFilterActive && filteredImages.length === 0}
-              >
-                <Square className="mr-2 h-4 w-4" />
-                {samplePoolFilterActive ? "清空当前" : "清空"}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={selectUnannotatedSamplePoolImages}
-                disabled={(samplePoolFilterActive ? filteredUnannotatedImageIds.length : unannotatedImageIds.length) === 0}
-              >
-                <ListChecks className="mr-2 h-4 w-4" />
-                {samplePoolFilterActive ? `全选当前未标注 ${filteredUnannotatedImageIds.length}` : `全选未标注 ${unannotatedImageIds.length}`}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={selectFilteredForDelete}
-                disabled={filteredImages.length === 0 || isAnyImporting || deletingImageIds.length > 0}
-              >
-                <CheckSquare className="mr-2 h-4 w-4" />
-                勾选当前
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setDeleteSelectionIds([])}
-                disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
-              >
-                <X className="mr-2 h-4 w-4" />
-                清除勾选
-              </Button>
-              <Button
-                variant="secondary"
-                className="border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
-                onClick={removeDeleteSelection}
-                disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                {deletingImageIds.length > 0 ? "删除中..." : `删除勾选 ${deleteSelectionCount}`}
-              </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 p-1 dark:border-white/10 dark:bg-white/[0.03]">
+                <span className="px-3 text-xs text-neutral-500">保留状态</span>
+                <Button
+                  variant="secondary"
+                  onClick={() => applySamplePoolRetention("all")}
+                  disabled={images.length === 0 || unretainedImageCount === 0}
+                >
+                  <CheckSquare className="mr-2 h-4 w-4" />
+                  全部保留
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => applySamplePoolRetention("invert")}
+                  disabled={images.length === 0}
+                >
+                  <FlipHorizontal2 className="mr-2 h-4 w-4" />
+                  反向保留
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => applySamplePoolRetention("none")}
+                  disabled={images.length === 0 || retainedImageCount === 0}
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  全部不保留
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={retainUnannotatedSamplePoolImages}
+                  disabled={unretainedUnannotatedImageIds.length === 0}
+                >
+                  <ListChecks className="mr-2 h-4 w-4" />
+                  保留未标注 {unretainedUnannotatedImageIds.length}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-full border border-red-100 bg-red-50/60 p-1 dark:border-red-400/20 dark:bg-red-500/5">
+                <span className="px-3 text-xs text-red-600 dark:text-red-200">删除勾选</span>
+                <Button
+                  variant="secondary"
+                  onClick={selectFilteredForDelete}
+                  disabled={filteredImages.length === 0 || isAnyImporting || deletingImageIds.length > 0}
+                >
+                  <CheckSquare className="mr-2 h-4 w-4" />
+                  勾选当前
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setDeleteSelectionIds([])}
+                  disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
+                >
+                  <X className="mr-2 h-4 w-4" />
+                  清除勾选
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
+                  onClick={removeDeleteSelection}
+                  disabled={deleteSelectionCount === 0 || deletingImageIds.length > 0}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {deletingImageIds.length > 0 ? "删除中..." : `删除勾选 ${deleteSelectionCount}`}
+                </Button>
+              </div>
             </div>
         </div>
 
@@ -1576,7 +1597,7 @@ export function DatasetDetailPage() {
                         image.selected ? "bg-white text-neutral-900" : "bg-black/65 text-white"
                       }`}
                     >
-                      {image.selected ? "已保留" : "未选中"}
+                      {image.selected ? "已保留" : "不保留"}
                     </button>
                     <button
                       type="button"
@@ -1939,7 +1960,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Augmentation</div>
               <h3 className="mt-2 text-3xl text-neutral-900 dark:text-white">增强</h3>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                增强批次会基于当前已选中的原始样本生成新的变体，并自动写回同一个数据集样本池。
+                增强批次会基于当前保留的原始样本生成新的变体，并自动写回同一个数据集样本池。
               </p>
             </div>
 
@@ -2279,7 +2300,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Export</div>
               <h3 className="mt-2 text-3xl text-neutral-900 dark:text-white">导出</h3>
               <p className="mt-3 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                选择导出格式后创建数据集压缩包，导出范围基于当前已选中的样本。
+                选择导出格式后创建数据集压缩包，导出范围基于当前保留的样本。
               </p>
             </div>
 
@@ -2306,7 +2327,7 @@ export function DatasetDetailPage() {
 
               <div className="rounded-[24px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">导出范围</div>
-                <div className="mt-3 text-lg text-neutral-900 dark:text-white">{dataset.selectedCount} 张已选样本</div>
+                <div className="mt-3 text-lg text-neutral-900 dark:text-white">{dataset.selectedCount} 张保留样本</div>
                 <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
                   最近导出：{latestExport ? `v${latestExport.version}` : "暂无"}
                 </div>
