@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Link, UNSAFE_NavigationContext, useParams } from "react-router-dom";
 
-import { getDataset, updateDatasetImageAnnotations } from "../api/datasets";
+import { deleteDatasetImage, getDataset, updateDatasetImageAnnotations } from "../api/datasets";
 import { AuthImage } from "../components/AuthImage";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -30,7 +30,7 @@ import {
   type ImageViewport,
   type ResizeCorner,
 } from "../lib/annotation";
-import type { Dataset } from "../lib/types";
+import type { Dataset, DatasetImage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
@@ -72,6 +72,7 @@ export function DatasetAnnotatePage() {
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [isAddingDetection, setIsAddingDetection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [currentCategory, setCurrentCategory] = useState("object");
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
@@ -86,7 +87,8 @@ export function DatasetAnnotatePage() {
   const processedCount = useMemo(() => images.filter((image) => isProcessed(image.annotationStatus)).length, [images]);
   const activeCategory = currentCategory || categories[0] || "object";
   const hasAnnotationChanges = activeImage !== null && !detectionsEqual(activeImage.detections, draftDetections);
-  const canSave = activeImage !== null && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
+  const canSave = activeImage !== null && !deletingImageId && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
+  const isDeletingActiveImage = Boolean(activeImage && deletingImageId === activeImage.id);
 
   useEffect(() => {
     if (!token || !datasetId) return;
@@ -270,7 +272,7 @@ export function DatasetAnnotatePage() {
   }
 
   async function saveAnnotations() {
-    if (!token || !datasetId || !activeImage) return;
+    if (!token || !datasetId || !activeImage || deletingImageId) return;
     setIsSaving(true);
     try {
       const response = await updateDatasetImageAnnotations(datasetId, activeImage.id, token, draftDetections);
@@ -281,6 +283,37 @@ export function DatasetAnnotatePage() {
       setActionError((error as Error).message);
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function removeDatasetImage(image: DatasetImage) {
+    if (!token || !datasetId || deletingImageId) return;
+    const discardsActiveDraft = image.id === activeImage?.id && hasAnnotationChanges;
+    const confirmed = window.confirm(
+      `删除样本 #${image.ordinal}？图片文件和标注也会一起移除。${discardsActiveDraft ? " 当前未保存的标注改动也会放弃。" : ""}`,
+    );
+    if (!confirmed) return;
+
+    setDeletingImageId(image.id);
+    try {
+      const response = await deleteDatasetImage(datasetId, image.id, token);
+      const deletedIdSet = new Set(response.deletedImageIds);
+      const nextImages = response.dataset.images;
+      const deletedIndex = images.findIndex((candidate) => candidate.id === image.id);
+      const fallbackIndex = deletedIndex >= 0 ? Math.min(deletedIndex, nextImages.length - 1) : 0;
+
+      setDataset(response.dataset);
+      setActiveImageId((current) => {
+        if (current && !deletedIdSet.has(current) && nextImages.some((candidate) => candidate.id === current)) {
+          return current;
+        }
+        return nextImages[fallbackIndex]?.id ?? null;
+      });
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setDeletingImageId(null);
     }
   }
 
@@ -472,13 +505,22 @@ export function DatasetAnnotatePage() {
 
           <div className="flex flex-wrap items-center gap-2">
             {actionError ? <span className="max-w-[280px] truncate text-sm text-red-600 dark:text-red-300">{actionError}</span> : null}
-            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(-1)} disabled={activeIndex <= 0}>
+            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(-1)} disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
               <ChevronLeft className="mr-1.5 h-4 w-4" />
               上一张
             </Button>
-            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(1)} disabled={activeIndex >= images.length - 1}>
+            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(1)} disabled={activeIndex >= images.length - 1 || Boolean(deletingImageId)}>
               下一张
               <ChevronRight className="ml-1.5 h-4 w-4" />
+            </Button>
+            <Button
+              variant="secondary"
+              className="h-9 border-red-200 px-3 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
+              onClick={() => activeImage && void removeDatasetImage(activeImage)}
+              disabled={!activeImage || isSaving || Boolean(deletingImageId)}
+            >
+              {isDeletingActiveImage ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              删除图片
             </Button>
             <Button onClick={() => void saveAnnotations()} disabled={isSaving || !canSave}>
               {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}

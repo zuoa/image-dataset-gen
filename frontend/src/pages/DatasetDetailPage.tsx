@@ -124,6 +124,15 @@ function samplePoolSplitForImage(image: DatasetImage, splitMap: Map<string, Samp
   return image.selected ? splitMap.get(image.id) ?? "train" : "unselected";
 }
 
+function isImageAnnotated(image: DatasetImage) {
+  return image.annotationStatus === "annotated" || image.annotationStatus === "empty";
+}
+
+function samplePoolAnnotationLabel(image: DatasetImage) {
+  if (image.annotationStatus === "empty") return "空标注";
+  return isImageAnnotated(image) ? "已标注" : "未标注";
+}
+
 function formatMetric(value: unknown) {
   if (typeof value !== "number") return "—";
   return value <= 1 ? value.toFixed(3) : String(value);
@@ -246,6 +255,9 @@ export function DatasetDetailPage() {
       });
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
+  const unannotatedImageIds = images.filter((image) => !isImageAnnotated(image)).map((image) => image.id);
+  const filteredUnannotatedImageIds = filteredImages.filter((image) => !isImageAnnotated(image)).map((image) => image.id);
+  const annotatedImageCount = images.length - unannotatedImageIds.length;
   const imageIdSet = new Set(images.map((image) => image.id));
   const deleteSelectionIdSet = new Set(deleteSelectionIds);
   const deletingImageIdSet = new Set(deletingImageIds);
@@ -598,6 +610,12 @@ export function DatasetDetailPage() {
   function applySamplePoolSelection(mode: "all" | "none" | "invert") {
     const payload = samplePoolFilterActive ? { mode, image_ids: filteredImageIds } : { mode };
     void applySelection(payload);
+  }
+
+  function selectUnannotatedSamplePoolImages() {
+    const imageIds = samplePoolFilterActive ? filteredUnannotatedImageIds : unannotatedImageIds;
+    if (imageIds.length === 0) return;
+    void applySelection({ mode: "all", image_ids: imageIds });
   }
 
   function toggleDeleteSelection(imageId: string) {
@@ -1357,7 +1375,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
               <div className="mt-2 text-sm text-neutral-500">
-                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张，当前范围待删 {filteredDeleteSelectionCount} 张
+                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已选 {filteredSelectedCount} 张，已标注 {annotatedImageCount} 张，未标注 {unannotatedImageIds.length} 张，当前范围待删 {filteredDeleteSelectionCount} 张
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1384,6 +1402,14 @@ export function DatasetDetailPage() {
               >
                 <Square className="mr-2 h-4 w-4" />
                 {samplePoolFilterActive ? "清空当前" : "清空"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={selectUnannotatedSamplePoolImages}
+                disabled={(samplePoolFilterActive ? filteredUnannotatedImageIds.length : unannotatedImageIds.length) === 0}
+              >
+                <ListChecks className="mr-2 h-4 w-4" />
+                {samplePoolFilterActive ? `全选当前未标注 ${filteredUnannotatedImageIds.length}` : `全选未标注 ${unannotatedImageIds.length}`}
               </Button>
               <Button
                 variant="secondary"
@@ -1481,6 +1507,7 @@ export function DatasetDetailPage() {
             {filteredImages.map((image) => {
               const isQueuedForDelete = deleteSelectionIdSet.has(image.id);
               const isDeletingImage = deletingImageIdSet.has(image.id);
+              const annotated = isImageAnnotated(image);
               return (
                 <article
                   key={image.id}
@@ -1506,6 +1533,9 @@ export function DatasetDetailPage() {
                           <span>{image.sourceType}</span>
                           <span>{samplePoolSplitLabel(samplePoolSplitForImage(image, samplePoolSplitMap))}</span>
                           <span>#{image.ordinal}</span>
+                          <span className={annotated ? "text-lime-200" : "text-amber-200"}>
+                            {samplePoolAnnotationLabel(image)}
+                          </span>
                         </div>
                         <div className="mt-2 line-clamp-2 text-sm">{image.promptText}</div>
                       </div>
