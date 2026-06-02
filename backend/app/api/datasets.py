@@ -9,7 +9,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
-from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, ModelProfile
+from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, ModelProfile, generate_uuid
 from app.schemas import (
     AnnotationUpdateSchema,
     DatasetExportSchema,
@@ -467,6 +467,7 @@ def import_dataset_video(dataset_id: str):
     target_max_dimension = video_target_size_max_dimension(target_size)
 
     task = DatasetTask(
+        id=generate_uuid(),
         dataset_id=dataset.id,
         user_id=user_id,
         task_type="import",
@@ -481,9 +482,6 @@ def import_dataset_video(dataset_id: str):
         api_provider="local",
         started_at=now_utc(),
     )
-    db.session.add(task)
-    dataset.tasks.append(task)
-    db.session.flush()
 
     try:
         source_path = save_video_import_source(current_app.config["STORAGE_ROOT"], task.id, upload)
@@ -492,6 +490,8 @@ def import_dataset_video(dataset_id: str):
         current_app.logger.exception("Failed to save uploaded video for dataset %s", dataset.id)
         return jsonify({"message": "视频文件保存失败，请重新上传。"}), 400
 
+    db.session.add(task)
+    dataset.tasks.append(task)
     task.config_json = {
         "source": "video",
         "sourcePath": source_path,
@@ -508,7 +508,8 @@ def import_dataset_video(dataset_id: str):
             "updatedAt": now_utc().isoformat(),
         },
     }
-    sync_dataset_stats_inplace(dataset)
+    with db.session.no_autoflush:
+        sync_dataset_stats_inplace(dataset)
     db.session.commit()
 
     from app.worker_tasks import extract_dataset_video_frames

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
+
 from flask import current_app
+from sqlalchemy.exc import OperationalError
 
 from app.clients.gemini_client import (
     GeminiGenerationError,
@@ -45,6 +48,45 @@ def _dispatch_followup_task(task_callable, *args: object) -> None:
             task_name,
         )
         task_callable.apply(args=args, throw=False)
+
+
+def _is_sqlite_database_locked(exc: OperationalError) -> bool:
+    return "database is locked" in str(getattr(exc, "orig", exc)).lower()
+
+
+def _mark_video_import_failed(task_id: str, error: str) -> None:
+    for attempt in range(3):
+        try:
+            db.session.rollback()
+            task = db.session.get(DatasetTask, task_id)
+            if task is None:
+                return
+
+            dataset = db.session.get(Dataset, task.dataset_id)
+            video_config = {**((task.config_json or {}).get("video") or {})}
+            video_config["status"] = "failed"
+            video_config["error"] = error
+            video_config["updatedAt"] = now_utc().isoformat()
+            task.config_json = {**(task.config_json or {}), "video": video_config}
+            task.status = "failed"
+            task.progress_percent = int(task.progress_percent or 0)
+            if dataset is not None:
+                with db.session.no_autoflush:
+                    sync_dataset_task_inplace(task)
+                    sync_dataset_stats_inplace(dataset)
+            db.session.commit()
+            return
+        except OperationalError as mark_exc:
+            db.session.rollback()
+            if _is_sqlite_database_locked(mark_exc) and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            current_app.logger.exception("Failed to mark video import task %s as failed", task_id)
+            return
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Failed to mark video import task %s as failed", task_id)
+            return
 
 
 @celery.task(bind=True)
@@ -272,8 +314,9 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         }
         task.image_count = expected_count
         task.config_json = {**config, "video": video_config}
-        sync_dataset_task_inplace(task)
-        sync_dataset_stats_inplace(dataset)
+        with db.session.no_autoflush:
+            sync_dataset_task_inplace(task)
+            sync_dataset_stats_inplace(dataset)
         db.session.commit()
 
         existing_count = len(task.images)
@@ -331,8 +374,9 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
             video_config["extractedFrames"] = len(task.images)
             video_config["updatedAt"] = now_utc().isoformat()
             task.config_json = {**(task.config_json or {}), "video": video_config}
-            sync_dataset_task_inplace(task)
-            sync_dataset_stats_inplace(dataset)
+            with db.session.no_autoflush:
+                sync_dataset_task_inplace(task)
+                sync_dataset_stats_inplace(dataset)
             db.session.commit()
             _maybe_remove_session(self.request.is_eager)
 
@@ -357,26 +401,14 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         task.status = "completed"
         task.progress_percent = 100
         task.completed_at = now_utc()
-        sync_dataset_task_inplace(task)
-        sync_dataset_stats_inplace(dataset)
+        with db.session.no_autoflush:
+            sync_dataset_task_inplace(task)
+            sync_dataset_stats_inplace(dataset)
         db.session.commit()
         cleanup_video_import_source(storage_root, source_path_value)
     except Exception as exc:
         current_app.logger.exception("Video frame extraction failed for task %s", task_id)
-        task = db.session.get(DatasetTask, task_id)
-        if task is not None:
-            dataset = db.session.get(Dataset, task.dataset_id)
-            video_config = {**((task.config_json or {}).get("video") or {})}
-            video_config["status"] = "failed"
-            video_config["error"] = str(exc)
-            video_config["updatedAt"] = now_utc().isoformat()
-            task.config_json = {**(task.config_json or {}), "video": video_config}
-            task.status = "failed"
-            task.progress_percent = int(task.progress_percent or 0)
-            if dataset is not None:
-                sync_dataset_task_inplace(task)
-                sync_dataset_stats_inplace(dataset)
-            db.session.commit()
+        _mark_video_import_failed(task_id, str(exc))
     finally:
         _maybe_remove_session(self.request.is_eager)
 

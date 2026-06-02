@@ -56,6 +56,7 @@ def create_app(
             if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
                 with db.engine.connect() as conn:
                     conn.execute(text("PRAGMA journal_mode=WAL"))
+                    conn.execute(text("PRAGMA busy_timeout=60000"))
             try:
                 db.create_all()
             except OperationalError:
@@ -124,7 +125,7 @@ def _configure_sqlite_engine(app: Flask) -> None:
         return
     options = app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}
     connect_args = dict(options.get("connect_args") or {})
-    connect_args.setdefault("timeout", 20)
+    connect_args.setdefault("timeout", 60)
     connect_args.setdefault("check_same_thread", False)
     options["connect_args"] = connect_args
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = options

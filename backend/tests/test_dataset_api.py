@@ -473,6 +473,75 @@ def test_video_import_replaces_stale_static_image_variant(tmp_path: Path):
     assert image_path.name == "image-000001.jpg"
 
 
+def test_video_import_saves_source_before_database_insert(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-save-before-db")
+    dataset_id = _create_dataset(client, headers)
+    saved: dict[str, str] = {}
+
+    def fake_save_video_source(storage_root: str, task_id: str, upload) -> str:
+        assert storage_root == str(tmp_path)
+        assert task_id
+        assert not db.session.new
+        saved["task_id"] = task_id
+        return f"import_sources/{task_id}/{upload.filename}"
+
+    with patch("app.api.datasets.save_video_import_source", side_effect=fake_save_video_source), patch(
+        "app.api.datasets._dispatch_background_task"
+    ):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+            headers=headers,
+            data={
+                "video": (BytesIO(b"video-bytes"), "sample.mp4"),
+                "frame_interval": "1",
+                "output_format": "jpg",
+                "jpeg_quality": "90",
+                "filename_prefix": "frame",
+                "target_size": "original",
+            },
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == 201
+    assert response.get_json()["task"]["id"] == saved["task_id"]
+
+
+def test_video_import_marks_task_failed_when_extraction_fails(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-extraction-fails")
+    dataset_id = _create_dataset(client, headers)
+
+    with patch("app.worker_tasks.video_frame_count", side_effect=RuntimeError("metadata read failed")):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+            headers=headers,
+            data={
+                "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=1)), "sample.avi"),
+                "frame_interval": "1",
+                "output_format": "jpg",
+                "jpeg_quality": "90",
+                "filename_prefix": "frame",
+                "target_size": "original",
+            },
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == 201
+    task = response.get_json()["task"]
+    assert task["status"] == "failed"
+    assert task["config"]["video"]["status"] == "failed"
+    assert task["config"]["video"]["error"] == "metadata read failed"
+
+
 def test_video_import_rejects_unsupported_file_type(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
