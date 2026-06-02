@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 MAX_ROTATION_ANGLE_DEGREES = 8.0
+GENERATED_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg")
 DEFAULT_AUGMENTATION_SETTINGS = {
     "flip": {"mode": "random"},
     "rotate": {"max_angle": MAX_ROTATION_ANGLE_DEGREES},
@@ -40,17 +41,31 @@ def save_generated_image(
     mime_type: str,
 ) -> Path:
     extension = "png" if mime_type == "image/png" else "jpg"
+    remove_generated_image_variants(storage_root, task_id, image_key)
     path = image_path(storage_root, task_id, image_key, extension)
     path.write_bytes(image_bytes)
     return path
 
 
 def existing_generated_image(storage_root: str, task_id: str, image_key: str) -> Path | None:
-    for extension in ("png", "jpg", "jpeg"):
+    candidates = [
+        path
+        for path in (image_path(storage_root, task_id, image_key, extension) for extension in GENERATED_IMAGE_EXTENSIONS)
+        if path.exists()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def remove_generated_image_variants(storage_root: str, task_id: str, image_key: str) -> list[Path]:
+    removed_paths: list[Path] = []
+    for extension in GENERATED_IMAGE_EXTENSIONS:
         path = image_path(storage_root, task_id, image_key, extension)
         if path.exists():
-            return path
-    return None
+            path.unlink()
+            removed_paths.append(path)
+    return removed_paths
 
 
 def copy_generated_image(storage_root: str, task_id: str, source_image_key: str, target_image_key: str) -> Path | None:

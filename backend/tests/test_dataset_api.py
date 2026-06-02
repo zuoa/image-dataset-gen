@@ -439,6 +439,40 @@ def test_video_import_resizes_frames_to_target_size(tmp_path: Path):
         assert min(image.size) == 540
 
 
+def test_video_import_replaces_stale_static_image_variant(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        IMAGE_BASE_URL = "http://assets.local/images"
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-stale-static")
+    dataset_id = _create_dataset(client, headers)
+    save_generated_image(str(tmp_path), dataset_id, "image-000001", _png_bytes((255, 0, 0)), "image/png")
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=1)), "sample.avi"),
+            "frame_interval": "1",
+            "output_format": "jpg",
+            "jpeg_quality": "90",
+            "filename_prefix": "fresh_frame",
+            "target_size": "original",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    image = response.get_json()["dataset"]["images"][0]
+    assert image["previewSvg"] == f"http://assets.local/images/{dataset_id}/image-000001.jpg?v={image['id']}"
+    assert not (tmp_path / "images" / dataset_id / "image-000001.png").exists()
+    image_path = existing_generated_image(str(tmp_path), dataset_id, "image-000001")
+    assert image_path is not None
+    assert image_path.name == "image-000001.jpg"
+
+
 def test_video_import_rejects_unsupported_file_type(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

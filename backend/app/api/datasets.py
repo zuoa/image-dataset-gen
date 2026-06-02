@@ -41,6 +41,7 @@ from app.services.image_storage import (
     existing_generated_image,
     normalize_uploaded_image,
     preview_data_url,
+    remove_generated_image_variants,
     save_generated_image,
 )
 from app.services.model_profile_service import _resolved_profile_api_key
@@ -80,11 +81,9 @@ def _sync_and_payload(dataset: Dataset) -> dict:
 
 
 def _delete_dataset_image_assets(dataset: Dataset, image: DatasetImage) -> None:
-    image_path = existing_generated_image(
+    remove_generated_image_variants(
         current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
     )
-    if image_path is not None:
-        image_path.unlink(missing_ok=True)
 
     annotation_file = annotation_path(current_app.config["STORAGE_ROOT"], dataset.id, image.id)
     annotation_file.unlink(missing_ok=True)

@@ -45,3 +45,18 @@ def test_flip_augmentation_honors_mode_override():
 
     assert flipped.getpixel((0, 0)) == (0, 0, 255)
     assert flipped.getpixel((3, 0)) == (255, 0, 0)
+
+
+def test_save_generated_image_replaces_stale_extension(tmp_path: Path):
+    image_storage.save_generated_image(str(tmp_path), "dataset-1", "image-000001", b"old", "image/png")
+    stale_path = tmp_path / "images" / "dataset-1" / "image-000001.png"
+    assert stale_path.exists()
+
+    saved_path = image_storage.save_generated_image(
+        str(tmp_path), "dataset-1", "image-000001", b"new", "image/jpeg"
+    )
+
+    assert saved_path == tmp_path / "images" / "dataset-1" / "image-000001.jpg"
+    assert saved_path.read_bytes() == b"new"
+    assert not stale_path.exists()
+    assert image_storage.existing_generated_image(str(tmp_path), "dataset-1", "image-000001") == saved_path

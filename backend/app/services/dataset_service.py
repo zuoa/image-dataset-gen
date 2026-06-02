@@ -109,7 +109,7 @@ def build_dataset_image_payload(dataset: Dataset, image: DatasetImage) -> dict[s
             current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
         )
         if image_base_url and image_path is not None:
-            preview = f"{image_base_url}/{dataset.id}/{image_path.name}"
+            preview = f"{image_base_url}/{dataset.id}/{image_path.name}?v={image.id}"
         else:
             preview = f"{current_app.config['API_PREFIX']}/datasets/{dataset.id}/images/{image.id}/preview"
 
