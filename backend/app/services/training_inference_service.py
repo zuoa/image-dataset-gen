@@ -112,6 +112,7 @@ def build_training_inference_payload(test_job: TrainingInferenceJob) -> dict[str
         "imageSize": test_job.image_size,
         "image": {
             "filename": test_job.input_filename,
+            "mimeType": test_job.input_mime_type,
             "width": test_job.input_width,
             "height": test_job.input_height,
         },

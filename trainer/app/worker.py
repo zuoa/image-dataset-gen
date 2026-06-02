@@ -111,14 +111,15 @@ def _run_inference(client: BackendClient, worker_id: str, test_job: dict[str, An
     test_id = str(test_job["id"])
     test_root = work_root / "inference" / test_id
     model_filename = str(((test_job.get("artifact") or {}).get("filename") or "model.pt"))
-    image_filename = str(((test_job.get("image") or {}).get("filename") or "image.jpg"))
+    image_mime_type = str(((test_job.get("image") or {}).get("mimeType") or "image/jpeg"))
+    image_filename = "image.png" if image_mime_type == "image/png" else "image.jpg"
     model_path = test_root / model_filename
     image_path = test_root / image_filename
     test_root.mkdir(parents=True, exist_ok=True)
 
     client.update_inference_status(worker_id, test_id, "running")
-    client.download_file(str(test_job["modelDownloadUrl"]), model_path)
-    client.download_file(str(test_job["imageDownloadUrl"]), image_path)
+    client.download_model(str(test_job["modelDownloadUrl"]), model_path)
+    client.download_image(str(test_job["imageDownloadUrl"]), image_path)
 
     result = predict_yolov8(
         model_path,

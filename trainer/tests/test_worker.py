@@ -32,13 +32,13 @@ def test_run_inference_downloads_files_and_uploads_detections(tmp_path, monkeypa
             assert test_id == "test-1"
             self.statuses.append((status, detections))
 
-        def download_file(self, url, output_path) -> None:
-            if url.endswith("/model"):
-                output_path.write_bytes(b"model-weights")
-            elif url.endswith("/image"):
-                output_path.write_bytes(b"image-bytes")
-            else:
-                raise AssertionError(url)
+        def download_model(self, url, output_path) -> None:
+            assert url.endswith("/model")
+            output_path.write_bytes(b"model-weights")
+
+        def download_image(self, url, output_path) -> None:
+            assert url.endswith("/image")
+            output_path.write_bytes(b"image-bytes")
 
     def fake_predict_yolov8(model_path, image_path, *, categories, confidence_threshold, image_size):
         assert model_path.read_bytes() == b"model-weights"
@@ -68,7 +68,7 @@ def test_run_inference_downloads_files_and_uploads_detections(tmp_path, monkeypa
             "modelDownloadUrl": "https://example.com/model",
             "imageDownloadUrl": "https://example.com/image",
             "artifact": {"filename": "best.pt"},
-            "image": {"filename": "sample.jpg"},
+            "image": {"filename": "sample.jpg", "mimeType": "image/jpeg"},
             "categories": ["widget"],
             "confidenceThreshold": 0.4,
             "imageSize": 512,

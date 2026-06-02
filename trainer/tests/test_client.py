@@ -56,3 +56,44 @@ def test_download_dataset_rejects_non_zip_response(tmp_path: Path) -> None:
     assert "downloaded dataset is not a zip file" in message
     assert "content_type=text/html; charset=utf-8" in message
     assert "<!doctype html>" in message
+
+
+def test_download_model_rejects_non_checkpoint_response(tmp_path: Path) -> None:
+    client = BackendClient("https://platform.example.com/api/v1", "token")
+    body = b"<!doctype html><html><body>app shell</body></html>"
+
+    def fake_get(*args: Any, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(body)
+
+    client.session.get = fake_get  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as error:
+        client.download_model(
+            "https://platform.example.com/api/v1/training/inference-jobs/test-1/model",
+            tmp_path / "best.pt",
+        )
+
+    message = str(error.value)
+    assert "downloaded model is not a valid PyTorch checkpoint" in message
+    assert "content_type=text/html; charset=utf-8" in message
+    assert "<!doctype html>" in message
+
+
+def test_download_image_rejects_non_image_response(tmp_path: Path) -> None:
+    client = BackendClient("https://platform.example.com/api/v1", "token")
+    body = b'{"message":"invalid training worker token"}'
+
+    def fake_get(*args: Any, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(body)
+
+    client.session.get = fake_get  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as error:
+        client.download_image(
+            "https://platform.example.com/api/v1/training/inference-jobs/test-1/image",
+            tmp_path / "image.jpg",
+        )
+
+    message = str(error.value)
+    assert "downloaded test image is not a supported image file" in message
+    assert "invalid training worker token" in message

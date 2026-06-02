@@ -270,6 +270,7 @@ def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):
     assert test_job["artifact"]["id"] == artifact_id
     assert test_job["confidenceThreshold"] == 0.4
     assert test_job["imageSize"] == 512
+    assert test_job["image"]["mimeType"] == "image/jpeg"
 
     client.post(
         "/api/v1/training/workers/register",

@@ -103,13 +103,23 @@ class BackendClient:
         response.raise_for_status()
 
     def download_file(self, url: str, output_path: Path) -> None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.session.get(url, stream=True, timeout=self.timeout) as response:
-            response.raise_for_status()
-            with output_path.open("wb") as handle:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        handle.write(chunk)
+        self._download_with_metadata(url, output_path)
+
+    def download_model(self, url: str, output_path: Path) -> None:
+        metadata = self._download_with_metadata(url, output_path)
+        if _is_supported_torch_checkpoint(output_path):
+            return
+        raise RuntimeError(
+            _invalid_download_message("downloaded model is not a valid PyTorch checkpoint", metadata, output_path)
+        )
+
+    def download_image(self, url: str, output_path: Path) -> None:
+        metadata = self._download_with_metadata(url, output_path)
+        if _is_supported_image(output_path):
+            return
+        raise RuntimeError(
+            _invalid_download_message("downloaded test image is not a supported image file", metadata, output_path)
+        )
 
     def download_dataset(self, url: str, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,6 +145,31 @@ class BackendClient:
                 f"size_bytes={bytes_written}, first_bytes={prefix!r})"
             )
 
+    def _download_with_metadata(self, url: str, output_path: Path) -> dict[str, Any]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        status_code = 0
+        content_type = ""
+        bytes_written = 0
+        with self.session.get(url, stream=True, timeout=self.timeout) as response:
+            status_code = response.status_code
+            content_type = response.headers.get("content-type", "")
+            response.raise_for_status()
+            with output_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+                        bytes_written += len(chunk)
+
+        metadata = {
+            "url": url,
+            "status": status_code,
+            "content_type": content_type or "unknown",
+            "size_bytes": bytes_written,
+        }
+        if bytes_written == 0:
+            raise RuntimeError(_invalid_download_message("downloaded file is empty", metadata, output_path))
+        return metadata
+
     def upload_artifact(self, job_id: str, artifact_type: str, path: Path) -> None:
         with path.open("rb") as handle:
             response = self.session.post(
@@ -144,3 +179,35 @@ class BackendClient:
                 timeout=max(self.timeout, 120),
             )
         response.raise_for_status()
+
+
+def _is_supported_torch_checkpoint(path: Path) -> bool:
+    if zipfile.is_zipfile(path):
+        return True
+    return _file_prefix(path, 2).startswith(b"\x80")
+
+
+def _is_supported_image(path: Path) -> bool:
+    prefix = _file_prefix(path, 16)
+    return (
+        prefix.startswith(b"\xff\xd8\xff")
+        or prefix.startswith(b"\x89PNG\r\n\x1a\n")
+        or (prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP")
+        or prefix.startswith(b"BM")
+        or prefix.startswith(b"II*\x00")
+        or prefix.startswith(b"MM\x00*")
+    )
+
+
+def _invalid_download_message(message: str, metadata: dict[str, Any], path: Path) -> str:
+    prefix = _file_prefix(path, 160)
+    return (
+        f"{message} "
+        f"(url={metadata['url']}, status={metadata['status']}, content_type={metadata['content_type']}, "
+        f"size_bytes={metadata['size_bytes']}, first_bytes={prefix!r})"
+    )
+
+
+def _file_prefix(path: Path, size: int) -> bytes:
+    with path.open("rb") as handle:
+        return handle.read(size)

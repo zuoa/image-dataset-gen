@@ -271,6 +271,7 @@ export type TrainingInferenceTest = {
   imageSize: number;
   image: {
     filename: string;
+    mimeType?: string;
     width: number;
     height: number;
   };

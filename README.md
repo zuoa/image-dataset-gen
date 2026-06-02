@@ -196,6 +196,8 @@ TRAINER_MODEL_URL_TEMPLATE='https://<proxy-host>/{github_url}'
 
 Ultralytics 在 `amp=True` 时会运行 AMP 自检，并可能额外下载 `yolo11n.pt`。trainer 默认设置 `TRAINER_YOLO_AMP=false`，避免这类隐藏 GitHub 下载；如果要启用 AMP，请先把自检权重也放进模型缓存目录，或配置上面的镜像地址。
 
+如果上传测试图片后失败并看到 `_pickle.UnpicklingError: could not find MARK`，通常不是图片内容问题，而是 worker 下载到的 `.pt` 模型产物不是有效的 PyTorch 权重。请检查测试任务选择的是 `best.pt`/`last.pt`，确认模型产物文件不是 HTML/JSON 错误页或损坏文件，并确认 `TRAINER_BACKEND_URL` 指向后端 API 根地址，例如 `https://<platform-host>/api/v1`。新版 worker 会在下载模型和图片后先校验格式，并把 `content_type`、大小和文件前缀写入失败信息，方便定位反向代理或产物损坏问题。
+
 ## 已知边界
 
 - WebSocket、Bull、真实图像生成 API 尚未接入
