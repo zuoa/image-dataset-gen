@@ -88,11 +88,16 @@ const importTabOptions: Array<{ value: ImportTab; label: string; icon: typeof Fi
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
 type SamplePoolSplit = "train" | "val" | "test" | "unselected";
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
+type SamplePoolAnnotationFilter = "" | "annotated" | "unannotated";
 const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> = [
   { value: "train", label: "训练集" },
   { value: "val", label: "验证集" },
   { value: "test", label: "测试集" },
   { value: "unselected", label: "不保留" },
+];
+const samplePoolAnnotationOptions: Array<{ value: Exclude<SamplePoolAnnotationFilter, "">; label: string }> = [
+  { value: "annotated", label: "已标注" },
+  { value: "unannotated", label: "未标注" },
 ];
 
 function buildSamplePoolSplitMap(images: DatasetImage[]) {
@@ -184,6 +189,7 @@ export function DatasetDetailPage() {
   const [trainingClassIndices, setTrainingClassIndices] = useState<number[]>([]);
   const [samplePoolClassFilter, setSamplePoolClassFilter] = useState("");
   const [samplePoolSplitFilter, setSamplePoolSplitFilter] = useState<SamplePoolSplitFilter>("");
+  const [samplePoolAnnotationFilter, setSamplePoolAnnotationFilter] = useState<SamplePoolAnnotationFilter>("");
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -232,39 +238,46 @@ export function DatasetDetailPage() {
     ["test", 0],
     ["unselected", 0],
   ]);
+  const samplePoolAnnotationCounts = new Map<Exclude<SamplePoolAnnotationFilter, "">, number>([
+    ["annotated", 0],
+    ["unannotated", 0],
+  ]);
   for (const category of dataset?.categories ?? []) {
     samplePoolClassCounts.set(category, 0);
   }
   for (const image of images) {
     const split = samplePoolSplitForImage(image, samplePoolSplitMap);
+    const annotationFilterValue = isImageAnnotated(image) ? "annotated" : "unannotated";
     samplePoolSplitCounts.set(split, (samplePoolSplitCounts.get(split) ?? 0) + 1);
+    samplePoolAnnotationCounts.set(
+      annotationFilterValue,
+      (samplePoolAnnotationCounts.get(annotationFilterValue) ?? 0) + 1,
+    );
     for (const category of new Set(image.detections.map((detection) => detection.category))) {
       if (samplePoolClassCounts.has(category)) {
         samplePoolClassCounts.set(category, (samplePoolClassCounts.get(category) ?? 0) + 1);
       }
     }
   }
-  const filteredImages = samplePoolClassFilter
-    ? images.filter((image) => {
-        const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
-        return (
-          image.detections.some((detection) => detection.category === samplePoolClassFilter) &&
-          (!samplePoolSplitFilter || imageSplit === samplePoolSplitFilter)
-        );
-      })
-    : images.filter((image) => {
-        const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
-        return !samplePoolSplitFilter || imageSplit === samplePoolSplitFilter;
-      });
+  const filteredImages = images.filter((image) => {
+    const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
+    const imageAnnotationFilterValue = isImageAnnotated(image) ? "annotated" : "unannotated";
+    const matchesClass =
+      !samplePoolClassFilter || image.detections.some((detection) => detection.category === samplePoolClassFilter);
+    const matchesSplit = !samplePoolSplitFilter || imageSplit === samplePoolSplitFilter;
+    const matchesAnnotation =
+      !samplePoolAnnotationFilter || imageAnnotationFilterValue === samplePoolAnnotationFilter;
+    return matchesClass && matchesSplit && matchesAnnotation;
+  });
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
+  const filteredAnnotatedCount = filteredImages.filter((image) => isImageAnnotated(image)).length;
+  const filteredUnannotatedCount = filteredImages.length - filteredAnnotatedCount;
   const retainedImageCount = images.filter((image) => image.selected).length;
   const unretainedImageCount = images.length - retainedImageCount;
-  const unannotatedImageIds = images.filter((image) => !isImageAnnotated(image)).map((image) => image.id);
   const unretainedUnannotatedImageIds = images
     .filter((image) => !isImageAnnotated(image) && !image.selected)
     .map((image) => image.id);
-  const annotatedImageCount = images.length - unannotatedImageIds.length;
   const imageIdSet = new Set(images.map((image) => image.id));
   const deleteSelectionIdSet = new Set(deleteSelectionIds);
   const deletingImageIdSet = new Set(deletingImageIds);
@@ -1402,7 +1415,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
               <div className="mt-2 text-sm text-neutral-500">
-                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已保留 {filteredSelectedCount} 张，已标注 {annotatedImageCount} 张，未标注 {unannotatedImageIds.length} 张，当前范围勾选待删 {filteredDeleteSelectionCount} 张
+                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已保留 {filteredSelectedCount} 张，已标注 {filteredAnnotatedCount} 张，未标注 {filteredUnannotatedCount} 张，当前范围勾选待删 {filteredDeleteSelectionCount} 张
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -1530,6 +1543,37 @@ export function DatasetDetailPage() {
                     }`}
                   >
                     {option.label} {samplePoolSplitCounts.get(option.value) ?? 0}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">Annotation</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSamplePoolAnnotationFilter("")}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    samplePoolAnnotationFilter === ""
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                      : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                  }`}
+                >
+                  全部 {images.length}
+                </button>
+                {samplePoolAnnotationOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSamplePoolAnnotationFilter(option.value)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      samplePoolAnnotationFilter === option.value
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
+                    }`}
+                  >
+                    {option.label} {samplePoolAnnotationCounts.get(option.value) ?? 0}
                   </button>
                 ))}
               </div>
