@@ -71,6 +71,19 @@ const exportFormatOptions: Array<{ value: ExportFormat; label: string }> = [
   { value: "csv", label: "CSV" },
 ];
 type VideoOutputFormat = "jpg" | "png";
+type VideoTargetSize = "original" | "1080p" | "720p" | "640";
+type ImportTab = "video" | "zip" | "roboflow";
+const videoTargetSizeOptions: Array<{ value: VideoTargetSize; label: string }> = [
+  { value: "original", label: "原图" },
+  { value: "1080p", label: "1080p" },
+  { value: "720p", label: "720p" },
+  { value: "640", label: "640" },
+];
+const importTabOptions: Array<{ value: ImportTab; label: string; icon: typeof FileVideo }> = [
+  { value: "video", label: "视频抽帧", icon: FileVideo },
+  { value: "zip", label: "本地 ZIP", icon: Upload },
+  { value: "roboflow", label: "Roboflow", icon: Download },
+];
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
 type SamplePoolSplit = "train" | "val" | "test" | "unselected";
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
@@ -171,10 +184,12 @@ export function DatasetDetailPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [activeImportTab, setActiveImportTab] = useState<ImportTab>("video");
   const [videoFrameInterval, setVideoFrameInterval] = useState(30);
   const [videoOutputFormat, setVideoOutputFormat] = useState<VideoOutputFormat>("jpg");
   const [videoJpegQuality, setVideoJpegQuality] = useState(95);
   const [videoFilenamePrefix, setVideoFilenamePrefix] = useState("frame");
+  const [videoTargetSize, setVideoTargetSize] = useState<VideoTargetSize>("original");
   const [roboflowApiKey, setRoboflowApiKey] = useState("");
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
@@ -250,6 +265,7 @@ export function DatasetDetailPage() {
   const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
   const videoFilenamePrefixPreview = videoFilenamePrefix.trim().replace(/[^A-Za-z0-9_-]/g, "") || "frame";
   const videoOutputExample = `${videoFilenamePrefixPreview}_000000.${videoOutputFormat}`;
+  const videoTargetSizeLabel = videoTargetSizeOptions.find((option) => option.value === videoTargetSize)?.label ?? "原图";
 
   useEffect(() => {
     if (!token || !datasetId) return;
@@ -672,13 +688,14 @@ export function DatasetDetailPage() {
         outputFormat: videoOutputFormat,
         jpegQuality,
         filenamePrefix,
+        targetSize: videoTargetSize,
       });
       setDataset(response.dataset);
       setActionError(null);
       const importedCount = Number(response.summary.importedCount ?? response.task.imagesGenerated ?? 0);
       setImportSummary(
         response.task.status === "running"
-          ? `已创建视频抽帧任务，当前每 ${frameInterval} 帧取一张`
+          ? `已创建视频抽帧任务，每 ${frameInterval} 帧取一张，尺寸 ${videoTargetSizeLabel}`
           : `已从视频抽取 ${importedCount} 张图片`,
       );
       setIsImportModalOpen(false);
@@ -1574,170 +1591,248 @@ export function DatasetDetailPage() {
               </button>
             </div>
 
-            <div className="mt-6 rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-medium text-neutral-900 dark:text-white">
-                    <FileVideo className="h-4 w-4 text-neutral-500" />
-                    本地视频
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                    按帧间隔抽取图片，抽出的帧会直接加入当前数据集样本池。
-                  </p>
-                </div>
-                <Button
-                  className="w-full justify-center sm:w-auto"
-                  onClick={() => videoInputRef.current?.click()}
-                  disabled={isAnyImporting}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  {isImportingVideo ? "抽帧中..." : "选择视频"}
-                </Button>
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_290px]">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">抽帧间隔（帧）</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10000}
-                      value={videoFrameInterval}
-                      onChange={(event) => setVideoFrameInterval(Number(event.target.value) || 0)}
-                      disabled={isAnyImporting}
-                    />
-                    <span className="block text-xs text-neutral-500">每 {Math.max(1, videoFrameInterval || 30)} 帧取一张</span>
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">文件名前缀</span>
-                    <Input
-                      value={videoFilenamePrefix}
-                      onChange={(event) => setVideoFilenamePrefix(event.target.value)}
-                      placeholder="frame"
-                      disabled={isAnyImporting}
-                    />
-                    <span className="block text-xs text-neutral-500">输出文件名格式：{videoOutputExample}</span>
-                  </label>
-                </div>
-
-                <div className="rounded-[18px] border border-neutral-200 bg-white/75 p-4 dark:border-white/10 dark:bg-black/20">
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">输出格式</div>
-                  <div className={`${segmentedGroupClasses} mt-3 w-full`}>
-                    {(["jpg", "png"] as const).map((format) => (
-                      <button
-                        key={format}
-                        type="button"
-                        className={segmentedButtonClasses(videoOutputFormat === format, "flex-1")}
-                        onClick={() => setVideoOutputFormat(format)}
-                        disabled={isAnyImporting}
-                      >
-                        {format.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-                  {videoOutputFormat === "jpg" ? (
-                    <label className="mt-4 block space-y-2">
-                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">
-                        JPEG 质量 {videoJpegQuality}
-                      </span>
-                      <input
-                        type="range"
-                        min={1}
-                        max={100}
-                        value={videoJpegQuality}
-                        onChange={(event) => setVideoJpegQuality(Number(event.target.value) || 0)}
-                        disabled={isAnyImporting}
-                        className="h-2 w-full accent-neutral-900 dark:accent-white"
-                      />
-                    </label>
-                  ) : (
-                    <div className="mt-4 rounded-[14px] border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-white/10">
-                      PNG 会保留无损帧图像，文件体积通常更大。
-                    </div>
-                  )}
-                </div>
-              </div>
+            <div
+              className="mt-6 grid gap-2 rounded-[20px] border border-neutral-200 bg-neutral-100 p-1 dark:border-white/10 dark:bg-white/[0.03] sm:grid-cols-3"
+              role="tablist"
+              aria-label="导入方式"
+            >
+              {importTabOptions.map((option) => {
+                const Icon = option.icon;
+                const active = activeImportTab === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="tab"
+                    id={`import-tab-${option.value}`}
+                    aria-selected={active}
+                    aria-controls={`import-panel-${option.value}`}
+                    className={`inline-flex items-center justify-center gap-2 rounded-[16px] px-4 py-3 text-sm font-medium transition disabled:opacity-60 ${
+                      active
+                        ? "bg-white text-neutral-950 shadow-sm dark:bg-neutral-100 dark:text-neutral-950"
+                        : "text-neutral-500 hover:bg-white/70 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
+                    }`}
+                    onClick={() => setActiveImportTab(option.value)}
+                    disabled={isAnyImporting}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {option.label}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
-              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div className="text-sm font-medium text-neutral-900 dark:text-white">本地 ZIP</div>
-                <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                  兼容现有导入方式，只导入压缩包中的图片。
-                </p>
-                <Button
-                  variant="secondary"
-                  className="mt-4 w-full justify-center"
-                  onClick={() => archiveInputRef.current?.click()}
-                  disabled={isAnyImporting}
+            <div className="mt-5">
+              {activeImportTab === "video" ? (
+                <div
+                  className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]"
+                  role="tabpanel"
+                  id="import-panel-video"
+                  aria-labelledby="import-tab-video"
                 >
-                  <Upload className="mr-2 h-4 w-4" />
-                  {isImporting ? "导入中..." : "选择 ZIP"}
-                </Button>
-              </div>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-medium text-neutral-900 dark:text-white">
+                        <FileVideo className="h-4 w-4 text-neutral-500" />
+                        本地视频
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+                        按帧间隔抽取图片，抽出的帧会直接加入当前数据集样本池。
+                      </p>
+                    </div>
+                    <Button
+                      className="w-full justify-center sm:w-auto"
+                      onClick={() => videoInputRef.current?.click()}
+                      disabled={isAnyImporting}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {isImportingVideo ? "抽帧中..." : "选择视频"}
+                    </Button>
+                  </div>
 
-              <div className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div className="text-sm font-medium text-neutral-900 dark:text-white">Roboflow</div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-2 sm:col-span-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">API Key</span>
-                    <Input
-                      type="password"
-                      value={roboflowApiKey}
-                      onChange={(event) => setRoboflowApiKey(event.target.value)}
-                      placeholder="roboflow_api_key"
-                      autoComplete="off"
-                      disabled={isImportingRoboflow}
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Workspace</span>
-                    <Input
-                      value={roboflowWorkspace}
-                      onChange={(event) => setRoboflowWorkspace(event.target.value)}
-                      placeholder="workspace-id"
-                      disabled={isImportingRoboflow}
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Project</span>
-                    <Input
-                      value={roboflowProject}
-                      onChange={(event) => setRoboflowProject(event.target.value)}
-                      placeholder="project-id"
-                      disabled={isImportingRoboflow}
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Version</span>
-                    <Input
-                      value={roboflowVersion}
-                      onChange={(event) => setRoboflowVersion(event.target.value)}
-                      placeholder="version"
-                      disabled={isImportingRoboflow}
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Format</span>
-                    <Input value="YOLOv8" disabled />
-                  </label>
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="space-y-2">
+                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">抽帧间隔（帧）</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10000}
+                          value={videoFrameInterval}
+                          onChange={(event) => setVideoFrameInterval(Number(event.target.value) || 0)}
+                          disabled={isAnyImporting}
+                        />
+                        <span className="block text-xs text-neutral-500">每 {Math.max(1, videoFrameInterval || 30)} 帧取一张</span>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">文件名前缀</span>
+                        <Input
+                          value={videoFilenamePrefix}
+                          onChange={(event) => setVideoFilenamePrefix(event.target.value)}
+                          placeholder="frame"
+                          disabled={isAnyImporting}
+                        />
+                        <span className="block text-xs text-neutral-500">输出文件名格式：{videoOutputExample}</span>
+                      </label>
+                    </div>
+
+                    <div className="rounded-[18px] border border-neutral-200 bg-white/75 p-4 dark:border-white/10 dark:bg-black/20">
+                      <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">输出格式</div>
+                      <div className={`${segmentedGroupClasses} mt-3 w-full`}>
+                        {(["jpg", "png"] as const).map((format) => (
+                          <button
+                            key={format}
+                            type="button"
+                            className={segmentedButtonClasses(videoOutputFormat === format, "flex-1")}
+                            onClick={() => setVideoOutputFormat(format)}
+                            disabled={isAnyImporting}
+                          >
+                            {format.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      {videoOutputFormat === "jpg" ? (
+                        <label className="mt-4 block space-y-2">
+                          <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">
+                            JPEG 质量 {videoJpegQuality}
+                          </span>
+                          <input
+                            type="range"
+                            min={1}
+                            max={100}
+                            value={videoJpegQuality}
+                            onChange={(event) => setVideoJpegQuality(Number(event.target.value) || 0)}
+                            disabled={isAnyImporting}
+                            className="h-2 w-full accent-neutral-900 dark:accent-white"
+                          />
+                        </label>
+                      ) : (
+                        <div className="mt-4 rounded-[14px] border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-white/10">
+                          PNG 会保留无损帧图像，文件体积通常更大。
+                        </div>
+                      )}
+
+                      <div className="mt-5 text-[11px] uppercase tracking-[0.24em] text-neutral-500">图片尺寸</div>
+                      <div className={`${segmentedGroupClasses} mt-3 flex w-full flex-wrap rounded-[16px]`}>
+                        {videoTargetSizeOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={segmentedButtonClasses(videoTargetSize === option.value, "min-w-[70px] flex-1 px-3 py-1.5 text-xs")}
+                            onClick={() => setVideoTargetSize(option.value)}
+                            disabled={isAnyImporting}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 text-xs text-neutral-500">长边超过目标时等比缩小</div>
+                    </div>
+                  </div>
                 </div>
-                <Button
-                  className="mt-4 w-full justify-center"
-                  onClick={() => void handleRoboflowImport()}
-                  disabled={
-                    isAnyImporting ||
-                    !roboflowApiKey.trim() ||
-                    !roboflowWorkspace.trim() ||
-                    !roboflowProject.trim() ||
-                    !roboflowVersion.trim()
-                  }
+              ) : null}
+
+              {activeImportTab === "zip" ? (
+                <div
+                  className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]"
+                  role="tabpanel"
+                  id="import-panel-zip"
+                  aria-labelledby="import-tab-zip"
                 >
-                  <Download className="mr-2 h-4 w-4" />
-                  {isImportingRoboflow ? "下载导入中..." : "从 Roboflow 导入"}
-                </Button>
-              </div>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-medium text-neutral-900 dark:text-white">
+                        <Upload className="h-4 w-4 text-neutral-500" />
+                        本地 ZIP
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+                        兼容现有导入方式，只导入压缩包中的图片。
+                      </p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      className="w-full justify-center sm:w-auto"
+                      onClick={() => archiveInputRef.current?.click()}
+                      disabled={isAnyImporting}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {isImporting ? "导入中..." : "选择 ZIP"}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              {activeImportTab === "roboflow" ? (
+                <div
+                  className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-5 dark:border-white/10 dark:bg-white/[0.03]"
+                  role="tabpanel"
+                  id="import-panel-roboflow"
+                  aria-labelledby="import-tab-roboflow"
+                >
+                  <div className="flex items-center gap-2 text-sm font-medium text-neutral-900 dark:text-white">
+                    <Download className="h-4 w-4 text-neutral-500" />
+                    Roboflow
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-2 sm:col-span-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">API Key</span>
+                      <Input
+                        type="password"
+                        value={roboflowApiKey}
+                        onChange={(event) => setRoboflowApiKey(event.target.value)}
+                        placeholder="roboflow_api_key"
+                        autoComplete="off"
+                        disabled={isImportingRoboflow}
+                      />
+                    </label>
+                    <label className="space-y-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Workspace</span>
+                      <Input
+                        value={roboflowWorkspace}
+                        onChange={(event) => setRoboflowWorkspace(event.target.value)}
+                        placeholder="workspace-id"
+                        disabled={isImportingRoboflow}
+                      />
+                    </label>
+                    <label className="space-y-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Project</span>
+                      <Input
+                        value={roboflowProject}
+                        onChange={(event) => setRoboflowProject(event.target.value)}
+                        placeholder="project-id"
+                        disabled={isImportingRoboflow}
+                      />
+                    </label>
+                    <label className="space-y-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Version</span>
+                      <Input
+                        value={roboflowVersion}
+                        onChange={(event) => setRoboflowVersion(event.target.value)}
+                        placeholder="version"
+                        disabled={isImportingRoboflow}
+                      />
+                    </label>
+                    <label className="space-y-2">
+                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Format</span>
+                      <Input value="YOLOv8" disabled />
+                    </label>
+                  </div>
+                  <Button
+                    className="mt-4 w-full justify-center"
+                    onClick={() => void handleRoboflowImport()}
+                    disabled={
+                      isAnyImporting ||
+                      !roboflowApiKey.trim() ||
+                      !roboflowWorkspace.trim() ||
+                      !roboflowProject.trim() ||
+                      !roboflowVersion.trim()
+                    }
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    {isImportingRoboflow ? "下载导入中..." : "从 Roboflow 导入"}
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </SectionCard>
         </div>

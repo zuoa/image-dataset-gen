@@ -28,15 +28,16 @@ def _transparent_png_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _avi_video_bytes(tmp_path: Path, frame_count: int = 6) -> bytes:
+def _avi_video_bytes(tmp_path: Path, frame_count: int = 6, size: tuple[int, int] = (8, 8)) -> bytes:
     import cv2
     import numpy as np
 
     video_path = tmp_path / "sample.avi"
-    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (8, 8))
+    width, height = size
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 5.0, (width, height))
     assert writer.isOpened()
     for index in range(frame_count):
-        frame = np.full((8, 8, 3), (index * 30, 120, 220 - index * 20), dtype=np.uint8)
+        frame = np.full((height, width, 3), (index * 30, 120, 220 - index * 20), dtype=np.uint8)
         writer.write(frame)
     writer.release()
     return video_path.read_bytes()
@@ -349,6 +350,7 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
             "output_format": "png",
             "jpeg_quality": "95",
             "filename_prefix": "video_frame",
+            "target_size": "original",
         },
         content_type="multipart/form-data",
     )
@@ -360,6 +362,7 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
     assert payload["task"]["status"] == "completed"
     assert payload["task"]["config"]["source"] == "video"
     assert payload["task"]["config"]["video"]["frameInterval"] == 2
+    assert payload["task"]["config"]["video"]["targetSize"] == "original"
     dataset = payload["dataset"]
     assert dataset["imageCount"] == 3
     assert dataset["selectedCount"] == 3
@@ -399,6 +402,41 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
     assert len(label_names) == 6
     assert any(name.endswith("video_frame_000000_000001.png") for name in image_names)
     assert any(name.endswith("video_frame_000000_000004.png") for name in image_names)
+
+
+def test_video_import_resizes_frames_to_target_size(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-resize")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=1, size=(800, 600))), "sample.avi"),
+            "frame_interval": "1",
+            "output_format": "jpg",
+            "jpeg_quality": "90",
+            "filename_prefix": "resized_frame",
+            "target_size": "720p",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    video_config = payload["task"]["config"]["video"]
+    assert video_config["targetSize"] == "720p"
+    assert video_config["targetMaxDimension"] == 720
+    image_path = existing_generated_image(str(tmp_path), dataset_id, "image-000001")
+    assert image_path is not None
+    with Image.open(image_path) as image:
+        assert max(image.size) == 720
+        assert min(image.size) == 540
 
 
 def test_video_import_rejects_unsupported_file_type(tmp_path: Path):

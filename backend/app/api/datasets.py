@@ -52,9 +52,12 @@ from app.services.video_import_service import (
     DEFAULT_VIDEO_FRAME_INTERVAL,
     DEFAULT_VIDEO_JPEG_QUALITY,
     DEFAULT_VIDEO_OUTPUT_FORMAT,
+    DEFAULT_VIDEO_TARGET_SIZE,
     is_allowed_video_filename,
+    normalize_video_target_size,
     sanitize_filename_prefix,
     save_video_import_source,
+    video_target_size_max_dimension,
 )
 from app.utils.crypto import encrypt_secret
 
@@ -461,6 +464,8 @@ def import_dataset_video(dataset_id: str):
     output_format = str(payload.get("output_format") or DEFAULT_VIDEO_OUTPUT_FORMAT)
     jpeg_quality = int(payload.get("jpeg_quality") or DEFAULT_VIDEO_JPEG_QUALITY)
     filename_prefix = sanitize_filename_prefix(payload.get("filename_prefix") or DEFAULT_VIDEO_FILENAME_PREFIX)
+    target_size = normalize_video_target_size(payload.get("target_size") or DEFAULT_VIDEO_TARGET_SIZE)
+    target_max_dimension = video_target_size_max_dimension(target_size)
 
     task = DatasetTask(
         dataset_id=dataset.id,
@@ -497,6 +502,8 @@ def import_dataset_video(dataset_id: str):
             "outputFormat": output_format,
             "jpegQuality": jpeg_quality,
             "filenamePrefix": filename_prefix,
+            "targetSize": target_size,
+            "targetMaxDimension": target_max_dimension,
             "status": "running",
             "startedAt": now_utc().isoformat(),
             "updatedAt": now_utc().isoformat(),

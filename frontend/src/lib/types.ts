@@ -124,6 +124,8 @@ export type DatasetTask = {
       outputFormat: "jpg" | "png";
       jpegQuality: number;
       filenamePrefix: string;
+      targetSize?: "original" | "1080p" | "720p" | "640";
+      targetMaxDimension?: number | null;
       totalFrames?: number;
       expectedFrames?: number;
       extractedFrames?: number;

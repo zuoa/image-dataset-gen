@@ -22,7 +22,9 @@ from app.services.video_import_service import (
     cleanup_video_import_source,
     expected_extracted_frame_count,
     iter_video_frames,
+    normalize_video_target_size,
     resolve_video_import_source,
+    video_target_size_max_dimension,
     video_frame_count,
 )
 from app.utils.crypto import decrypt_secret
@@ -252,12 +254,16 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         output_format = "png" if video_config.get("outputFormat") == "png" else "jpg"
         jpeg_quality = max(1, min(100, int(video_config.get("jpegQuality", 95))))
         filename_prefix = str(video_config.get("filenamePrefix") or "frame")
+        target_size = normalize_video_target_size(str(video_config.get("targetSize") or "original"))
+        target_max_dimension = video_target_size_max_dimension(target_size)
         max_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
         total_frames = video_frame_count(source_path)
         expected_count = expected_extracted_frame_count(total_frames, frame_interval, max_images)
 
         video_config = {
             **video_config,
+            "targetSize": target_size,
+            "targetMaxDimension": target_max_dimension,
             "totalFrames": total_frames,
             "expectedFrames": expected_count,
             "extractedFrames": len(task.images),
@@ -278,6 +284,7 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
             jpeg_quality=jpeg_quality,
             filename_prefix=filename_prefix,
             max_images=max_images,
+            target_max_dimension=target_max_dimension,
             skip_selected_frames=existing_count,
         ):
             task = db.session.get(DatasetTask, task_id)

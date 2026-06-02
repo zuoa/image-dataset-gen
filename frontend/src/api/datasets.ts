@@ -124,6 +124,7 @@ export function importDatasetVideo(
     outputFormat: "jpg" | "png";
     jpegQuality: number;
     filenamePrefix: string;
+    targetSize: "original" | "1080p" | "720p" | "640";
   },
 ) {
   const body = new FormData();
@@ -132,6 +133,7 @@ export function importDatasetVideo(
   body.append("output_format", settings.outputFormat);
   body.append("jpeg_quality", String(settings.jpegQuality));
   body.append("filename_prefix", settings.filenamePrefix);
+  body.append("target_size", settings.targetSize);
   return apiRequestFormData<{ summary: Record<string, unknown>; task: DatasetTask; dataset: Dataset }>(
     `/datasets/${datasetId}/tasks/import/video`,
     body,
