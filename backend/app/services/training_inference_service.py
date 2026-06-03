@@ -251,6 +251,14 @@ def _build_result_payload(test_job: TrainingInferenceJob) -> dict[str, Any] | No
     if not result_path.exists():
         return None
 
+    annotated_image = preview_data_url(result_path.read_bytes(), test_job.result_mime_type or "image/jpeg")
+    input_path = Path(test_job.input_storage_path)
+    source_image = (
+        preview_data_url(input_path.read_bytes(), test_job.input_mime_type or "image/jpeg")
+        if input_path.exists()
+        else annotated_image
+    )
+
     artifact = test_job.artifact
     return {
         "artifact": {
@@ -265,7 +273,8 @@ def _build_result_payload(test_job: TrainingInferenceJob) -> dict[str, Any] | No
         "confidenceThreshold": test_job.confidence_threshold,
         "imageSize": test_job.image_size,
         "detections": test_job.detections_json or [],
-        "annotatedImage": preview_data_url(result_path.read_bytes(), test_job.result_mime_type or "image/jpeg"),
+        "sourceImage": source_image,
+        "annotatedImage": annotated_image,
     }
 
 

@@ -257,6 +257,7 @@ export type TrainingInferenceResult = {
     confidence: number;
     bbox: [number, number, number, number];
   }>;
+  sourceImage: string;
   annotatedImage: string;
 };
 

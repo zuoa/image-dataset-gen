@@ -323,6 +323,7 @@ def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):
     completed_test = completed.get_json()["test"]
     assert completed_test["status"] == "completed"
     assert completed_test["result"]["detections"][0]["category"] == "widget"
+    assert completed_test["result"]["sourceImage"].startswith("data:image/jpeg;base64,")
     assert completed_test["result"]["annotatedImage"].startswith("data:image/jpeg;base64,")
 
     result_response = client.get(
