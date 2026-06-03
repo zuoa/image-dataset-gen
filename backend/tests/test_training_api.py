@@ -107,6 +107,7 @@ def test_training_job_accepts_regularization_and_class_filter(tmp_path: Path):
             "dropout": 0.2,
             "mixup": 0.25,
             "weight_decay": 0.002,
+            "workers": 2,
             "classes": [0],
         },
     )
@@ -116,6 +117,7 @@ def test_training_job_accepts_regularization_and_class_filter(tmp_path: Path):
     assert config["dropout"] == 0.2
     assert config["mixup"] == 0.25
     assert config["weightDecay"] == 0.002
+    assert config["workers"] == 2
     assert config["classes"] == [0]
 
 

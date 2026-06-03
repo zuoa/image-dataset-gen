@@ -17,6 +17,8 @@ VERSION = "0.1.0"
 
 
 def main() -> None:
+    _configure_nofile_limit()
+
     backend_url = os.getenv("TRAINER_BACKEND_URL", "http://backend:8000/api/v1")
     worker_token = os.getenv("TRAINER_WORKER_TOKEN", "")
     worker_id = os.getenv("TRAINER_WORKER_ID", socket.gethostname())
@@ -149,6 +151,41 @@ def _start_health_server(port: int):
     )
     thread.start()
     return server
+
+
+def _configure_nofile_limit() -> None:
+    try:
+        import resource
+    except ImportError:
+        return
+
+    requested = _env_int("TRAINER_NOFILE_LIMIT", 65535)
+    if requested <= 0:
+        return
+
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft >= requested:
+            return
+
+        if hard == resource.RLIM_INFINITY:
+            new_soft = requested
+        else:
+            new_soft = min(requested, hard)
+        if new_soft > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (OSError, ValueError):
+        return
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     classes = [int(class_index) for class_index in classes_config] if classes_config else None
     device = str(config.get("device") or "").strip() or None
     amp = _training_amp_enabled(config)
+    workers = _training_workers(config)
 
     model = _load_model(YOLO, model_name)
 
@@ -75,6 +76,7 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
         "weight_decay": weight_decay,
         "device": device,
         "amp": amp,
+        "workers": workers,
         "project": str(runs_root),
         "name": "train",
         "exist_ok": True,
@@ -180,6 +182,20 @@ def _training_amp_enabled(config: dict[str, Any]) -> bool:
     if "amp" in config:
         return _as_bool(config.get("amp"), default=False)
     return _env_bool("TRAINER_YOLO_AMP", default=False)
+
+
+def _training_workers(config: dict[str, Any]) -> int:
+    value = _config_value(
+        config,
+        "workers",
+        "numWorkers",
+        "num_workers",
+        default=os.getenv("TRAINER_YOLO_WORKERS", "0"),
+    )
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
@@ -296,7 +312,8 @@ def _read_metrics(run_dir: Path) -> dict[str, Any]:
     if not results_csv.exists():
         return {}
 
-    rows = list(csv.DictReader(results_csv.open("r", encoding="utf-8")))
+    with results_csv.open("r", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     if not rows:
         return {}
     latest = rows[-1]

@@ -160,6 +160,7 @@ class TrainingJobSchema(Schema):
     dropout = fields.Float(load_default=0.1, validate=validate.Range(min=0, max=1))
     mixup = fields.Float(load_default=0.15, validate=validate.Range(min=0, max=1))
     weight_decay = fields.Float(load_default=0.001, validate=validate.Range(min=0, max=1))
+    workers = fields.Integer(load_default=None, allow_none=True, validate=validate.Range(min=0, max=32))
     classes = fields.List(fields.Integer(validate=validate.Range(min=0)), load_default=list)
     device = fields.String(load_default="", allow_none=True, validate=validate.Length(max=80))
 

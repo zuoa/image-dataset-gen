@@ -149,7 +149,7 @@ Roboflow 导入说明：
 5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
 6. 页面上传图片测试训练结果时，后端创建测试任务；已注册的 trainer worker 继续通过轮询领取测试任务，下载模型产物和测试图片，执行推理后上传检测结果，后端渲染带框结果图。
 
-训练作业默认使用 `epochs=200`、`patience=50`、`dropout=0.1`、`mixup=0.15`、`weight_decay=0.001`；可在创建作业时用 `classes` 选择类别索引，worker 会在训练时传给 Ultralytics 做类别过滤。
+训练作业默认使用 `epochs=200`、`patience=50`、`dropout=0.1`、`mixup=0.15`、`weight_decay=0.001`；可在创建作业时用 `classes` 选择类别索引，worker 会在训练时传给 Ultralytics 做类别过滤。trainer 默认把 Ultralytics dataloader `workers` 设为 `0`，降低大数据集训练时的文件句柄占用；如需提高吞吐，可在确认 `nofile` 上限足够后设置 `TRAINER_YOLO_WORKERS=2` 或更高。
 
 训练 worker 作为独立 GPU 服务部署，不再放在主 `docker-compose.yml` 的 profile 中。镜像由单独的 GitHub Actions workflow 发布到 GHCR：
 
@@ -177,8 +177,16 @@ docker compose -f docker-compose.trainer.yml up -d
 - `TRAINER_MODEL_BASE_URL=<YOLO 权重镜像目录，可选>`
 - `TRAINER_MODEL_URL_TEMPLATE=<YOLO 权重下载 URL 模板，可选>`
 - `TRAINER_YOLO_AMP=false`
+- `TRAINER_YOLO_WORKERS=0`
+- `TRAINER_NOFILE_LIMIT=65535`
 
 `docker-compose.trainer.yml` 会持久化 `/app/work` 和 `/app/models`，后者用于缓存 YOLO 权重；如果模型文件已经存在，会优先复用本地文件。
+
+如果训练失败并看到 `[Errno 24] Too many open files`，请使用新版 `docker-compose.trainer.yml` 重建 worker 容器，使 `ulimits.nofile` 生效：
+
+```bash
+docker compose -f docker-compose.trainer.yml up -d --force-recreate trainer
+```
 
 在中国内地 GPU 服务器上，如果 GitHub release 下载不稳定，可以把 `yolov8n.pt`、`yolov8s.pt` 等权重同步到可信的内网或对象存储镜像，然后配置：
 

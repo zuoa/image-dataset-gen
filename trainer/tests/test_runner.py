@@ -7,7 +7,7 @@ import types
 import zipfile
 from pathlib import Path
 
-from app.runner import _resolve_model_name, train_yolov8
+from app.runner import _resolve_model_name, _training_workers, train_yolov8
 
 
 class _FakeTrainer:
@@ -74,7 +74,14 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         _FakeYOLO,
         "expected_train_kwargs",
-        {"epochs": 200, "patience": 50, "dropout": 0.1, "mixup": 0.15, "weight_decay": 0.001},
+        {
+            "epochs": 200,
+            "patience": 50,
+            "dropout": 0.1,
+            "mixup": 0.15,
+            "weight_decay": 0.001,
+            "workers": 0,
+        },
     )
     model_dir = tmp_path / "models"
     monkeypatch.setenv("TRAINER_MODEL_DIR", str(model_dir))
@@ -100,6 +107,22 @@ def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypat
         "results_csv",
         "metrics",
     }
+
+
+def test_training_workers_defaults_to_zero(monkeypatch) -> None:
+    monkeypatch.delenv("TRAINER_YOLO_WORKERS", raising=False)
+
+    assert _training_workers({}) == 0
+
+
+def test_training_workers_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("TRAINER_YOLO_WORKERS", "2")
+
+    assert _training_workers({}) == 2
+    assert _training_workers({"workers": 4}) == 4
+    assert _training_workers({"numWorkers": 3}) == 3
+    assert _training_workers({"workers": -1}) == 0
+    assert _training_workers({"workers": "invalid"}) == 0
 
 
 def test_train_yolov8_passes_regularization_and_class_filter(tmp_path: Path, monkeypatch) -> None:

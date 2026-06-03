@@ -191,26 +191,30 @@ def create_training_job(dataset_id: str):
         return jsonify({"message": "training classes contain indexes outside dataset categories"}), 400
 
     export_job = _create_yolo_export(dataset)
+    config_json = {
+        "framework": "yolov8",
+        "task": "detect",
+        "model": payload["model"],
+        "epochs": payload["epochs"],
+        "imageSize": payload["image_size"],
+        "batchSize": payload["batch_size"],
+        "patience": payload["patience"],
+        "dropout": payload["dropout"],
+        "mixup": payload["mixup"],
+        "weightDecay": payload["weight_decay"],
+        "classes": classes,
+        "device": payload.get("device") or "",
+    }
+    if payload.get("workers") is not None:
+        config_json["workers"] = payload["workers"]
+
     job = TrainingJob(
         dataset_id=dataset.id,
         user_id=user_id,
         export_id=export_job.id,
         status="queued",
         progress_percent=0,
-        config_json={
-            "framework": "yolov8",
-            "task": "detect",
-            "model": payload["model"],
-            "epochs": payload["epochs"],
-            "imageSize": payload["image_size"],
-            "batchSize": payload["batch_size"],
-            "patience": payload["patience"],
-            "dropout": payload["dropout"],
-            "mixup": payload["mixup"],
-            "weightDecay": payload["weight_decay"],
-            "classes": classes,
-            "device": payload.get("device") or "",
-        },
+        config_json=config_json,
     )
     db.session.add(job)
     db.session.commit()
