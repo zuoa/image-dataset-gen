@@ -446,7 +446,7 @@ def annotate_dataset_images_task(
     skip_annotated: bool = False,
 ) -> None:
     from app.clients.annotator_client import annotate_dataset_images
-    from app.services.annotation_storage import save_annotation_result
+    from app.services.annotation_storage import extract_detection_categories, save_annotation_result
 
     dataset = db.session.get(Dataset, dataset_id)
     if dataset is None:
@@ -501,6 +501,7 @@ def annotate_dataset_images_task(
         save_annotation_result(storage_root, dataset.id, image.id, detections)
         image.annotation_status = "annotated" if detections else "empty"
         image.confidence_score = max([float(detection["confidence"]) for detection in detections], default=None)
+        image.detection_categories = extract_detection_categories(storage_root, dataset.id, image.id)
         if detections:
             detected_images += 1
         else:

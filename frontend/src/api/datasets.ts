@@ -3,8 +3,10 @@ import type {
   AugmentationMethod,
   AugmentationSettings,
   Dataset,
+  DatasetImage,
   DatasetSummary,
   DatasetTask,
+  ImageFilter,
   PromptPreview,
   TaskConfig,
   TrainingInferenceTest,
@@ -39,8 +41,28 @@ export function createDataset(
   });
 }
 
-export function getDataset(datasetId: string, token: string) {
-  return apiRequest<{ dataset: Dataset }>(`/datasets/${datasetId}`, { token });
+export function getDataset(
+  datasetId: string,
+  token: string,
+  options?: { offset?: number; limit?: number; filter?: ImageFilter },
+) {
+  const params = new URLSearchParams();
+  if (options?.offset !== undefined) params.set("images_offset", String(options.offset));
+  if (options?.limit !== undefined) params.set("images_limit", String(options.limit));
+  if (options?.filter?.class) params.set("filter_class", options.filter.class);
+  if (options?.filter?.split) params.set("filter_split", options.filter.split);
+  if (options?.filter?.annotation) params.set("filter_annotation", options.filter.annotation);
+  const query = params.toString();
+  return apiRequest<{ dataset: Dataset }>(
+    `/datasets/${datasetId}${query ? `?${query}` : ""}`,
+    { token },
+  );
+}
+
+export function buildImageFilter(filter: ImageFilter | null): ImageFilter | undefined {
+  if (!filter) return undefined;
+  if (!filter.class && !filter.split && !filter.annotation) return undefined;
+  return filter;
 }
 
 export function updateDataset(
@@ -271,7 +293,7 @@ export function updateDatasetSelection(
   datasetId: string,
   token: string,
   payload:
-    | { mode: "all" | "none" | "invert"; image_ids?: string[] }
+    | { mode: "all" | "none" | "invert"; image_ids?: string[]; scope?: "unannotated_unretained" }
     | { mode: "single"; image_id: string; selected: boolean },
 ) {
   return apiRequest<{ dataset: Dataset }>(`/datasets/${datasetId}/selection`, {
@@ -312,9 +334,12 @@ export function updateDatasetImageAnnotations(
     bbox: [number, number, number, number];
   }>,
 ) {
-  return apiRequest<{ dataset: Dataset }>(`/datasets/${datasetId}/images/${imageId}/annotations`, {
-    method: "PATCH",
-    token,
-    body: JSON.stringify({ detections }),
-  });
+  return apiRequest<{ dataset: Dataset; image: DatasetImage }>(
+    `/datasets/${datasetId}/images/${imageId}/annotations`,
+    {
+      method: "PATCH",
+      token,
+      body: JSON.stringify({ detections }),
+    },
+  );
 }

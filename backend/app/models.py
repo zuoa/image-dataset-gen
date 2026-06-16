@@ -157,6 +157,7 @@ class DatasetImage(TimestampMixin, db.Model):
     selected = db.Column(db.Boolean, nullable=False, default=True)
     annotation_status = db.Column(db.String(32), nullable=False, default="pending")
     confidence_score = db.Column(db.Float, nullable=True)
+    detection_categories = db.Column(db.JSON, nullable=False, default=list)
     generated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=naive_utcnow)
 
     dataset = db.relationship("Dataset", back_populates="images")

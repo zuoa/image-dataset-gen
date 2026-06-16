@@ -243,6 +243,7 @@ def _persist_prepared_images(
             selected=True,
             annotation_status="annotated" if prepared.detections else "empty",
             confidence_score=max((float(item["confidence"]) for item in prepared.detections), default=None),
+            detection_categories=sorted({str(item["category"]) for item in prepared.detections if item.get("category")}),
         )
         db.session.add(image)
         dataset.images.append(image)

@@ -23,16 +23,22 @@ from app.schemas import (
     TaskActionSchema,
     VideoImportSchema,
 )
-from app.services.annotation_storage import annotation_path, save_annotation_result
+from app.services.annotation_storage import (
+    annotation_path,
+    extract_detection_categories,
+    save_annotation_result,
+)
 from app.services.dataset_export_service import get_dataset_archive_path
 from app.services.dataset_service import (
     build_dataset_export_payload,
+    build_dataset_image_payload,
     build_dataset_payload,
     build_dataset_summary,
     build_dataset_task_payload,
     next_dataset_export_version,
     next_dataset_ordinal,
     now_utc,
+    sample_pool_split_map,
     sync_dataset,
     sync_dataset_stats_inplace,
     sync_dataset_task_inplace,
@@ -80,7 +86,7 @@ def _task_for_dataset(dataset: Dataset, task_id: str) -> DatasetTask:
 
 def _sync_and_payload(dataset: Dataset) -> dict:
     dataset = sync_dataset(dataset)
-    return build_dataset_payload(dataset)
+    return build_dataset_payload(dataset, include_images=False)
 
 
 def _delete_dataset_image_assets(dataset: Dataset, image: DatasetImage) -> None:
@@ -112,7 +118,7 @@ def _delete_dataset_images(dataset: Dataset, images: list[DatasetImage]) -> dict
     return {
         "deletedImageIds": deleted_ids,
         "deletedCount": len(deleted_ids),
-        "dataset": build_dataset_payload(sync_dataset(dataset)),
+        "dataset": build_dataset_payload(sync_dataset(dataset), include_images=False),
     }
 
 
@@ -189,12 +195,45 @@ def create_dataset():
     return jsonify({"dataset": build_dataset_payload(dataset)}), 201
 
 
+def _parse_image_filter() -> dict[str, Any] | None:
+    class_filter = (request.args.get("filter_class") or "").strip() or None
+    split_filter = (request.args.get("filter_split") or "").strip() or None
+    annotation_filter = (request.args.get("filter_annotation") or "").strip() or None
+    if not class_filter and not split_filter and not annotation_filter:
+        return None
+    if annotation_filter not in (None, "annotated", "unannotated"):
+        annotation_filter = None
+    if split_filter not in (None, "train", "val", "test", "unselected"):
+        split_filter = None
+    return {
+        "class": class_filter,
+        "split": split_filter,
+        "annotation": annotation_filter,
+    }
+
+
 @datasets_bp.get("/<dataset_id>")
 @jwt_required()
 def get_dataset(dataset_id: str):
     user_id = get_jwt_identity()
-    dataset = _dataset_for_user(dataset_id, user_id)
-    return jsonify({"dataset": _sync_and_payload(dataset)})
+    dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    image_filter = _parse_image_filter()
+    try:
+        images_offset = max(0, int(request.args.get("images_offset", 0)))
+    except (TypeError, ValueError):
+        images_offset = 0
+    try:
+        images_limit_raw = request.args.get("images_limit", None)
+        images_limit = int(images_limit_raw) if images_limit_raw is not None else None
+    except (TypeError, ValueError):
+        images_limit = None
+    payload = build_dataset_payload(
+        dataset,
+        image_filter=image_filter,
+        images_offset=images_offset,
+        images_limit=images_limit,
+    )
+    return jsonify({"dataset": payload})
 
 
 @datasets_bp.patch("/<dataset_id>")
@@ -244,7 +283,7 @@ def create_generation_task(dataset_id: str):
     dataset.tasks.append(task)
     sync_dataset_stats_inplace(dataset)
     db.session.commit()
-    return jsonify({"task": build_dataset_task_payload(task), "dataset": build_dataset_payload(dataset)}), 201
+    return jsonify({"task": build_dataset_task_payload(task), "dataset": build_dataset_payload(dataset, include_images=False)}), 201
 
 
 @datasets_bp.get("/<dataset_id>/tasks/<task_id>")
@@ -445,7 +484,7 @@ def import_dataset_images(dataset_id: str):
                 "skippedFiles": skipped_files[:10],
             },
             "task": build_dataset_task_payload(task),
-            "dataset": build_dataset_payload(dataset),
+            "dataset": build_dataset_payload(dataset, include_images=False),
         }
     )
 
@@ -539,7 +578,7 @@ def import_dataset_video(dataset_id: str):
                     "source": "video",
                 },
                 "task": build_dataset_task_payload(task),
-                "dataset": build_dataset_payload(dataset),
+                "dataset": build_dataset_payload(dataset, include_images=False),
             }
         ),
         201,
@@ -579,7 +618,7 @@ def import_roboflow_dataset_images(dataset_id: str):
         {
             "summary": summary,
             "task": build_dataset_task_payload(task),
-            "dataset": build_dataset_payload(dataset),
+            "dataset": build_dataset_payload(dataset, include_images=False),
         }
     )
 
@@ -641,7 +680,7 @@ def create_augmentation_task(dataset_id: str):
     from app.worker_tasks import augment_dataset_task_images
 
     _dispatch_background_task(augment_dataset_task_images, task.id)
-    return jsonify({"task": build_dataset_task_payload(task), "dataset": build_dataset_payload(dataset)}), 201
+    return jsonify({"task": build_dataset_task_payload(task), "dataset": build_dataset_payload(dataset, include_images=False)}), 201
 
 
 @datasets_bp.post("/<dataset_id>/annotate")
@@ -690,7 +729,7 @@ def annotate_dataset(dataset_id: str):
         "updatedAt": now_utc().isoformat(),
     }
     db.session.commit()
-    return jsonify({"summary": dataset.annotation_json, "dataset": build_dataset_payload(dataset)})
+    return jsonify({"summary": dataset.annotation_json, "dataset": build_dataset_payload(dataset, include_images=False)})
 
 
 @datasets_bp.get("/<dataset_id>/images/<image_id>/preview")
@@ -750,13 +789,21 @@ def update_dataset_image_annotations(dataset_id: str, image_id: str):
     save_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id, detections)
     image.annotation_status = "annotated" if detections else "empty"
     image.confidence_score = max([float(detection["confidence"]) for detection in detections], default=None)
+    image.detection_categories = extract_detection_categories(
+        current_app.config["STORAGE_ROOT"], dataset.id, image.id
+    )
 
     annotation_summary = {**(dataset.annotation_json or {})}
     annotation_summary["updatedAt"] = now_utc().isoformat()
     annotation_summary["manualEdits"] = int(annotation_summary.get("manualEdits", 0)) + 1
     dataset.annotation_json = annotation_summary
     db.session.commit()
-    return jsonify({"dataset": build_dataset_payload(dataset)})
+    return jsonify(
+        {
+            "dataset": build_dataset_payload(dataset, include_images=False),
+            "image": build_dataset_image_payload(dataset, image, split_map=sample_pool_split_map(dataset)),
+        }
+    )
 
 
 @datasets_bp.patch("/<dataset_id>/selection")
@@ -765,9 +812,16 @@ def update_dataset_selection(dataset_id: str):
     user_id = get_jwt_identity()
     payload = DatasetSelectionSchema().load(request.get_json() or {})
     dataset = _dataset_for_user(dataset_id, user_id)
+    scope = payload.get("scope")
     scoped_ids = payload.get("image_ids")
     target_images = dataset.images
-    if scoped_ids is not None:
+    if scope == "unannotated_unretained":
+        target_images = [
+            image
+            for image in dataset.images
+            if not image.selected and image.annotation_status not in ("annotated", "empty")
+        ]
+    elif scoped_ids is not None:
         scoped_id_set = set(scoped_ids)
         target_images = [image for image in dataset.images if image.id in scoped_id_set]
         if len(target_images) != len(scoped_id_set):
@@ -792,7 +846,7 @@ def update_dataset_selection(dataset_id: str):
     for task in dataset.tasks:
         sync_dataset_task_inplace(task)
     db.session.commit()
-    return jsonify({"dataset": build_dataset_payload(dataset)})
+    return jsonify({"dataset": build_dataset_payload(dataset, include_images=False)})
 
 
 @datasets_bp.post("/<dataset_id>/export")
@@ -825,7 +879,7 @@ def export_dataset(dataset_id: str):
 
     _dispatch_background_task(export_dataset_archive, export_job.id)
     db.session.commit()
-    return jsonify({"export": build_dataset_export_payload(export_job), "dataset": build_dataset_payload(dataset)}), 201
+    return jsonify({"export": build_dataset_export_payload(export_job), "dataset": build_dataset_payload(dataset, include_images=False)}), 201
 
 
 @datasets_bp.get("/<dataset_id>/exports/<int:version>/download")

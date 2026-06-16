@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from app import create_app
+from app import _backfill_detection_categories, create_app
 from app.config import TestConfig
 from app.extensions import db
-from app.models import DatasetImage, DatasetTask
-from app.services.annotation_storage import load_annotation_result
+from app.models import Dataset, DatasetImage, DatasetTask
+from app.services.annotation_storage import load_annotation_result, save_annotation_result
 from app.services.image_storage import existing_generated_image, save_generated_image
 
 
@@ -92,6 +92,80 @@ def _create_generation_task(client, dataset_id: str, headers: dict[str, str]) ->
     return response.get_json()["task"]["id"]
 
 
+def _fetch_images(client, dataset_id: str, headers: dict[str, str]) -> list[dict]:
+    response = client.get(f"/api/v1/datasets/{dataset_id}", headers=headers)
+    assert response.status_code == 200
+    return response.get_json()["dataset"]["images"]
+
+
+def test_detection_category_backfill_skips_empty_images(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-category-backfill")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+
+        for ordinal in range(1, 4):
+            dataset.images.append(
+                DatasetImage(
+                    dataset_id=dataset.id,
+                    source_type="import",
+                    source_ordinal=ordinal,
+                    ordinal=ordinal,
+                    status="uploaded",
+                    seed=ordinal,
+                    prompt_text=f"empty image {ordinal}",
+                    diversity_vars={},
+                    preview_svg="",
+                    selected=True,
+                    annotation_status="empty",
+                    detection_categories=[],
+                )
+            )
+
+        annotated_image = DatasetImage(
+            dataset_id=dataset.id,
+            source_type="import",
+            source_ordinal=4,
+            ordinal=4,
+            status="uploaded",
+            seed=4,
+            prompt_text="annotated image",
+            diversity_vars={},
+            preview_svg="",
+            selected=True,
+            annotation_status="annotated",
+            detection_categories=[],
+        )
+        dataset.images.append(annotated_image)
+        db.session.flush()
+        annotated_image_id = annotated_image.id
+        save_annotation_result(
+            str(tmp_path),
+            dataset.id,
+            annotated_image_id,
+            [
+                {
+                    "category": "pedestrian",
+                    "bbox": [0.5, 0.5, 0.5, 0.5],
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        db.session.commit()
+
+        _backfill_detection_categories(app, batch_size=1)
+
+        db.session.expire_all()
+        assert db.session.get(DatasetImage, annotated_image_id).detection_categories == ["pedestrian"]
+
+
 def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
@@ -114,10 +188,11 @@ def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     task = payload["task"]
     assert dataset["imageCount"] == 5
     assert task["imagesGenerated"] == 5
-    assert len(dataset["images"]) == 5
-    assert all(image["datasetId"] == dataset_id for image in dataset["images"])
-    assert all(image["sourceTaskId"] == task_id for image in dataset["images"])
-    assert all(image["sourceType"] == "generation" for image in dataset["images"])
+    images = _fetch_images(client, dataset_id, headers)
+    assert len(images) == 5
+    assert all(image["datasetId"] == dataset_id for image in images)
+    assert all(image["sourceTaskId"] == task_id for image in images)
+    assert all(image["sourceType"] == "generation" for image in images)
 
 
 def test_generation_start_falls_back_to_inline_execution_when_queue_is_unavailable(tmp_path: Path):
@@ -176,7 +251,8 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert dataset["imageCount"] == 2
     assert dataset["selectedCount"] == 2
     assert dataset["taskCount"] == 1
-    assert all(image["sourceType"] == "import" for image in dataset["images"])
+    images = _fetch_images(client, dataset_id, headers)
+    assert all(image["sourceType"] == "import" for image in images)
 
     export_response = client.post(
         f"/api/v1/datasets/{dataset_id}/export",
@@ -224,7 +300,7 @@ def test_selection_can_target_visible_image_scope(tmp_path: Path):
         content_type="multipart/form-data",
     )
     assert import_response.status_code == 200
-    image_ids = [image["id"] for image in import_response.get_json()["dataset"]["images"]]
+    image_ids = [image["id"] for image in _fetch_images(client, dataset_id, headers)]
 
     response = client.patch(
         f"/api/v1/datasets/{dataset_id}/selection",
@@ -234,7 +310,9 @@ def test_selection_can_target_visible_image_scope(tmp_path: Path):
 
     assert response.status_code == 200
     dataset = response.get_json()["dataset"]
-    assert [image["selected"] for image in dataset["images"]] == [False, True]
+    fetched = _fetch_images(client, dataset_id, headers)
+    by_id = {image["id"]: image for image in fetched}
+    assert [by_id[image_ids[0]]["selected"], by_id[image_ids[1]]["selected"]] == [False, True]
     assert dataset["selectedCount"] == 1
 
 
@@ -260,7 +338,7 @@ def test_delete_single_dataset_image_updates_pool_stats_and_assets(tmp_path: Pat
         content_type="multipart/form-data",
     )
     assert import_response.status_code == 200
-    image = import_response.get_json()["dataset"]["images"][0]
+    image = _fetch_images(client, dataset_id, headers)[0]
     image_path = existing_generated_image(str(tmp_path), dataset_id, f"image-{image['ordinal']:06d}")
     assert image_path is not None
     assert image_path.exists()
@@ -285,7 +363,7 @@ def test_delete_single_dataset_image_updates_pool_stats_and_assets(tmp_path: Pat
     assert dataset["selectedCount"] == 1
     assert dataset["tasks"][0]["imagesGenerated"] == 1
     assert dataset["tasks"][0]["selectedCount"] == 1
-    assert all(item["id"] != image["id"] for item in dataset["images"])
+    assert all(item["id"] != image["id"] for item in _fetch_images(client, dataset_id, headers))
     assert not image_path.exists()
     assert not annotation_path.exists()
 
@@ -312,7 +390,7 @@ def test_delete_multiple_dataset_images_clears_pool(tmp_path: Path):
         content_type="multipart/form-data",
     )
     assert import_response.status_code == 200
-    image_ids = [image["id"] for image in import_response.get_json()["dataset"]["images"]]
+    image_ids = [image["id"] for image in _fetch_images(client, dataset_id, headers)]
 
     delete_response = client.delete(
         f"/api/v1/datasets/{dataset_id}/images",
@@ -329,7 +407,7 @@ def test_delete_multiple_dataset_images_clears_pool(tmp_path: Path):
     assert dataset["selectedCount"] == 0
     assert dataset["tasks"][0]["imagesGenerated"] == 0
     assert dataset["tasks"][0]["selectedCount"] == 0
-    assert dataset["images"] == []
+    assert _fetch_images(client, dataset_id, headers) == []
 
 
 def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_path: Path):
@@ -366,8 +444,9 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
     dataset = payload["dataset"]
     assert dataset["imageCount"] == 3
     assert dataset["selectedCount"] == 3
-    assert {image["sourceType"] for image in dataset["images"]} == {"video"}
-    assert dataset["images"][0]["diversityVars"]["outputFilename"] == "video_frame_000000.png"
+    images = _fetch_images(client, dataset_id, headers)
+    assert {image["sourceType"] for image in images} == {"video"}
+    assert images[0]["diversityVars"]["outputFilename"] == "video_frame_000000.png"
 
     second_import_response = client.post(
         f"/api/v1/datasets/{dataset_id}/tasks/import/video",
@@ -438,8 +517,9 @@ def test_video_import_supports_seconds_interval(tmp_path: Path):
     assert video_config["expectedFrames"] == 3
     dataset = payload["dataset"]
     assert dataset["imageCount"] == 3
-    assert [image["diversityVars"]["sourceFrame"] for image in dataset["images"]] == ["0", "2", "4"]
-    assert dataset["images"][0]["diversityVars"]["outputFilename"] == "second_frame_000000.png"
+    images = _fetch_images(client, dataset_id, headers)
+    assert [image["diversityVars"]["sourceFrame"] for image in images] == ["0", "2", "4"]
+    assert images[0]["diversityVars"]["outputFilename"] == "second_frame_000000.png"
 
 
 def test_video_import_resizes_frames_to_target_size(tmp_path: Path):
@@ -503,7 +583,7 @@ def test_video_import_replaces_stale_static_image_variant(tmp_path: Path):
     )
 
     assert response.status_code == 201
-    image = response.get_json()["dataset"]["images"][0]
+    image = _fetch_images(client, dataset_id, headers)[0]
     assert image["previewSvg"] == f"http://assets.local/images/{dataset_id}/image-000001.jpg?v={image['id']}"
     assert not (tmp_path / "images" / dataset_id / "image-000001.png").exists()
     image_path = existing_generated_image(str(tmp_path), dataset_id, "image-000001")
@@ -663,9 +743,10 @@ def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):
     dataset = payload["dataset"]
     assert dataset["imageCount"] == 2
     assert dataset["annotation"]["provider"] == "roboflow"
-    assert {image["sourceType"] for image in dataset["images"]} == {"roboflow"}
+    images = _fetch_images(client, dataset_id, headers)
+    assert {image["sourceType"] for image in images} == {"roboflow"}
 
-    annotated_image = next(image for image in dataset["images"] if image["annotationStatus"] == "annotated")
+    annotated_image = next(image for image in images if image["annotationStatus"] == "annotated")
     assert annotated_image["detections"] == [
         {
             "category": "umbrella",
@@ -738,7 +819,8 @@ def test_roboflow_import_decodes_labels_with_imported_category_order(tmp_path: P
     assert import_response.status_code == 200
     dataset = import_response.get_json()["dataset"]
     assert dataset["categories"] == ["vehicle", "pedestrian", "umbrella"]
-    assert dataset["images"][0]["detections"][0]["category"] == "umbrella"
+    images = _fetch_images(client, dataset_id, headers)
+    assert images[0]["detections"][0]["category"] == "umbrella"
 
     export_response = client.post(
         f"/api/v1/datasets/{dataset_id}/export",
@@ -805,7 +887,7 @@ def test_roboflow_import_extracts_downloaded_zip_archives(tmp_path: Path):
     payload = response.get_json()
     assert payload["summary"]["importedCount"] == 1
     assert payload["summary"]["annotatedCount"] == 1
-    assert payload["dataset"]["images"][0]["detections"][0]["category"] == "pedestrian"
+    assert _fetch_images(client, dataset_id, headers)[0]["detections"][0]["category"] == "pedestrian"
 
 
 def test_roboflow_import_requires_api_key_payload(tmp_path: Path):

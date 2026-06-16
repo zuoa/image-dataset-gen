@@ -269,6 +269,11 @@ class SelectionSchema(Schema):
     image_id = fields.String(load_default="", allow_none=True)
     image_ids = fields.List(fields.String(), load_default=None, allow_none=True)
     selected = fields.Boolean(load_default=None, allow_none=True)
+    scope = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.OneOf(["unannotated_unretained"]),
+    )
 
 
 class DatasetSelectionSchema(SelectionSchema):

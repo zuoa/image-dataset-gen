@@ -36,6 +36,7 @@ import { useAuthStore } from "../store/auth";
 
 const categoryPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
 const unsavedAnnotationMessage = "当前图片有未保存的标注改动，确认放弃并继续？";
+const PAGE_SIZE = 100;
 
 function annotationStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -67,6 +68,12 @@ export function DatasetAnnotatePage() {
   const { datasetId } = useParams();
   const navigation = useContext(UNSAFE_NavigationContext);
   const [dataset, setDataset] = useState<Dataset | null>(null);
+  const [loadedImages, setLoadedImages] = useState<DatasetImage[]>([]);
+  const [imagesTotal, setImagesTotal] = useState(0);
+  const [imagesCursor, setImagesCursor] = useState(0);
+  const [hasMoreImages, setHasMoreImages] = useState(false);
+  const [isLoadingFirstPage, setIsLoadingFirstPage] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [activeImageId, setActiveImageId] = useState<string | null>(null);
   const [draftDetections, setDraftDetections] = useState<Detection[]>([]);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
@@ -79,12 +86,28 @@ export function DatasetAnnotatePage() {
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const queueScrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadedImagesRef = useRef<DatasetImage[]>([]);
+  loadedImagesRef.current = loadedImages;
+  const cursorRef = useRef(0);
+  cursorRef.current = imagesCursor;
+  const hasMoreRef = useRef(false);
+  hasMoreRef.current = hasMoreImages;
+  const isLoadingMoreRef = useRef(false);
+  isLoadingMoreRef.current = isLoadingMore;
+  const loadersRef = useRef<{
+    loadMore: () => Promise<DatasetImage[] | null>;
+  }>({ loadMore: async () => null });
 
-  const images = dataset?.images ?? [];
+  const images = loadedImages;
   const categories = dataset?.categories ?? [];
   const activeIndex = activeImageId ? images.findIndex((image) => image.id === activeImageId) : images.length > 0 ? 0 : -1;
   const activeImage = activeIndex >= 0 ? images[activeIndex] : null;
-  const processedCount = useMemo(() => images.filter((image) => isProcessed(image.annotationStatus)).length, [images]);
+  const processedCount = useMemo(
+    () => images.filter((image) => isProcessed(image.annotationStatus)).length,
+    [images],
+  );
   const activeCategory = currentCategory || categories[0] || "object";
   const hasAnnotationChanges = activeImage !== null && !detectionsEqual(activeImage.detections, draftDetections);
   const canSave = activeImage !== null && !deletingImageId && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
@@ -94,13 +117,19 @@ export function DatasetAnnotatePage() {
     if (!token || !datasetId) return;
 
     let disposed = false;
-    void getDataset(datasetId, token)
+    setIsLoadingFirstPage(true);
+    void getDataset(datasetId, token, { offset: 0, limit: PAGE_SIZE })
       .then((response) => {
         if (disposed) return;
+        const pageImages = response.dataset.images ?? [];
         setDataset(response.dataset);
+        setLoadedImages(pageImages);
+        setImagesTotal(response.dataset.imagesTotal ?? pageImages.length);
+        setImagesCursor(pageImages.length);
+        setHasMoreImages(pageImages.length < (response.dataset.imagesTotal ?? pageImages.length));
         setActiveImageId((current) => {
-          if (current && response.dataset.images.some((image) => image.id === current)) return current;
-          return response.dataset.images[0]?.id ?? null;
+          if (current && pageImages.some((image) => image.id === current)) return current;
+          return pageImages[0]?.id ?? null;
         });
         setActionError(null);
       })
@@ -108,12 +137,67 @@ export function DatasetAnnotatePage() {
         if (!disposed) {
           setActionError((error as Error).message);
         }
+      })
+      .finally(() => {
+        if (!disposed) setIsLoadingFirstPage(false);
       });
 
     return () => {
       disposed = true;
     };
   }, [datasetId, token]);
+
+  useEffect(() => {
+    loadersRef.current.loadMore = async () => {
+      if (!token || !datasetId) return null;
+      if (isLoadingMoreRef.current || !hasMoreRef.current) return null;
+      const offset = cursorRef.current;
+      setIsLoadingMore(true);
+      try {
+        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE });
+        const pageImages = response.dataset.images ?? [];
+        setDataset(response.dataset);
+        setImagesTotal(response.dataset.imagesTotal ?? imagesTotal);
+        setImagesCursor(offset + pageImages.length);
+        setHasMoreImages(offset + pageImages.length < (response.dataset.imagesTotal ?? imagesTotal));
+        if (pageImages.length > 0) {
+          setLoadedImages((current) => {
+            const seen = new Set(current.map((image) => image.id));
+            const merged = [...current];
+            for (const image of pageImages) {
+              if (!seen.has(image.id)) {
+                merged.push(image);
+                seen.add(image.id);
+              }
+            }
+            return merged;
+          });
+        }
+        return pageImages;
+      } catch (error) {
+        setActionError((error as Error).message);
+        return null;
+      } finally {
+        setIsLoadingMore(false);
+      }
+    };
+  }, [datasetId, imagesTotal, token]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = queueScrollRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadersRef.current.loadMore();
+        }
+      },
+      { root, rootMargin: "200px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [dataset, hasMoreImages]);
 
   useEffect(() => {
     if (categories.length === 0) {
@@ -264,10 +348,22 @@ export function DatasetAnnotatePage() {
     setActionError(null);
   }
 
-  function moveActiveImage(direction: -1 | 1) {
+  async function moveActiveImage(direction: -1 | 1) {
     if (!activeImage) return;
     const nextIndex = activeIndex + direction;
-    if (nextIndex < 0 || nextIndex >= images.length) return;
+    if (nextIndex < 0) return;
+    if (nextIndex >= images.length) {
+      if (hasMoreImages) {
+        const page = await loadersRef.current.loadMore();
+        const after = page ? loadedImagesRef.current : loadedImagesRef.current;
+        const target = after[nextIndex];
+        if (target) {
+          selectImage(target.id);
+        }
+        return;
+      }
+      return;
+    }
     selectImage(images[nextIndex].id);
   }
 
@@ -276,8 +372,12 @@ export function DatasetAnnotatePage() {
     setIsSaving(true);
     try {
       const response = await updateDatasetImageAnnotations(datasetId, activeImage.id, token, draftDetections);
-      setDataset(response.dataset);
-      setActiveImageId(activeImage.id);
+      const updatedImage = response.image;
+      setDataset((current) => (current ? { ...current, ...response.dataset } : response.dataset));
+      setLoadedImages((current) =>
+        current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)),
+      );
+      setActiveImageId(updatedImage.id);
       setActionError(null);
     } catch (error) {
       setActionError((error as Error).message);
@@ -298,16 +398,16 @@ export function DatasetAnnotatePage() {
     try {
       const response = await deleteDatasetImage(datasetId, image.id, token);
       const deletedIdSet = new Set(response.deletedImageIds);
-      const nextImages = response.dataset.images;
-      const deletedIndex = images.findIndex((candidate) => candidate.id === image.id);
-      const fallbackIndex = deletedIndex >= 0 ? Math.min(deletedIndex, nextImages.length - 1) : 0;
-
-      setDataset(response.dataset);
+      setDataset((current) => (current ? { ...current, ...response.dataset } : response.dataset));
+      setImagesTotal((current) => Math.max(0, current - deletedIdSet.size));
+      setImagesCursor((current) => Math.max(0, current - deletedIdSet.size));
+      const deletedIndex = loadedImagesRef.current.findIndex((candidate) => candidate.id === image.id);
+      setLoadedImages((current) => current.filter((candidate) => !deletedIdSet.has(candidate.id)));
       setActiveImageId((current) => {
-        if (current && !deletedIdSet.has(current) && nextImages.some((candidate) => candidate.id === current)) {
-          return current;
-        }
-        return nextImages[fallbackIndex]?.id ?? null;
+        if (current && !deletedIdSet.has(current)) return current;
+        const after = loadedImagesRef.current.filter((candidate) => !deletedIdSet.has(candidate.id));
+        const fallbackIndex = deletedIndex >= 0 ? Math.min(deletedIndex, after.length - 1) : 0;
+        return after[fallbackIndex]?.id ?? null;
       });
       setActionError(null);
     } catch (error) {
@@ -458,7 +558,7 @@ export function DatasetAnnotatePage() {
     );
   }
 
-  if (images.length === 0) {
+  if (imagesTotal === 0 && !isLoadingFirstPage) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white p-8 text-center dark:bg-neutral-950">
         <div>
@@ -493,7 +593,7 @@ export function DatasetAnnotatePage() {
               </div>
               <h2 className="truncate text-lg font-medium text-neutral-900 dark:text-white">{dataset.name}</h2>
             </div>
-            <Badge>{processedCount} / {images.length}</Badge>
+            <Badge>{processedCount} / {imagesTotal}</Badge>
             {hasAnnotationChanges ? (
               <Badge>未保存</Badge>
             ) : activeImage && !isProcessed(activeImage.annotationStatus) ? (
@@ -505,11 +605,16 @@ export function DatasetAnnotatePage() {
 
           <div className="flex flex-wrap items-center gap-2">
             {actionError ? <span className="max-w-[280px] truncate text-sm text-red-600 dark:text-red-300">{actionError}</span> : null}
-            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(-1)} disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
+            <Button variant="secondary" className="h-9 px-3" onClick={() => void moveActiveImage(-1)} disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
               <ChevronLeft className="mr-1.5 h-4 w-4" />
               上一张
             </Button>
-            <Button variant="secondary" className="h-9 px-3" onClick={() => moveActiveImage(1)} disabled={activeIndex >= images.length - 1 || Boolean(deletingImageId)}>
+            <Button
+              variant="secondary"
+              className="h-9 px-3"
+              onClick={() => void moveActiveImage(1)}
+              disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}
+            >
               下一张
               <ChevronRight className="ml-1.5 h-4 w-4" />
             </Button>
@@ -536,12 +641,12 @@ export function DatasetAnnotatePage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</div>
-                <div className="text-sm text-neutral-900 dark:text-white">{images.length} 张样本</div>
+                <div className="text-sm text-neutral-900 dark:text-white">{imagesTotal} 张样本</div>
               </div>
               <CheckCircle2 className="h-5 w-5 text-neutral-400" />
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+          <div ref={queueScrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {images.map((image, index) => {
               const active = image.id === activeImage?.id;
               return (
@@ -573,6 +678,14 @@ export function DatasetAnnotatePage() {
                 </button>
               );
             })}
+            {hasMoreImages ? (
+              <div ref={sentinelRef} className="flex items-center justify-center gap-2 py-3 text-xs text-neutral-500">
+                {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
+              </div>
+            ) : images.length > 0 ? (
+              <div className="py-3 text-center text-xs text-neutral-400">已加载全部 {imagesTotal} 张</div>
+            ) : null}
           </div>
         </aside>
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify
 from marshmallow import ValidationError
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, text
 from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
@@ -15,7 +15,7 @@ from app.api.system import system_bp
 from app.api.training import training_bp
 from app.config import Config
 from app.extensions import celery, cors, db, jwt
-from app.models import User
+from app.models import DatasetImage, User
 from app.services.model_profile_service import ensure_default_model_profiles
 
 
@@ -62,6 +62,7 @@ def create_app(
             except OperationalError:
                 pass
             _ensure_schema_columns()
+            _backfill_detection_categories(app)
             _ensure_demo_user(app)
 
     return app
@@ -147,6 +148,50 @@ def _ensure_schema_columns() -> None:
         db.session.execute(text(statement))
     if statements:
         db.session.commit()
+
+    if "dataset_images" in inspector.get_table_names():
+        image_columns = {column["name"] for column in inspector.get_columns("dataset_images")}
+        if "detection_categories" not in image_columns:
+            db.session.execute(
+                text(
+                    "ALTER TABLE dataset_images ADD COLUMN detection_categories JSON NOT NULL DEFAULT '[]'"
+                )
+            )
+            db.session.commit()
+
+
+def _backfill_detection_categories(app: Flask, *, batch_size: int = 500) -> None:
+    inspector = inspect(db.engine)
+    if "dataset_images" not in inspector.get_table_names():
+        return
+    image_columns = {column["name"] for column in inspector.get_columns("dataset_images")}
+    if "detection_categories" not in image_columns:
+        return
+
+    from app.services.annotation_storage import load_annotation_result
+
+    storage_root = app.config["STORAGE_ROOT"]
+    pending = (
+        DatasetImage.query.filter(DatasetImage.annotation_status == "annotated")
+        .filter(or_(DatasetImage.detection_categories.is_(None), DatasetImage.detection_categories == []))
+        .order_by(DatasetImage.created_at.asc(), DatasetImage.ordinal.asc())
+        .limit(batch_size)
+        .all()
+    )
+    if not pending:
+        return
+
+    for image in pending:
+        result = load_annotation_result(storage_root, image.dataset_id, image.id)
+        categories = sorted(
+            {
+                str(detection["category"])
+                for detection in (result or {}).get("detections", [])
+                if detection.get("category")
+            }
+        )
+        image.detection_categories = categories
+    db.session.commit()
 
 
 def _make_celery(app: Flask) -> None:

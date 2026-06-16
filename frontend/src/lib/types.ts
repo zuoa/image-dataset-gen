@@ -182,6 +182,7 @@ export type DatasetImage = {
   annotationStatus: string;
   confidenceScore?: number | null;
   source: string;
+  split?: SamplePoolSplit;
   detections: Array<{
     category: string;
     confidence: number;
@@ -303,9 +304,22 @@ export type Dataset = {
   createdAt?: string | null;
   updatedAt?: string | null;
   images: DatasetImage[];
+  imagesTotal?: number;
+  imageClassCounts?: Record<string, number>;
+  imageSplitCounts?: Record<"train" | "val" | "test" | "unselected", number>;
+  imageAnnotationCounts?: { annotated: number; unannotated: number };
+  selectedOriginalCount?: number;
+  unretainedUnannotatedImageCount?: number;
   tasks: DatasetTask[];
   exports: DatasetExport[];
   latestTask?: DatasetTask | null;
+};
+
+export type SamplePoolSplit = "train" | "val" | "test" | "unselected";
+export type ImageFilter = {
+  class?: string;
+  split?: SamplePoolSplit;
+  annotation?: "annotated" | "unannotated";
 };
 
 export type DatasetSummary = {

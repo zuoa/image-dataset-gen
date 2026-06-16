@@ -23,13 +23,119 @@ def next_dataset_export_version(dataset: Dataset) -> int:
     return max((export.version for export in dataset.exports), default=0) + 1
 
 
+def sample_pool_split_map(dataset: Dataset) -> dict[str, str]:
+    selected = sorted([image for image in dataset.images if image.selected], key=lambda image: image.ordinal)
+    total = len(selected)
+    if total <= 1:
+        return {image.id: "train" for image in selected}
+    if total <= 3:
+        split_map = {image.id: "train" for image in selected[:-1]}
+        split_map[selected[-1].id] = "val"
+        return split_map
+
+    train_cutoff = max(1, int(total * 0.7))
+    val_cutoff = min(total, max(train_cutoff + 1, int(total * 0.9)))
+    split_map: dict[str, str] = {}
+    for image in selected[:train_cutoff]:
+        split_map[image.id] = "train"
+    for image in selected[train_cutoff:val_cutoff]:
+        split_map[image.id] = "val"
+    for image in selected[val_cutoff:]:
+        split_map[image.id] = "test"
+    return split_map
+
+
+def _is_image_annotated(image: DatasetImage) -> bool:
+    return image.annotation_status in ("annotated", "empty")
+
+
+def _image_class_counts(dataset: Dataset) -> dict[str, int]:
+    counts: dict[str, int] = {category: 0 for category in (dataset.categories or [])}
+    for image in dataset.images:
+        for category in image.detection_categories or []:
+            if category in counts:
+                counts[category] += 1
+            else:
+                counts[category] = (counts.get(category) or 0) + 1
+    return counts
+
+
+def _image_split_counts(dataset: Dataset, split_map: dict[str, str]) -> dict[str, int]:
+    counts = {"train": 0, "val": 0, "test": 0, "unselected": 0}
+    for image in dataset.images:
+        split = split_map.get(image.id) if image.selected else "unselected"
+        key = split or "unselected"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _image_annotation_counts(dataset: Dataset) -> dict[str, int]:
+    annotated = sum(1 for image in dataset.images if _is_image_annotated(image))
+    return {"annotated": annotated, "unannotated": len(dataset.images) - annotated}
+
+
+def _filter_dataset_images(
+    dataset: Dataset,
+    image_filter: dict[str, Any] | None,
+    split_map: dict[str, str],
+) -> list[DatasetImage]:
+    if not image_filter:
+        return list(dataset.images)
+
+    class_filter = image_filter.get("class")
+    split_filter = image_filter.get("split")
+    annotation_filter = image_filter.get("annotation")
+
+    result: list[DatasetImage] = []
+    for image in dataset.images:
+        if class_filter and class_filter not in (image.detection_categories or []):
+            continue
+        if split_filter:
+            split = split_map.get(image.id) if image.selected else "unselected"
+            if (split or "unselected") != split_filter:
+                continue
+        if annotation_filter:
+            is_annotated = _is_image_annotated(image)
+            if annotation_filter == "annotated" and not is_annotated:
+                continue
+            if annotation_filter == "unannotated" and is_annotated:
+                continue
+        result.append(image)
+    return result
+
+
 def build_dataset_payload(
     dataset: Dataset,
     *,
     include_images: bool = True,
     include_tasks: bool = True,
     include_exports: bool = True,
+    image_filter: dict[str, Any] | None = None,
+    images_offset: int = 0,
+    images_limit: int | None = None,
 ) -> dict[str, Any]:
+    split_map = sample_pool_split_map(dataset)
+    class_counts = _image_class_counts(dataset)
+    split_counts = _image_split_counts(dataset, split_map)
+    annotation_counts = _image_annotation_counts(dataset)
+
+    selected_original_count = sum(
+        1 for image in dataset.images if image.selected and image.status != "augmented"
+    )
+    unretained_unannotated_count = sum(
+        1 for image in dataset.images if not image.selected and not _is_image_annotated(image)
+    )
+
+    filtered_images = _filter_dataset_images(dataset, image_filter, split_map)
+    filtered_total = len(filtered_images)
+
+    if images_limit is None:
+        page_images = filtered_images
+    else:
+        start = max(0, int(images_offset or 0))
+        end = start + max(0, int(images_limit))
+        page_images = filtered_images[start:end]
+
     return {
         "id": dataset.id,
         "name": dataset.name,
@@ -43,7 +149,13 @@ def build_dataset_payload(
         "annotation": dataset.annotation_json or {},
         "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
         "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
-        "images": [build_dataset_image_payload(dataset, image) for image in dataset.images] if include_images else [],
+        "images": [build_dataset_image_payload(dataset, image, split_map=split_map) for image in page_images] if include_images else [],
+        "imagesTotal": filtered_total,
+        "imageClassCounts": class_counts,
+        "imageSplitCounts": split_counts,
+        "imageAnnotationCounts": annotation_counts,
+        "selectedOriginalCount": selected_original_count,
+        "unretainedUnannotatedImageCount": unretained_unannotated_count,
         "tasks": [build_dataset_task_payload(task) for task in dataset.tasks] if include_tasks else [],
         "exports": [build_dataset_export_payload(export_job) for export_job in dataset.exports]
         if include_exports
@@ -90,7 +202,12 @@ def build_dataset_task_payload(task: DatasetTask | None) -> dict[str, Any] | Non
     }
 
 
-def build_dataset_image_payload(dataset: Dataset, image: DatasetImage) -> dict[str, Any]:
+def build_dataset_image_payload(
+    dataset: Dataset,
+    image: DatasetImage,
+    *,
+    split_map: dict[str, str] | None = None,
+) -> dict[str, Any]:
     stored_annotation = (
         load_annotation_result(
             current_app.config["STORAGE_ROOT"],
@@ -113,7 +230,12 @@ def build_dataset_image_payload(dataset: Dataset, image: DatasetImage) -> dict[s
         else:
             preview = f"{current_app.config['API_PREFIX']}/datasets/{dataset.id}/images/{image.id}/preview"
 
-    return {
+    split_value = None
+    if split_map is not None:
+        split_value = split_map.get(image.id) if image.selected else "unselected"
+        split_value = split_value or "unselected"
+
+    payload = {
         "id": image.id,
         "datasetId": image.dataset_id,
         "sourceTaskId": image.source_task_id,
@@ -132,6 +254,9 @@ def build_dataset_image_payload(dataset: Dataset, image: DatasetImage) -> dict[s
         "source": image.source_type,
         "detections": detections,
     }
+    if split_map is not None:
+        payload["split"] = split_value
+    return payload
 
 
 def build_dataset_export_payload(export_job: DatasetExport) -> dict[str, Any]:

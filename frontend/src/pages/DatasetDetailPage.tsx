@@ -20,6 +20,7 @@ import {
   updateDatasetImageAnnotations,
   updateDatasetSelection,
 } from "../api/datasets";
+import type { ImageFilter, SamplePoolSplit } from "../lib/types";
 import { AuthImage } from "../components/AuthImage";
 import { TrainingModelTestPanel } from "../components/TrainingModelTestPanel";
 import { TrainingResultsPanel } from "../components/TrainingResultsPanel";
@@ -86,7 +87,6 @@ const importTabOptions: Array<{ value: ImportTab; label: string; icon: typeof Fi
   { value: "roboflow", label: "Roboflow", icon: Download },
 ];
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
-type SamplePoolSplit = "train" | "val" | "test" | "unselected";
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
 type SamplePoolAnnotationFilter = "" | "annotated" | "unannotated";
 const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> = [
@@ -99,35 +99,23 @@ const samplePoolAnnotationOptions: Array<{ value: Exclude<SamplePoolAnnotationFi
   { value: "annotated", label: "已标注" },
   { value: "unannotated", label: "未标注" },
 ];
+const PAGE_SIZE = 100;
 
-function buildSamplePoolSplitMap(images: DatasetImage[]) {
-  const selectedImages = images.filter((image) => image.selected).sort((a, b) => a.ordinal - b.ordinal);
-  const splitMap = new Map<string, SamplePoolSplit>();
-  const total = selectedImages.length;
-  if (total <= 1) {
-    selectedImages.forEach((image) => splitMap.set(image.id, "train"));
-    return splitMap;
-  }
-  if (total <= 3) {
-    selectedImages.slice(0, -1).forEach((image) => splitMap.set(image.id, "train"));
-    selectedImages.slice(-1).forEach((image) => splitMap.set(image.id, "val"));
-    return splitMap;
-  }
-
-  const trainCutoff = Math.max(1, Math.floor(total * 0.7));
-  const valCutoff = Math.min(total, Math.max(trainCutoff + 1, Math.floor(total * 0.9)));
-  selectedImages.slice(0, trainCutoff).forEach((image) => splitMap.set(image.id, "train"));
-  selectedImages.slice(trainCutoff, valCutoff).forEach((image) => splitMap.set(image.id, "val"));
-  selectedImages.slice(valCutoff).forEach((image) => splitMap.set(image.id, "test"));
-  return splitMap;
+function buildImageFilter(
+  classFilter: string,
+  splitFilter: SamplePoolSplitFilter,
+  annotationFilter: SamplePoolAnnotationFilter,
+): ImageFilter | undefined {
+  const filter: ImageFilter = {};
+  if (classFilter) filter.class = classFilter;
+  if (splitFilter) filter.split = splitFilter;
+  if (annotationFilter) filter.annotation = annotationFilter;
+  if (!filter.class && !filter.split && !filter.annotation) return undefined;
+  return filter;
 }
 
 function samplePoolSplitLabel(split: SamplePoolSplit) {
   return samplePoolSplitOptions.find((option) => option.value === split)?.label ?? split;
-}
-
-function samplePoolSplitForImage(image: DatasetImage, splitMap: Map<string, SamplePoolSplit>) {
-  return image.selected ? splitMap.get(image.id) ?? "train" : "unselected";
 }
 
 function isImageAnnotated(image: DatasetImage) {
@@ -161,9 +149,28 @@ export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
   const [dataset, setDataset] = useState<Dataset | null>(null);
+  const [loadedImages, setLoadedImages] = useState<DatasetImage[]>([]);
+  const [imagesTotal, setImagesTotal] = useState(0);
+  const [imagesCursor, setImagesCursor] = useState(0);
+  const [hasMoreImages, setHasMoreImages] = useState(false);
+  const [isLoadingFirstPage, setIsLoadingFirstPage] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [trainingJobs, setTrainingJobs] = useState<TrainingJob[]>([]);
   const datasetRef = useRef<Dataset | null>(null);
   datasetRef.current = dataset;
+  const loadedImagesRef = useRef<DatasetImage[]>([]);
+  loadedImagesRef.current = loadedImages;
+  const imagesTotalRef = useRef(0);
+  imagesTotalRef.current = imagesTotal;
+  const cursorRef = useRef(0);
+  cursorRef.current = imagesCursor;
+  const currentFilterRef = useRef<ImageFilter | undefined>(undefined);
+  const pageLoadersRef = useRef<{
+    fetchFirstPage: (filter: ImageFilter | undefined) => Promise<void>;
+    fetchMore: (filter: ImageFilter | undefined) => Promise<void>;
+    refreshLoadedRange: (filter: ImageFilter | undefined) => Promise<void>;
+  }>({ fetchFirstPage: async () => {}, fetchMore: async () => {}, refreshLoadedRange: async () => {} });
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const trainingJobsRef = useRef<TrainingJob[]>([]);
   trainingJobsRef.current = trainingJobs;
   const [isAugmentationModalOpen, setIsAugmentationModalOpen] = useState(false);
@@ -229,55 +236,18 @@ export function DatasetDetailPage() {
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
 
-  const images = dataset?.images ?? [];
-  const samplePoolSplitMap = buildSamplePoolSplitMap(images);
-  const samplePoolClassCounts = new Map<string, number>();
-  const samplePoolSplitCounts = new Map<SamplePoolSplit, number>([
-    ["train", 0],
-    ["val", 0],
-    ["test", 0],
-    ["unselected", 0],
-  ]);
-  const samplePoolAnnotationCounts = new Map<Exclude<SamplePoolAnnotationFilter, "">, number>([
-    ["annotated", 0],
-    ["unannotated", 0],
-  ]);
-  for (const category of dataset?.categories ?? []) {
-    samplePoolClassCounts.set(category, 0);
-  }
-  for (const image of images) {
-    const split = samplePoolSplitForImage(image, samplePoolSplitMap);
-    const annotationFilterValue = isImageAnnotated(image) ? "annotated" : "unannotated";
-    samplePoolSplitCounts.set(split, (samplePoolSplitCounts.get(split) ?? 0) + 1);
-    samplePoolAnnotationCounts.set(
-      annotationFilterValue,
-      (samplePoolAnnotationCounts.get(annotationFilterValue) ?? 0) + 1,
-    );
-    for (const category of new Set(image.detections.map((detection) => detection.category))) {
-      if (samplePoolClassCounts.has(category)) {
-        samplePoolClassCounts.set(category, (samplePoolClassCounts.get(category) ?? 0) + 1);
-      }
-    }
-  }
-  const filteredImages = images.filter((image) => {
-    const imageSplit = samplePoolSplitForImage(image, samplePoolSplitMap);
-    const imageAnnotationFilterValue = isImageAnnotated(image) ? "annotated" : "unannotated";
-    const matchesClass =
-      !samplePoolClassFilter || image.detections.some((detection) => detection.category === samplePoolClassFilter);
-    const matchesSplit = !samplePoolSplitFilter || imageSplit === samplePoolSplitFilter;
-    const matchesAnnotation =
-      !samplePoolAnnotationFilter || imageAnnotationFilterValue === samplePoolAnnotationFilter;
-    return matchesClass && matchesSplit && matchesAnnotation;
-  });
+  const images = loadedImages;
+  const filteredImages = loadedImages;
+  const samplePoolClassCounts = dataset?.imageClassCounts ?? {};
+  const samplePoolSplitCounts = dataset?.imageSplitCounts ?? { train: 0, val: 0, test: 0, unselected: 0 };
+  const samplePoolAnnotationCounts = dataset?.imageAnnotationCounts ?? { annotated: 0, unannotated: 0 };
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
   const filteredAnnotatedCount = filteredImages.filter((image) => isImageAnnotated(image)).length;
   const filteredUnannotatedCount = filteredImages.length - filteredAnnotatedCount;
-  const retainedImageCount = images.filter((image) => image.selected).length;
-  const unretainedImageCount = images.length - retainedImageCount;
-  const unretainedUnannotatedImageIds = images
-    .filter((image) => !isImageAnnotated(image) && !image.selected)
-    .map((image) => image.id);
+  const retainedImageCount = dataset?.selectedCount ?? 0;
+  const unretainedImageCount = Math.max(0, (dataset?.imageCount ?? 0) - retainedImageCount);
+  const unretainedUnannotatedImageCount = dataset?.unretainedUnannotatedImageCount ?? 0;
   const imageIdSet = new Set(images.map((image) => image.id));
   const deleteSelectionIdSet = new Set(deleteSelectionIds);
   const deletingImageIdSet = new Set(deletingImageIds);
@@ -287,7 +257,7 @@ export function DatasetDetailPage() {
   const previewImage = previewIndex >= 0 ? images[previewIndex] : null;
   const runningTask = dataset?.tasks.some((task) => task.status === "running");
   const annotationRunning = dataset?.annotation?.status === "running";
-  const selectedOriginalCount = images.filter((image) => image.selected && image.status !== "augmented").length;
+  const selectedOriginalCount = dataset?.selectedOriginalCount ?? 0;
   const latestExport = dataset?.exports[0];
   const annotationStatus = String(dataset?.annotation?.status ?? "idle");
   const latestTrainingJob = trainingJobs[0];
@@ -306,19 +276,83 @@ export function DatasetDetailPage() {
 
   useEffect(() => {
     if (!token || !datasetId) return;
-
     let disposed = false;
-    const loadDataset = async () => {
+
+    const fetchFirstPage = async (filter: ImageFilter | undefined) => {
+      setIsLoadingFirstPage(true);
       try {
         const [response, trainingResponse] = await Promise.all([
-          getDataset(datasetId, token),
+          getDataset(datasetId, token, { offset: 0, limit: PAGE_SIZE, filter }),
           listTrainingJobs(datasetId, token),
         ]);
+        if (disposed) return;
+        setDataset(response.dataset);
+        setLoadedImages(response.dataset.images);
+        setImagesTotal(response.dataset.imagesTotal ?? response.dataset.images.length);
+        setImagesCursor(response.dataset.images.length);
+        setHasMoreImages(
+          (response.dataset.imagesTotal ?? response.dataset.images.length) > response.dataset.images.length,
+        );
+        setTrainingJobs(trainingResponse.jobs);
+        setActionError(null);
+      } catch (error) {
         if (!disposed) {
-          setDataset(response.dataset);
-          setTrainingJobs(trainingResponse.jobs);
-          setActionError(null);
+          setActionError((error as Error).message);
         }
+      } finally {
+        if (!disposed) setIsLoadingFirstPage(false);
+      }
+    };
+
+    const fetchMore = async (filter: ImageFilter | undefined) => {
+      const offset = cursorRef.current;
+      if (offset >= imagesTotalRef.current) return;
+      setIsLoadingMore(true);
+      try {
+        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE, filter });
+        if (disposed) return;
+        const incoming = response.dataset.images;
+        if (incoming.length === 0) {
+          setHasMoreImages(false);
+          return;
+        }
+        setLoadedImages((current) => {
+          const seen = new Set(current.map((image) => image.id));
+          const merged = [...current];
+          for (const image of incoming) {
+            if (!seen.has(image.id)) {
+              merged.push(image);
+              seen.add(image.id);
+            }
+          }
+          return merged;
+        });
+        setDataset(response.dataset);
+        setImagesTotal(response.dataset.imagesTotal ?? imagesTotalRef.current);
+        const nextCursor = offset + incoming.length;
+        setImagesCursor(nextCursor);
+        setHasMoreImages(nextCursor < (response.dataset.imagesTotal ?? imagesTotalRef.current));
+      } catch (error) {
+        if (!disposed) {
+          setActionError((error as Error).message);
+        }
+      } finally {
+        if (!disposed) setIsLoadingMore(false);
+      }
+    };
+
+    const refreshLoadedRange = async (filter: ImageFilter | undefined) => {
+      const limit = Math.max(PAGE_SIZE, cursorRef.current);
+      try {
+        const response = await getDataset(datasetId, token, { offset: 0, limit, filter });
+        if (disposed) return;
+        setDataset(response.dataset);
+        setLoadedImages(response.dataset.images);
+        const total = response.dataset.imagesTotal ?? response.dataset.images.length;
+        setImagesTotal(total);
+        const nextCursor = response.dataset.images.length;
+        setImagesCursor(nextCursor);
+        setHasMoreImages(nextCursor < total);
       } catch (error) {
         if (!disposed) {
           setActionError((error as Error).message);
@@ -326,14 +360,20 @@ export function DatasetDetailPage() {
       }
     };
 
-    void loadDataset();
+    // expose for handlers and polling
+    pageLoadersRef.current = { fetchFirstPage, fetchMore, refreshLoadedRange };
+
+    const initialFilter = buildImageFilter(samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter);
+    currentFilterRef.current = initialFilter;
+    void fetchFirstPage(initialFilter);
+
     const interval = window.setInterval(() => {
       const hasPendingExports = datasetRef.current?.exports.some(
         (item) => item.status === "pending" || item.status === "running"
       );
       const hasActiveTraining = trainingJobsRef.current.some((job) => activeTrainingStatuses.has(job.status));
       if (runningTask || annotationRunning || hasPendingExports || hasActiveTraining) {
-        void loadDataset();
+        void refreshLoadedRange(currentFilterRef.current);
       }
     }, 2000);
 
@@ -349,15 +389,39 @@ export function DatasetDetailPage() {
   }, [dataset?.categories.length]);
 
   useEffect(() => {
-    const currentImageIds = new Set((dataset?.images ?? []).map((image) => image.id));
+    const currentImageIds = new Set(loadedImages.map((image) => image.id));
     setDeleteSelectionIds((current) => current.filter((imageId) => currentImageIds.has(imageId)));
-  }, [dataset?.images]);
+  }, [loadedImages]);
 
   useEffect(() => {
     if (samplePoolClassFilter && !(dataset?.categories ?? []).includes(samplePoolClassFilter)) {
       setSamplePoolClassFilter("");
     }
   }, [dataset?.categories, samplePoolClassFilter]);
+
+  useEffect(() => {
+    const filter = buildImageFilter(samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter);
+    currentFilterRef.current = filter;
+    if (!token || !datasetId) return;
+    void pageLoadersRef.current.fetchFirstPage(filter);
+  }, [datasetId, token, samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter]);
+
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          if (!isLoadingMore && hasMoreImages) {
+            void pageLoadersRef.current.fetchMore(currentFilterRef.current);
+          }
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreImages, isLoadingMore, loadedImages.length]);
 
   useEffect(() => {
     setDraftDetections(previewImage?.detections ?? []);
@@ -619,40 +683,46 @@ export function DatasetDetailPage() {
 
   async function applySelection(
     payload:
-      | { mode: "all" | "none" | "invert"; image_ids?: string[] }
+      | { mode: "all" | "none" | "invert"; image_ids?: string[]; scope?: "unannotated_unretained" }
       | { mode: "single"; image_id: string; selected: boolean },
   ) {
     if (!token || !datasetId) return;
     try {
       const response = await updateDatasetSelection(datasetId, token, payload);
-      setDataset(response.dataset);
+      const prev = datasetRef.current;
+      const merged: Dataset = prev
+        ? { ...prev, ...response.dataset, images: prev.images }
+        : response.dataset;
+      setDataset(merged);
       setActionError(null);
+      await pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     }
   }
 
   function applySamplePoolRetention(mode: "all" | "none" | "invert") {
-    if (images.length === 0) return;
+    const totalImages = dataset?.imageCount ?? 0;
+    if (totalImages === 0) return;
 
     const confirmMessage =
       mode === "all"
-        ? `确认将全部 ${images.length} 张样本标记为保留？当前有 ${unretainedImageCount} 张会从不保留变为保留。`
+        ? `确认将全部 ${totalImages} 张样本标记为保留？当前有 ${unretainedImageCount} 张会从不保留变为保留。`
         : mode === "invert"
-          ? `确认反转全部 ${images.length} 张样本的保留状态？当前 ${retainedImageCount} 张会变为不保留，${unretainedImageCount} 张会变为保留。`
-          : `确认将全部 ${images.length} 张样本标记为不保留？当前 ${retainedImageCount} 张保留样本会被移出训练和导出。`;
+          ? `确认反转全部 ${totalImages} 张样本的保留状态？当前 ${retainedImageCount} 张会变为不保留，${unretainedImageCount} 张会变为保留。`
+          : `确认将全部 ${totalImages} 张样本标记为不保留？当前 ${retainedImageCount} 张保留样本会被移出训练和导出。`;
     if (!window.confirm(confirmMessage)) return;
 
     void applySelection({ mode });
   }
 
   function retainUnannotatedSamplePoolImages() {
-    if (unretainedUnannotatedImageIds.length === 0) return;
+    if (unretainedUnannotatedImageCount === 0) return;
     const confirmed = window.confirm(
-      `确认将 ${unretainedUnannotatedImageIds.length} 张未标注且当前不保留的样本标记为保留？`,
+      `确认将 ${unretainedUnannotatedImageCount} 张未标注且当前不保留的样本标记为保留？`,
     );
     if (!confirmed) return;
-    void applySelection({ mode: "all", image_ids: unretainedUnannotatedImageIds });
+    void applySelection({ mode: "all", scope: "unannotated_unretained" });
   }
 
   function toggleDeleteSelection(imageId: string) {
@@ -685,7 +755,14 @@ export function DatasetDetailPage() {
           ? await deleteDatasetImage(datasetId, uniqueImageIds[0], token)
           : await deleteDatasetImages(datasetId, uniqueImageIds, token);
       const deletedIdSet = new Set(response.deletedImageIds);
-      setDataset(response.dataset);
+      const prev = datasetRef.current;
+      const merged: Dataset = prev
+        ? { ...prev, ...response.dataset, images: prev.images }
+        : response.dataset;
+      setDataset(merged);
+      setLoadedImages((current) => current.filter((image) => !deletedIdSet.has(image.id)));
+      setImagesTotal((total) => Math.max(0, total - deletedIdSet.size));
+      setImagesCursor((cursor) => Math.max(0, cursor - deletedIdSet.size));
       setDeleteSelectionIds((current) => current.filter((imageId) => !deletedIdSet.has(imageId)));
       if (previewImageId && deletedIdSet.has(previewImageId)) {
         setPreviewImageId(null);
@@ -707,6 +784,14 @@ export function DatasetDetailPage() {
     void removeDatasetImages(imageIds, "");
   }
 
+  function mergeDatasetMetadata(responseDataset: Dataset) {
+    const prev = datasetRef.current;
+    const merged: Dataset = prev
+      ? { ...prev, ...responseDataset, images: prev.images }
+      : responseDataset;
+    setDataset(merged);
+  }
+
   async function handleArchiveImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!token || !datasetId || !file) return;
@@ -714,13 +799,14 @@ export function DatasetDetailPage() {
     setImportSummary(null);
     try {
       const response = await importDatasetImagesArchive(datasetId, token, file);
-      setDataset(response.dataset);
+      mergeDatasetMetadata(response.dataset);
       setActionError(null);
       setImportSummary(
         `已导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
           (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""),
       );
       setIsImportModalOpen(false);
+      void pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -748,7 +834,7 @@ export function DatasetDetailPage() {
         filenamePrefix,
         targetSize: videoTargetSize,
       });
-      setDataset(response.dataset);
+      mergeDatasetMetadata(response.dataset);
       setActionError(null);
       const importedCount = Number(response.summary.importedCount ?? response.task.imagesGenerated ?? 0);
       setImportSummary(
@@ -757,6 +843,7 @@ export function DatasetDetailPage() {
           : `已从视频抽取 ${importedCount} 张图片`,
       );
       setIsImportModalOpen(false);
+      void pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -786,7 +873,7 @@ export function DatasetDetailPage() {
         version,
         format: "yolov8",
       });
-      setDataset(response.dataset);
+      mergeDatasetMetadata(response.dataset);
       setActionError(null);
       setImportSummary(
         `已从 Roboflow 导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
@@ -795,6 +882,7 @@ export function DatasetDetailPage() {
           (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""),
       );
       setIsImportModalOpen(false);
+      void pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -807,8 +895,13 @@ export function DatasetDetailPage() {
     setIsSavingAnnotations(true);
     try {
       const response = await updateDatasetImageAnnotations(datasetId, previewImage.id, token, draftDetections);
-      setDataset(response.dataset);
+      mergeDatasetMetadata(response.dataset);
+      const updatedImage = response.image;
+      setLoadedImages((current) =>
+        current.map((image) => (image.id === updatedImage.id ? updatedImage : image)),
+      );
       setActionError(null);
+      await pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -1415,7 +1508,7 @@ export function DatasetDetailPage() {
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">样本池</div>
               <h3 className="mt-2 text-2xl text-neutral-900 dark:text-white">统一筛选、标注和导出</h3>
               <div className="mt-2 text-sm text-neutral-500">
-                当前显示 {filteredImages.length} / {images.length} 张，显示范围内已保留 {filteredSelectedCount} 张，已标注 {filteredAnnotatedCount} 张，未标注 {filteredUnannotatedCount} 张，当前范围勾选待删 {filteredDeleteSelectionCount} 张
+                当前显示 {filteredImages.length} / {imagesTotal} 张，显示范围内已保留 {filteredSelectedCount} 张，已标注 {filteredAnnotatedCount} 张，未标注 {filteredUnannotatedCount} 张，当前范围勾选待删 {filteredDeleteSelectionCount} 张
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -1424,7 +1517,7 @@ export function DatasetDetailPage() {
                 <Button
                   variant="secondary"
                   onClick={() => applySamplePoolRetention("all")}
-                  disabled={images.length === 0 || unretainedImageCount === 0}
+                  disabled={(dataset?.imageCount ?? 0) === 0 || unretainedImageCount === 0}
                 >
                   <CheckSquare className="mr-2 h-4 w-4" />
                   全部保留
@@ -1432,7 +1525,7 @@ export function DatasetDetailPage() {
                 <Button
                   variant="secondary"
                   onClick={() => applySamplePoolRetention("invert")}
-                  disabled={images.length === 0}
+                  disabled={(dataset?.imageCount ?? 0) === 0}
                 >
                   <FlipHorizontal2 className="mr-2 h-4 w-4" />
                   反向保留
@@ -1440,7 +1533,7 @@ export function DatasetDetailPage() {
                 <Button
                   variant="secondary"
                   onClick={() => applySamplePoolRetention("none")}
-                  disabled={images.length === 0 || retainedImageCount === 0}
+                  disabled={(dataset?.imageCount ?? 0) === 0 || retainedImageCount === 0}
                 >
                   <Square className="mr-2 h-4 w-4" />
                   全部不保留
@@ -1448,10 +1541,10 @@ export function DatasetDetailPage() {
                 <Button
                   variant="secondary"
                   onClick={retainUnannotatedSamplePoolImages}
-                  disabled={unretainedUnannotatedImageIds.length === 0}
+                  disabled={unretainedUnannotatedImageCount === 0}
                 >
                   <ListChecks className="mr-2 h-4 w-4" />
-                  保留未标注 {unretainedUnannotatedImageIds.length}
+                  保留未标注 {unretainedUnannotatedImageCount}
                 </Button>
               </div>
               <div className="flex flex-wrap items-center gap-2 rounded-full border border-red-100 bg-red-50/60 p-1 dark:border-red-400/20 dark:bg-red-500/5">
@@ -1498,7 +1591,7 @@ export function DatasetDetailPage() {
                       : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                   }`}
                 >
-                  全部 {images.length}
+                  全部 {dataset?.imageCount ?? 0}
                 </button>
                 {dataset.categories.map((category) => (
                   <button
@@ -1511,7 +1604,7 @@ export function DatasetDetailPage() {
                         : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                     }`}
                   >
-                    {category} {samplePoolClassCounts.get(category) ?? 0}
+                    {category} {samplePoolClassCounts[category] ?? 0}
                   </button>
                 ))}
               </div>
@@ -1529,7 +1622,7 @@ export function DatasetDetailPage() {
                       : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                   }`}
                 >
-                  全部 {images.length}
+                  全部 {dataset?.imageCount ?? 0}
                 </button>
                 {samplePoolSplitOptions.map((option) => (
                   <button
@@ -1542,7 +1635,7 @@ export function DatasetDetailPage() {
                         : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                     }`}
                   >
-                    {option.label} {samplePoolSplitCounts.get(option.value) ?? 0}
+                    {option.label} {samplePoolSplitCounts[option.value] ?? 0}
                   </button>
                 ))}
               </div>
@@ -1560,7 +1653,7 @@ export function DatasetDetailPage() {
                       : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                   }`}
                 >
-                  全部 {images.length}
+                  全部 {dataset?.imageCount ?? 0}
                 </button>
                 {samplePoolAnnotationOptions.map((option) => (
                   <button
@@ -1573,7 +1666,7 @@ export function DatasetDetailPage() {
                         : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
                     }`}
                   >
-                    {option.label} {samplePoolAnnotationCounts.get(option.value) ?? 0}
+                    {option.label} {samplePoolAnnotationCounts[option.value] ?? 0}
                   </button>
                 ))}
               </div>
@@ -1585,6 +1678,7 @@ export function DatasetDetailPage() {
               const isQueuedForDelete = deleteSelectionIdSet.has(image.id);
               const isDeletingImage = deletingImageIdSet.has(image.id);
               const annotated = isImageAnnotated(image);
+              const split = (image.split ?? (image.selected ? "train" : "unselected")) as SamplePoolSplit;
               return (
                 <article
                   key={image.id}
@@ -1608,7 +1702,7 @@ export function DatasetDetailPage() {
                       <div className="absolute bottom-3 left-3 right-3 text-white">
                         <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
                           <span>{image.sourceType}</span>
-                          <span>{samplePoolSplitLabel(samplePoolSplitForImage(image, samplePoolSplitMap))}</span>
+                          <span>{samplePoolSplitLabel(split)}</span>
                           <span>#{image.ordinal}</span>
                           <span className={annotated ? "text-lime-200" : "text-amber-200"}>
                             {samplePoolAnnotationLabel(image)}
@@ -1656,10 +1750,23 @@ export function DatasetDetailPage() {
                 </article>
               );
             })}
-            {filteredImages.length === 0 ? (
+            {filteredImages.length === 0 && !isLoadingFirstPage ? (
               <div className="col-span-full rounded-[22px] border border-dashed border-neutral-200 px-5 py-8 text-sm text-neutral-500 dark:border-white/10">
                 当前 class/split 条件下没有样本。
               </div>
+            ) : null}
+            {filteredImages.length === 0 && isLoadingFirstPage ? (
+              <div className="col-span-full rounded-[22px] border border-dashed border-neutral-200 px-5 py-8 text-sm text-neutral-500 dark:border-white/10">
+                正在加载样本...
+              </div>
+            ) : null}
+            {hasMoreImages ? (
+              <div ref={sentinelRef} className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-neutral-500">
+                {isLoadingMore ? <Loader className="h-4 w-4 animate-spin" /> : null}
+                {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
+              </div>
+            ) : filteredImages.length > 0 ? (
+              <div className="col-span-full py-3 text-center text-xs text-neutral-400">已加载全部 {filteredImages.length} 张</div>
             ) : null}
         </div>
       </SectionCard>

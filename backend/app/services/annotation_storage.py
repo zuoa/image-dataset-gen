@@ -53,6 +53,23 @@ def load_annotation_result(
     return normalize_annotation_result(payload, default_bbox_semantics=default_bbox_semantics)
 
 
+def extract_detection_categories(
+    storage_root: str,
+    task_id: str,
+    image_id: str,
+) -> list[str]:
+    result = load_annotation_result(storage_root, task_id, image_id)
+    if not result:
+        return []
+    return sorted(
+        {
+            str(detection["category"])
+            for detection in result.get("detections", [])
+            if detection.get("category")
+        }
+    )
+
+
 def infer_default_bbox_semantics(annotation_summary: dict[str, Any] | None) -> str:
     summary = annotation_summary or {}
     if summary.get("provider") != "vl-auto":
