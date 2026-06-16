@@ -1031,7 +1031,7 @@ export function DatasetDetailPage() {
               <input
                 ref={videoInputRef}
                 type="file"
-                accept="video/*,.mp4,.mov,.avi,.mkv,.webm"
+                accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.dav,.mpg,.mpeg,.ps"
                 className="hidden"
                 onChange={handleVideoImport}
               />
