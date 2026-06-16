@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import contextlib
+import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-import shutil
 
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 
-ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+ALLOWED_VIDEO_EXTENSIONS = {
+    ".mp4", ".mov", ".avi", ".mkv", ".webm",
+    ".dav", ".mpg", ".mpeg", ".ps",
+}
 DEFAULT_VIDEO_FRAME_INTERVAL = 30
 DEFAULT_VIDEO_FRAME_INTERVAL_MODE = "frames"
 DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
@@ -90,6 +97,97 @@ def cleanup_video_import_source(storage_root: str, relative_path: str) -> None:
         shutil.rmtree(source_dir, ignore_errors=True)
 
 
+def _can_open_with_cv2(source_path: Path) -> bool:
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
+
+    capture = cv2.VideoCapture(str(source_path))
+    opened = capture.isOpened()
+    capture.release()
+    return opened
+
+
+def _open_video_capture(source_path: Path):
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
+
+    capture = cv2.VideoCapture(str(source_path))
+    if not capture.isOpened():
+        capture.release()
+        return None
+    return capture
+
+
+@contextlib.contextmanager
+def prepare_video_source(source_path: Path):
+    """
+    Yield a Path that cv2.VideoCapture can open.
+
+    For files cv2 can read directly (mp4/mov/most mpg/dav), yields the original
+    path. For PS/DAV files that cv2/ffmpeg fail to demux in-place, transcodes to
+    a temporary mp4 via ffmpeg and yields that path. Cleans up on exit.
+    """
+    if _can_open_with_cv2(source_path):
+        yield source_path
+        return
+
+    if not _is_ffmpeg_available():
+        raise RuntimeError(
+            "无法直接读取该视频文件，且系统未安装 ffmpeg，不能自动转码。"
+            "请先将视频转换为 MP4 后再上传。"
+        )
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="video-import-"))
+    tmp_path = tmp_dir / f"{source_path.stem}.mp4"
+    try:
+        _ffmpeg_transcode(source_path, tmp_path)
+        if not _can_open_with_cv2(tmp_path):
+            raise RuntimeError("ffmpeg 转码后仍无法读取视频文件。")
+        yield tmp_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _is_ffmpeg_available() -> bool:
+    from shutil import which
+
+    return which("ffmpeg") is not None
+
+
+def _ffmpeg_transcode(source_path: Path, target_path: Path) -> None:
+    """
+    Try stream copy first (fast). Fall back to H.264 re-encode if remux fails
+    (common with Hikvision DAV carrying private NAL units that confuse the muxer).
+    """
+    env = {**os.environ, "AV_LOG_FORCE_NOCOLOR": "1"}
+    base_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(source_path)]
+
+    remux_cmd = [*base_cmd, "-c", "copy", "-movflags", "+faststart", str(target_path)]
+    result = subprocess.run(remux_cmd, capture_output=True, env=env)
+    if result.returncode == 0 and target_path.exists() and target_path.stat().st_size > 0:
+        return
+
+    # Remux failed (private NAL / incompatible codec) → re-encode
+    if target_path.exists():
+        target_path.unlink()
+    reencode_cmd = [
+        *base_cmd,
+        "-an",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(target_path),
+    ]
+    result = subprocess.run(reencode_cmd, capture_output=True, env=env)
+    if result.returncode != 0 or not target_path.exists() or target_path.stat().st_size == 0:
+        stderr = result.stderr.decode("utf-8", "ignore")[-800:]
+        raise RuntimeError(f"ffmpeg 转码失败：{stderr}")
+
+
 def iter_video_frames(
     source_path: Path,
     *,
@@ -106,8 +204,8 @@ def iter_video_frames(
     except ImportError as exc:
         raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
 
-    capture = cv2.VideoCapture(str(source_path))
-    if not capture.isOpened():
+    capture = _open_video_capture(source_path)
+    if capture is None:
         raise RuntimeError("无法读取上传的视频文件。")
 
     selected_count = 0
@@ -146,8 +244,8 @@ def video_frame_count(source_path: Path) -> int:
     except ImportError as exc:
         raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
 
-    capture = cv2.VideoCapture(str(source_path))
-    if not capture.isOpened():
+    capture = _open_video_capture(source_path)
+    if capture is None:
         raise RuntimeError("无法读取上传的视频文件。")
     try:
         return max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
@@ -161,8 +259,8 @@ def video_frame_rate(source_path: Path) -> float:
     except ImportError as exc:
         raise RuntimeError("后端尚未安装视频抽帧依赖 opencv-python-headless。") from exc
 
-    capture = cv2.VideoCapture(str(source_path))
-    if not capture.isOpened():
+    capture = _open_video_capture(source_path)
+    if capture is None:
         raise RuntimeError("无法读取上传的视频文件。")
     try:
         return max(0.0, float(capture.get(cv2.CAP_PROP_FPS) or 0))

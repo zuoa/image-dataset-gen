@@ -28,6 +28,7 @@ from app.services.video_import_service import (
     iter_video_frames,
     normalize_video_frame_interval_mode,
     normalize_video_target_size,
+    prepare_video_source,
     resolve_video_import_source,
     video_target_size_max_dimension,
     video_frame_count,
@@ -309,97 +310,99 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         target_size = normalize_video_target_size(str(video_config.get("targetSize") or "original"))
         target_max_dimension = video_target_size_max_dimension(target_size)
         max_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
-        total_frames = video_frame_count(source_path)
-        frame_rate = video_frame_rate(source_path)
-        effective_frame_interval = frame_interval
-        if frame_interval_mode == "seconds":
-            if frame_rate <= 0:
-                raise RuntimeError("无法读取视频帧率，不能按秒抽帧。")
-            effective_frame_interval = max(1, round(frame_rate * frame_interval_seconds))
-        expected_count = expected_extracted_frame_count(total_frames, effective_frame_interval, max_images)
 
-        video_config = {
-            **video_config,
-            "frameIntervalMode": frame_interval_mode,
-            "frameInterval": frame_interval,
-            "frameIntervalSeconds": frame_interval_seconds,
-            "effectiveFrameInterval": effective_frame_interval,
-            "frameRate": frame_rate,
-            "targetSize": target_size,
-            "targetMaxDimension": target_max_dimension,
-            "totalFrames": total_frames,
-            "expectedFrames": expected_count,
-            "extractedFrames": len(task.images),
-            "status": "running",
-            "updatedAt": now_utc().isoformat(),
-        }
-        task.image_count = expected_count
-        task.config_json = {**config, "video": video_config}
-        with db.session.no_autoflush:
-            sync_dataset_task_inplace(task)
-            sync_dataset_stats_inplace(dataset)
-        db.session.commit()
+        with prepare_video_source(source_path) as video_path:
+            total_frames = video_frame_count(video_path)
+            frame_rate = video_frame_rate(video_path)
+            effective_frame_interval = frame_interval
+            if frame_interval_mode == "seconds":
+                if frame_rate <= 0:
+                    raise RuntimeError("无法读取视频帧率，不能按秒抽帧。")
+                effective_frame_interval = max(1, round(frame_rate * frame_interval_seconds))
+            expected_count = expected_extracted_frame_count(total_frames, effective_frame_interval, max_images)
 
-        existing_count = len(task.images)
-        for extracted in iter_video_frames(
-            source_path,
-            frame_interval=effective_frame_interval,
-            output_format=output_format,
-            jpeg_quality=jpeg_quality,
-            filename_prefix=filename_prefix,
-            max_images=max_images,
-            target_max_dimension=target_max_dimension,
-            skip_selected_frames=existing_count,
-        ):
-            task = db.session.get(DatasetTask, task_id)
-            if task is None or task.status != "running":
-                return
-            dataset = db.session.get(Dataset, task.dataset_id)
-            if dataset is None:
-                return
-
-            dataset_ordinal = next_dataset_ordinal(dataset)
-            image_key = f"image-{dataset_ordinal:06d}"
-            save_generated_image(
-                storage_root,
-                dataset.id,
-                image_key,
-                extracted.image_bytes,
-                extracted.mime_type,
-            )
-            image = DatasetImage(
-                dataset_id=dataset.id,
-                source_task_id=task.id,
-                source_type="video",
-                source_ordinal=extracted.source_ordinal,
-                ordinal=dataset_ordinal,
-                status="uploaded",
-                seed=800000 + extracted.source_frame_index,
-                prompt_text=f"video frame: {video_config.get('filename', 'uploaded video')} #{extracted.source_frame_index}",
-                diversity_vars={
-                    "source": "video",
-                    "sourceFrame": str(extracted.source_frame_index),
-                    "outputFilename": extracted.output_filename,
-                },
-                latency_ms=0,
-                preview_svg=preview_data_url(extracted.image_bytes, extracted.mime_type),
-                selected=True,
-                annotation_status="pending",
-                confidence_score=None,
-            )
-            db.session.add(image)
-            dataset.images.append(image)
-            task.images.append(image)
-
-            video_config = {**((task.config_json or {}).get("video") or {})}
-            video_config["extractedFrames"] = len(task.images)
-            video_config["updatedAt"] = now_utc().isoformat()
-            task.config_json = {**(task.config_json or {}), "video": video_config}
+            video_config = {
+                **video_config,
+                "frameIntervalMode": frame_interval_mode,
+                "frameInterval": frame_interval,
+                "frameIntervalSeconds": frame_interval_seconds,
+                "effectiveFrameInterval": effective_frame_interval,
+                "frameRate": frame_rate,
+                "targetSize": target_size,
+                "targetMaxDimension": target_max_dimension,
+                "totalFrames": total_frames,
+                "expectedFrames": expected_count,
+                "extractedFrames": len(task.images),
+                "status": "running",
+                "updatedAt": now_utc().isoformat(),
+            }
+            task.image_count = expected_count
+            task.config_json = {**config, "video": video_config}
             with db.session.no_autoflush:
                 sync_dataset_task_inplace(task)
                 sync_dataset_stats_inplace(dataset)
             db.session.commit()
-            _maybe_remove_session(self.request.is_eager)
+
+            existing_count = len(task.images)
+            for extracted in iter_video_frames(
+                video_path,
+                frame_interval=effective_frame_interval,
+                output_format=output_format,
+                jpeg_quality=jpeg_quality,
+                filename_prefix=filename_prefix,
+                max_images=max_images,
+                target_max_dimension=target_max_dimension,
+                skip_selected_frames=existing_count,
+            ):
+                task = db.session.get(DatasetTask, task_id)
+                if task is None or task.status != "running":
+                    return
+                dataset = db.session.get(Dataset, task.dataset_id)
+                if dataset is None:
+                    return
+
+                dataset_ordinal = next_dataset_ordinal(dataset)
+                image_key = f"image-{dataset_ordinal:06d}"
+                save_generated_image(
+                    storage_root,
+                    dataset.id,
+                    image_key,
+                    extracted.image_bytes,
+                    extracted.mime_type,
+                )
+                image = DatasetImage(
+                    dataset_id=dataset.id,
+                    source_task_id=task.id,
+                    source_type="video",
+                    source_ordinal=extracted.source_ordinal,
+                    ordinal=dataset_ordinal,
+                    status="uploaded",
+                    seed=800000 + extracted.source_frame_index,
+                    prompt_text=f"video frame: {video_config.get('filename', 'uploaded video')} #{extracted.source_frame_index}",
+                    diversity_vars={
+                        "source": "video",
+                        "sourceFrame": str(extracted.source_frame_index),
+                        "outputFilename": extracted.output_filename,
+                    },
+                    latency_ms=0,
+                    preview_svg=preview_data_url(extracted.image_bytes, extracted.mime_type),
+                    selected=True,
+                    annotation_status="pending",
+                    confidence_score=None,
+                )
+                db.session.add(image)
+                dataset.images.append(image)
+                task.images.append(image)
+
+                video_config = {**((task.config_json or {}).get("video") or {})}
+                video_config["extractedFrames"] = len(task.images)
+                video_config["updatedAt"] = now_utc().isoformat()
+                task.config_json = {**(task.config_json or {}), "video": video_config}
+                with db.session.no_autoflush:
+                    sync_dataset_task_inplace(task)
+                    sync_dataset_stats_inplace(dataset)
+                db.session.commit()
+                _maybe_remove_session(self.request.is_eager)
 
         task = db.session.get(DatasetTask, task_id)
         if task is None:

@@ -459,7 +459,9 @@ def import_dataset_video(dataset_id: str):
     if upload is None or not upload.filename:
         return jsonify({"message": "请上传一个视频文件。"}), 400
     if not is_allowed_video_filename(upload.filename):
-        return jsonify({"message": "只支持上传 MP4、MOV、AVI、MKV 或 WEBM 视频。"}), 400
+        return jsonify(
+            {"message": "只支持上传 MP4、MOV、AVI、MKV、WEBM、DAV（海康）、MPG/MPEG 或 PS 视频。"}
+        ), 400
 
     payload = VideoImportSchema().load(request.form.to_dict() or {})
     frame_interval_mode = normalize_video_frame_interval_mode(
