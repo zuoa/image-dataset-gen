@@ -7,6 +7,8 @@ import zipfile
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy import func
+from sqlalchemy.orm import raiseload
 
 from app.extensions import db
 from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, ModelProfile, generate_uuid
@@ -32,6 +34,7 @@ from app.services.dataset_export_service import get_dataset_archive_path
 from app.services.dataset_service import (
     build_dataset_export_payload,
     build_dataset_image_payload,
+    build_dataset_list_payload,
     build_dataset_payload,
     build_dataset_summary,
     build_dataset_task_payload,
@@ -168,12 +171,47 @@ def assist_subject():
 @jwt_required()
 def list_datasets():
     user_id = get_jwt_identity()
-    datasets = Dataset.query.filter_by(user_id=user_id).order_by(Dataset.created_at.desc()).all()
+    datasets = (
+        Dataset.query.options(
+            raiseload(Dataset.images),
+            raiseload(Dataset.tasks),
+            raiseload(Dataset.exports),
+            raiseload(Dataset.training_jobs),
+        )
+        .filter_by(user_id=user_id)
+        .order_by(Dataset.created_at.desc())
+        .all()
+    )
+    dataset_ids = [dataset.id for dataset in datasets]
+    latest_tasks_by_dataset_id: dict[str, DatasetTask] = {}
+    if dataset_ids:
+        ranked_tasks = (
+            db.session.query(
+                DatasetTask.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=DatasetTask.dataset_id,
+                    order_by=[DatasetTask.created_at.desc(), DatasetTask.id.desc()],
+                )
+                .label("row_number"),
+            )
+            .filter(DatasetTask.dataset_id.in_(dataset_ids))
+            .subquery()
+        )
+        latest_tasks = (
+            DatasetTask.query.options(raiseload(DatasetTask.images), raiseload(DatasetTask.dataset))
+            .join(ranked_tasks, DatasetTask.id == ranked_tasks.c.id)
+            .filter(ranked_tasks.c.row_number == 1)
+            .all()
+        )
+        latest_tasks_by_dataset_id = {task.dataset_id: task for task in latest_tasks}
+
     return jsonify(
         {
-            "datasets": [build_dataset_payload(dataset, include_images=False, include_tasks=False, include_exports=False) | {
-                "latestTask": build_dataset_task_payload(dataset.tasks[0]) if dataset.tasks else None
-            } for dataset in datasets],
+            "datasets": [
+                build_dataset_list_payload(dataset, latest_tasks_by_dataset_id.get(dataset.id))
+                for dataset in datasets
+            ],
             "summary": build_dataset_summary(datasets),
         }
     )

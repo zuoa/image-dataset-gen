@@ -7,7 +7,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SectionCard } from "../components/ui/SectionCard";
-import type { Dataset, DatasetSummary } from "../lib/types";
+import type { DatasetListItem, DatasetSummary } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
@@ -24,7 +24,7 @@ function metricCards(summary: DatasetSummary | null) {
 export function DatasetListPage() {
   const token = useAuthStore((state) => state.token);
   const [summary, setSummary] = useState<DatasetSummary | null>(null);
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasets, setDatasets] = useState<DatasetListItem[]>([]);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
 

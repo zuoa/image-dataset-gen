@@ -4,6 +4,7 @@ import type {
   AugmentationSettings,
   Dataset,
   DatasetImage,
+  DatasetListItem,
   DatasetSummary,
   DatasetTask,
   ImageFilter,
@@ -23,7 +24,7 @@ function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
 }
 
 export function listDatasets(token: string) {
-  return apiRequest<{ datasets: Dataset[]; summary: DatasetSummary }>("/datasets", { token });
+  return apiRequest<{ datasets: DatasetListItem[]; summary: DatasetSummary }>("/datasets", { token });
 }
 
 export function createDataset(

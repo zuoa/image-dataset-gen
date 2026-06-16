@@ -315,6 +315,12 @@ export type Dataset = {
   latestTask?: DatasetTask | null;
 };
 
+export type DatasetTaskSummary = Omit<DatasetTask, "sourceImageIds">;
+
+export type DatasetListItem = Omit<Dataset, "latestTask"> & {
+  latestTask?: DatasetTaskSummary | null;
+};
+
 export type SamplePoolSplit = "train" | "val" | "test" | "unselected";
 export type ImageFilter = {
   class?: string;

@@ -5,6 +5,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from PIL import Image
+from sqlalchemy import event
 
 from app import _backfill_detection_categories, create_app
 from app.config import TestConfig
@@ -164,6 +165,87 @@ def test_detection_category_backfill_skips_empty_images(tmp_path: Path):
 
         db.session.expire_all()
         assert db.session.get(DatasetImage, annotated_image_id).detection_categories == ["pedestrian"]
+
+
+def test_list_datasets_uses_lightweight_payload_without_loading_images(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-list-lightweight")
+    dataset_id = _create_dataset(client, headers)
+    image_queries: list[str] = []
+
+    def collect_image_queries(conn, cursor, statement, parameters, context, executemany):
+        if "dataset_images" in statement.lower():
+            image_queries.append(statement)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        task = DatasetTask(
+            dataset_id=dataset.id,
+            user_id=dataset.user_id,
+            task_type="import",
+            task_name="导入批次 1",
+            subject=dataset.name,
+            image_count=3,
+            categories=dataset.categories,
+            config_json={"source": "zip"},
+            prompt_json={},
+            status="completed",
+            progress_percent=100,
+            images_generated=3,
+            selected_count=3,
+            api_provider="local",
+        )
+        db.session.add(task)
+        dataset.tasks.append(task)
+        for ordinal in range(1, 4):
+            image = DatasetImage(
+                dataset_id=dataset.id,
+                source_task_id=task.id,
+                source_type="import",
+                source_ordinal=ordinal,
+                ordinal=ordinal,
+                status="uploaded",
+                seed=ordinal,
+                prompt_text=f"image {ordinal}",
+                diversity_vars={},
+                preview_svg="",
+                selected=True,
+                annotation_status="pending",
+                detection_categories=[],
+            )
+            db.session.add(image)
+            dataset.images.append(image)
+            task.images.append(image)
+        dataset.image_count = 3
+        dataset.selected_count = 3
+        dataset.task_count = 1
+        db.session.commit()
+        task_id = task.id
+        event.listen(db.engine, "before_cursor_execute", collect_image_queries)
+
+    try:
+        response = client.get("/api/v1/datasets", headers=headers)
+    finally:
+        with app.app_context():
+            event.remove(db.engine, "before_cursor_execute", collect_image_queries)
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    listed_dataset = payload["datasets"][0]
+    assert listed_dataset["id"] == dataset_id
+    assert listed_dataset["images"] == []
+    assert listed_dataset["imagesTotal"] == 3
+    assert "imageClassCounts" not in listed_dataset
+    assert "imageSplitCounts" not in listed_dataset
+    assert "imageAnnotationCounts" not in listed_dataset
+    assert listed_dataset["latestTask"]["id"] == task_id
+    assert "sourceImageIds" not in listed_dataset["latestTask"]
+    assert image_queries == []
 
 
 def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):

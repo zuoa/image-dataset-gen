@@ -163,11 +163,58 @@ def build_dataset_payload(
     }
 
 
-def build_dataset_list_payload(dataset: Dataset) -> dict[str, Any]:
-    latest_task = dataset.tasks[0] if dataset.tasks else None
+def build_dataset_list_item_payload(dataset: Dataset, latest_task: DatasetTask | None = None) -> dict[str, Any]:
     return {
-        **build_dataset_payload(dataset, include_images=False, include_tasks=False, include_exports=False),
-        "latestTask": build_dataset_task_payload(latest_task) if latest_task else None,
+        "id": dataset.id,
+        "name": dataset.name,
+        "description": dataset.description,
+        "categories": dataset.categories,
+        "status": dataset.status,
+        "imageCount": int(dataset.image_count or 0),
+        "selectedCount": int(dataset.selected_count or 0),
+        "taskCount": int(dataset.task_count or 0),
+        "spentCost": float(dataset.spent_cost or 0.0),
+        "annotation": dataset.annotation_json or {},
+        "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
+        "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
+        "images": [],
+        "imagesTotal": int(dataset.image_count or 0),
+        "tasks": [],
+        "exports": [],
+        "latestTask": build_dataset_task_summary_payload(latest_task),
+    }
+
+
+def build_dataset_list_payload(dataset: Dataset, latest_task: DatasetTask | None = None) -> dict[str, Any]:
+    return build_dataset_list_item_payload(dataset, latest_task)
+
+
+def build_dataset_task_summary_payload(task: DatasetTask | None) -> dict[str, Any] | None:
+    if task is None:
+        return None
+    config = task.config_json or {}
+    return {
+        "id": task.id,
+        "datasetId": task.dataset_id,
+        "taskType": task.task_type,
+        "taskName": task.task_name,
+        "subject": task.subject,
+        "categories": task.categories,
+        "imageCount": int(task.image_count or 0),
+        "imagesGenerated": int(task.images_generated or 0),
+        "selectedCount": int(task.selected_count or 0),
+        "progressPercent": int(task.progress_percent or 0),
+        "status": task.status,
+        "estimatedCost": float(task.estimated_cost or 0.0),
+        "spentCost": float(task.spent_cost or 0.0),
+        "apiProvider": task.api_provider,
+        "config": config,
+        "prompt": task.prompt_json or {},
+        "runtime": config.get("runtime", {}),
+        "createdAt": task.created_at.isoformat() if task.created_at else None,
+        "updatedAt": task.updated_at.isoformat() if task.updated_at else None,
+        "startedAt": task.started_at.isoformat() if task.started_at else None,
+        "completedAt": task.completed_at.isoformat() if task.completed_at else None,
     }
 
 
