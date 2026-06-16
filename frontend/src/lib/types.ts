@@ -158,7 +158,7 @@ export type DatasetTask = {
   };
   prompt: PromptPreview;
   runtime: Record<string, unknown>;
-  sourceImageIds: string[];
+  sourceImageIds?: string[];
   createdAt?: string | null;
   updatedAt?: string | null;
   startedAt?: string | null;
@@ -315,7 +315,7 @@ export type Dataset = {
   latestTask?: DatasetTask | null;
 };
 
-export type DatasetTaskSummary = Omit<DatasetTask, "sourceImageIds">;
+export type DatasetTaskSummary = DatasetTask;
 
 export type DatasetListItem = Omit<Dataset, "latestTask"> & {
   latestTask?: DatasetTaskSummary | null;

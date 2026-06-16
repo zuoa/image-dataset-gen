@@ -248,6 +248,83 @@ def test_list_datasets_uses_lightweight_payload_without_loading_images(tmp_path:
     assert image_queries == []
 
 
+def test_get_dataset_uses_paginated_payload_without_task_source_ids(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-detail-lightweight")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        source_ids: list[str] = []
+        for ordinal in range(1, 4):
+            image = DatasetImage(
+                dataset_id=dataset.id,
+                source_type="import",
+                source_ordinal=ordinal,
+                ordinal=ordinal,
+                status="uploaded",
+                seed=ordinal,
+                prompt_text=f"image {ordinal}",
+                diversity_vars={},
+                preview_svg="",
+                selected=True,
+                annotation_status="pending",
+                detection_categories=[],
+            )
+            db.session.add(image)
+            dataset.images.append(image)
+            db.session.flush()
+            source_ids.append(image.id)
+
+        task = DatasetTask(
+            dataset_id=dataset.id,
+            user_id=dataset.user_id,
+            task_type="augmentation",
+            task_name="增强批次 1",
+            subject=dataset.name,
+            image_count=3,
+            categories=dataset.categories,
+            config_json={
+                "augmentation": {
+                    "sourceImageIds": source_ids,
+                    "sourceCount": len(source_ids),
+                    "completedImages": 0,
+                    "progressPercent": 0,
+                }
+            },
+            prompt_json={},
+            status="running",
+            progress_percent=0,
+            images_generated=0,
+            selected_count=0,
+            api_provider="local",
+        )
+        db.session.add(task)
+        dataset.tasks.append(task)
+        dataset.image_count = 3
+        dataset.selected_count = 3
+        dataset.task_count = 1
+        db.session.commit()
+
+    response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_offset=0&images_limit=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    dataset = response.get_json()["dataset"]
+    assert len(dataset["images"]) == 1
+    assert dataset["imagesTotal"] == 3
+    assert dataset["tasks"][0]["taskName"] == "增强批次 1"
+    assert "sourceImageIds" not in dataset["tasks"][0]
+    assert "sourceImageIds" not in dataset["tasks"][0]["config"]["augmentation"]
+
+
 def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
