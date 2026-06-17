@@ -456,6 +456,53 @@ export function DatasetAnnotatePage() {
     selectImage(images[nextIndex].id);
   }
 
+  async function advanceAfterImageLeavesQueue(removedImageId: string) {
+    const previousImages = loadedImagesRef.current;
+    const removedIndex = previousImages.findIndex((image) => image.id === removedImageId);
+    if (removedIndex < 0) {
+      await loadersRef.current.reloadFirstPage();
+      return;
+    }
+
+    const remainingImages = previousImages.filter((image) => image.id !== removedImageId);
+    const nextTotal = Math.max(0, imagesTotal - 1);
+    const followingImage = remainingImages[removedIndex] ?? null;
+    const previousImage = remainingImages[removedIndex - 1] ?? null;
+    const nextOffset = remainingImages.length;
+
+    if (!followingImage && nextOffset < nextTotal && token && datasetId) {
+      const response = await getDataset(datasetId, token, {
+        offset: nextOffset,
+        limit: PAGE_SIZE,
+        filter: buildAnnotationImageFilter(annotationFilterRef.current),
+      });
+      const pageImages = response.dataset.images ?? [];
+      const total = response.dataset.imagesTotal ?? nextTotal;
+      const seen = new Set(remainingImages.map((image) => image.id));
+      const mergedImages = [...remainingImages];
+      for (const image of pageImages) {
+        if (!seen.has(image.id)) {
+          mergedImages.push(image);
+          seen.add(image.id);
+        }
+      }
+
+      setDataset(response.dataset);
+      setLoadedImages(mergedImages);
+      setImagesTotal(total);
+      setImagesCursor(nextOffset + pageImages.length);
+      setHasMoreImages(nextOffset + pageImages.length < total);
+      setActiveImageId(pageImages[0]?.id ?? previousImage?.id ?? null);
+      return;
+    }
+
+    setLoadedImages(remainingImages);
+    setImagesTotal(nextTotal);
+    setImagesCursor(Math.min(nextOffset, nextTotal));
+    setHasMoreImages(nextOffset < nextTotal);
+    setActiveImageId(followingImage?.id ?? previousImage?.id ?? null);
+  }
+
   async function saveAnnotations() {
     if (!token || !datasetId || !activeImage || deletingImageId || isSaving || !canSave) return;
     setIsSaving(true);
@@ -469,7 +516,7 @@ export function DatasetAnnotatePage() {
         );
         setActiveImageId(updatedImage.id);
       } else {
-        await loadersRef.current.reloadFirstPage();
+        await advanceAfterImageLeavesQueue(updatedImage.id);
       }
       setActionError(null);
     } catch (error) {
