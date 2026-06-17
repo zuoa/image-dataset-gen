@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 import zipfile
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -38,16 +39,15 @@ from app.services.dataset_service import (
     build_dataset_list_payload,
     build_dataset_payload,
     build_dataset_summary,
-    build_dataset_task_payload,
     build_dataset_task_summary_payload,
+    dataset_has_selected_images,
     next_dataset_export_version,
     next_dataset_ordinal,
     now_utc,
-    sample_pool_split_map,
+    sample_pool_split_map_for_images,
+    selected_original_image_ids,
     sync_dataset,
     sync_dataset_stats_from_db,
-    sync_dataset_stats_inplace,
-    sync_dataset_task_inplace,
     sync_dataset_task_stats_from_db,
 )
 from app.services.image_storage import (
@@ -114,7 +114,7 @@ def _delete_dataset_images(dataset: Dataset, images: list[DatasetImage]) -> dict
         db.session.delete(image)
 
     db.session.flush()
-    sync_dataset_stats_from_db(dataset)
+    sync_dataset_stats_from_db(dataset, commit=False)
     if affected_task_ids:
         affected_tasks = DatasetTask.query.filter(DatasetTask.id.in_(affected_task_ids)).all()
         for task in affected_tasks:
@@ -331,12 +331,12 @@ def create_generation_task(dataset_id: str):
         else None,
     )
     db.session.add(task)
-    dataset.tasks.append(task)
-    sync_dataset_stats_inplace(dataset)
+    db.session.flush()
+    sync_dataset_stats_from_db(dataset, commit=False)
     db.session.commit()
     return jsonify({
         "task": build_dataset_task_summary_payload(task),
-        "dataset": build_dataset_detail_payload(dataset, include_images=False),
+        "dataset": build_dataset_detail_payload(sync_dataset_stats_from_db(dataset), include_images=False),
     }), 201
 
 
@@ -451,7 +451,7 @@ def import_dataset_images(dataset_id: str):
         dataset_id=dataset.id,
         user_id=user_id,
         task_type="import",
-        task_name=f"导入批次 {len(dataset.tasks) + 1}",
+        task_name=f"导入批次 {int(dataset.task_count or 0) + 1}",
         subject=dataset.name,
         image_count=0,
         categories=dataset.categories,
@@ -463,7 +463,6 @@ def import_dataset_images(dataset_id: str):
         started_at=now_utc(),
     )
     db.session.add(task)
-    dataset.tasks.append(task)
     db.session.flush()
 
     imported_count = 0
@@ -511,8 +510,6 @@ def import_dataset_images(dataset_id: str):
                 confidence_score=None,
             )
             db.session.add(image)
-            dataset.images.append(image)
-            task.images.append(image)
             imported_count += 1
             next_ordinal += 1
 
@@ -526,8 +523,8 @@ def import_dataset_images(dataset_id: str):
     task.progress_percent = 100
     task.status = "completed"
     task.completed_at = now_utc()
-    sync_dataset_task_inplace(task)
-    sync_dataset_stats_inplace(dataset)
+    sync_dataset_task_stats_from_db(task)
+    sync_dataset_stats_from_db(dataset, commit=False)
     db.session.commit()
     dataset = _dataset_for_user(dataset.id, user_id)
     return jsonify(
@@ -575,7 +572,7 @@ def import_dataset_video(dataset_id: str):
         dataset_id=dataset.id,
         user_id=user_id,
         task_type="import",
-        task_name=f"视频抽帧批次 {len(dataset.tasks) + 1}",
+        task_name=f"视频抽帧批次 {int(dataset.task_count or 0) + 1}",
         subject=dataset.name,
         image_count=0,
         categories=dataset.categories,
@@ -595,7 +592,6 @@ def import_dataset_video(dataset_id: str):
         return jsonify({"message": "视频文件保存失败，请重新上传。"}), 400
 
     db.session.add(task)
-    dataset.tasks.append(task)
     task.config_json = {
         "source": "video",
         "sourcePath": source_path,
@@ -614,8 +610,8 @@ def import_dataset_video(dataset_id: str):
             "updatedAt": now_utc().isoformat(),
         },
     }
-    with db.session.no_autoflush:
-        sync_dataset_stats_inplace(dataset)
+    db.session.flush()
+    sync_dataset_stats_from_db(dataset, commit=False)
     db.session.commit()
 
     from app.worker_tasks import extract_dataset_video_frames
@@ -667,7 +663,11 @@ def import_roboflow_dataset_images(dataset_id: str):
         return jsonify({"message": str(exc)}), 400
 
     dataset = _dataset_for_user(dataset.id, user_id)
-    task = dataset.tasks[0] if dataset.tasks else None
+    task = (
+        DatasetTask.query.filter_by(dataset_id=dataset.id, task_type="import")
+        .order_by(DatasetTask.created_at.desc(), DatasetTask.id.desc())
+        .first()
+    )
     return jsonify(
         {
             "summary": summary,
@@ -684,8 +684,8 @@ def create_augmentation_task(dataset_id: str):
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
     action = TaskActionSchema().load(request.get_json() or {})
 
-    source_images = [image for image in dataset.images if image.selected and image.status != "augmented"]
-    source_count = len(source_images)
+    source_image_ids = selected_original_image_ids(dataset.id)
+    source_count = len(source_image_ids)
     if source_count <= 0:
         return (
             jsonify({"message": "当前没有可增强的原始图片。请先保留至少 1 张非增强图片。"}),
@@ -700,7 +700,7 @@ def create_augmentation_task(dataset_id: str):
         dataset_id=dataset.id,
         user_id=user_id,
         task_type="augmentation",
-        task_name=f"增强批次 {len(dataset.tasks) + 1}",
+        task_name=f"增强批次 {int(dataset.task_count or 0) + 1}",
         subject=dataset.name,
         image_count=estimated_added_images,
         categories=dataset.categories,
@@ -709,8 +709,9 @@ def create_augmentation_task(dataset_id: str):
                 "multiplier": action["multiplier"],
                 "methods": action["augmentation_methods"],
                 "settings": action["augmentation_settings"],
+                "sourceScope": "selected_original",
                 "sourceCount": source_count,
-                "sourceImageIds": [image.id for image in source_images],
+                "sourceImageIds": source_image_ids,
                 "estimatedAddedImages": estimated_added_images,
                 "totalImagesToCreate": estimated_added_images,
                 "completedImages": 0,
@@ -727,8 +728,8 @@ def create_augmentation_task(dataset_id: str):
         started_at=now_utc(),
     )
     db.session.add(task)
-    dataset.tasks.append(task)
-    sync_dataset_stats_inplace(dataset)
+    db.session.flush()
+    sync_dataset_stats_from_db(dataset, commit=False)
     db.session.commit()
 
     from app.worker_tasks import augment_dataset_task_images
@@ -862,7 +863,15 @@ def update_dataset_image_annotations(dataset_id: str, image_id: str):
     return jsonify(
         {
             "dataset": build_dataset_detail_payload(dataset, include_images=False),
-            "image": build_dataset_image_payload(dataset, image, split_map=sample_pool_split_map(dataset)),
+            "image": build_dataset_image_payload(
+                dataset,
+                image,
+                split_map=sample_pool_split_map_for_images(
+                    dataset.id,
+                    [image],
+                    selected_count=int(dataset.selected_count or 0),
+                ),
+            ),
         }
     )
 
@@ -873,41 +882,50 @@ def update_dataset_selection(dataset_id: str):
     user_id = get_jwt_identity()
     payload = DatasetSelectionSchema().load(request.get_json() or {})
     dataset = _dataset_for_user(dataset_id, user_id)
-    scope = payload.get("scope")
-    scoped_ids = payload.get("image_ids")
-    target_images = dataset.images
-    if scope == "unannotated_unretained":
-        target_images = [
-            image
-            for image in dataset.images
-            if not image.selected and image.annotation_status not in ("annotated", "empty")
-        ]
-    elif scoped_ids is not None:
-        scoped_id_set = set(scoped_ids)
-        target_images = [image for image in dataset.images if image.id in scoped_id_set]
-        if len(target_images) != len(scoped_id_set):
-            return jsonify({"message": "one or more images not found"}), 404
 
     if payload["mode"] == "single":
-        image = next((candidate for candidate in dataset.images if candidate.id == payload.get("image_id")), None)
+        image = DatasetImage.query.filter_by(id=payload.get("image_id"), dataset_id=dataset.id).first()
         if image is None:
             return jsonify({"message": "image not found"}), 404
         image.selected = bool(payload.get("selected"))
-    elif payload["mode"] == "all":
-        for image in target_images:
-            image.selected = True
-    elif payload["mode"] == "none":
-        for image in target_images:
-            image.selected = False
-    elif payload["mode"] == "invert":
-        for image in target_images:
-            image.selected = not image.selected
+    else:
+        selection_query = DatasetImage.query.filter(DatasetImage.dataset_id == dataset.id)
+        scoped_ids = payload.get("image_ids")
+        if scoped_ids is not None:
+            scoped_id_set = set(scoped_ids)
+            found_count = (
+                db.session.query(func.count(DatasetImage.id))
+                .filter(DatasetImage.dataset_id == dataset.id)
+                .filter(DatasetImage.id.in_(scoped_id_set))
+                .scalar()
+                or 0
+            )
+            if int(found_count) != len(scoped_id_set):
+                return jsonify({"message": "one or more images not found"}), 404
+            selection_query = selection_query.filter(DatasetImage.id.in_(scoped_id_set))
+        elif payload.get("scope") == "unannotated_unretained":
+            selection_query = (
+                selection_query.filter(DatasetImage.selected.is_(False))
+                .filter(~DatasetImage.annotation_status.in_(["annotated", "empty"]))
+            )
 
-    sync_dataset_stats_inplace(dataset)
-    for task in dataset.tasks:
-        sync_dataset_task_inplace(task)
+        if payload["mode"] == "all":
+            selection_query.update({DatasetImage.selected: True}, synchronize_session=False)
+        elif payload["mode"] == "none":
+            selection_query.update({DatasetImage.selected: False}, synchronize_session=False)
+        elif payload["mode"] == "invert":
+            selection_query.update(
+                {DatasetImage.selected: ~DatasetImage.selected},
+                synchronize_session=False,
+            )
+
+    db.session.flush()
+    affected_tasks = DatasetTask.query.filter_by(dataset_id=dataset.id).all()
+    for task in affected_tasks:
+        sync_dataset_task_stats_from_db(task)
+    sync_dataset_stats_from_db(dataset, commit=False)
     db.session.commit()
-    return jsonify({"dataset": build_dataset_detail_payload(dataset, include_images=False)})
+    return jsonify({"dataset": build_dataset_detail_payload(sync_dataset_stats_from_db(dataset), include_images=False)})
 
 
 @datasets_bp.post("/<dataset_id>/export")
@@ -916,7 +934,7 @@ def export_dataset(dataset_id: str):
     user_id = get_jwt_identity()
     action = DatasetExportSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
-    if not any(image.selected for image in dataset.images):
+    if not dataset_has_selected_images(dataset.id):
         return jsonify({"message": "no images selected for export"}), 400
 
     version = next_dataset_export_version(dataset)

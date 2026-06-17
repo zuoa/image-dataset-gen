@@ -325,6 +325,142 @@ def test_get_dataset_uses_paginated_payload_without_task_source_ids(tmp_path: Pa
     assert "sourceImageIds" not in dataset["tasks"][0]["config"]["augmentation"]
 
 
+def test_get_dataset_filters_split_class_and_annotation_from_queries(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-detail-query-filters")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        for ordinal in range(1, 13):
+            selected = ordinal <= 10
+            categories = ["umbrella"] if ordinal % 2 == 0 else ["pedestrian"]
+            image = DatasetImage(
+                dataset_id=dataset.id,
+                source_type="import",
+                source_ordinal=ordinal,
+                ordinal=ordinal,
+                status="uploaded",
+                seed=ordinal,
+                prompt_text=f"image {ordinal}",
+                diversity_vars={},
+                preview_svg="",
+                selected=selected,
+                annotation_status="annotated" if ordinal % 2 == 0 else "pending",
+                detection_categories=categories,
+            )
+            db.session.add(image)
+        dataset.image_count = 12
+        dataset.selected_count = 10
+        db.session.commit()
+
+    train_response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_offset=0&images_limit=20&filter_split=train",
+        headers=headers,
+    )
+    assert train_response.status_code == 200
+    train_dataset = train_response.get_json()["dataset"]
+    assert train_dataset["imagesTotal"] == 7
+    assert [image["ordinal"] for image in train_dataset["images"]] == list(range(1, 8))
+    assert {image["split"] for image in train_dataset["images"]} == {"train"}
+
+    class_response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_offset=0&images_limit=20"
+        "&filter_class=umbrella&filter_annotation=annotated",
+        headers=headers,
+    )
+    assert class_response.status_code == 200
+    class_dataset = class_response.get_json()["dataset"]
+    assert class_dataset["imagesTotal"] == 6
+    assert [image["ordinal"] for image in class_dataset["images"]] == [2, 4, 6, 8, 10, 12]
+    assert class_dataset["imageClassCounts"]["umbrella"] == 6
+
+
+def test_selection_bulk_update_avoids_loading_image_rows(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-selection-bulk-query")
+    dataset_id = _create_dataset(client, headers)
+    image_row_selects: list[str] = []
+
+    def collect_image_row_selects(conn, cursor, statement, parameters, context, executemany):
+        normalized = " ".join(statement.lower().split())
+        if not normalized.startswith("select") or "from dataset_images" not in normalized:
+            return
+        if "count(" in normalized or "json_each" in normalized or "max(" in normalized or "row_number()" in normalized:
+            return
+        image_row_selects.append(statement)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        task = DatasetTask(
+            dataset_id=dataset.id,
+            user_id=dataset.user_id,
+            task_type="import",
+            task_name="导入批次 1",
+            subject=dataset.name,
+            image_count=8,
+            categories=dataset.categories,
+            config_json={"source": "zip"},
+            prompt_json={},
+            status="completed",
+            progress_percent=100,
+            images_generated=8,
+            selected_count=8,
+            api_provider="local",
+        )
+        db.session.add(task)
+        db.session.flush()
+        for ordinal in range(1, 9):
+            db.session.add(
+                DatasetImage(
+                    dataset_id=dataset.id,
+                    source_task_id=task.id,
+                    source_type="import",
+                    source_ordinal=ordinal,
+                    ordinal=ordinal,
+                    status="uploaded",
+                    seed=ordinal,
+                    prompt_text=f"image {ordinal}",
+                    diversity_vars={},
+                    preview_svg="",
+                    selected=True,
+                    annotation_status="pending",
+                    detection_categories=[],
+                )
+            )
+        dataset.image_count = 8
+        dataset.selected_count = 8
+        dataset.task_count = 1
+        db.session.commit()
+        event.listen(db.engine, "before_cursor_execute", collect_image_row_selects)
+
+    try:
+        response = client.patch(
+            f"/api/v1/datasets/{dataset_id}/selection",
+            headers=headers,
+            json={"mode": "none"},
+        )
+    finally:
+        with app.app_context():
+            event.remove(db.engine, "before_cursor_execute", collect_image_row_selects)
+
+    assert response.status_code == 200
+    dataset = response.get_json()["dataset"]
+    assert dataset["selectedCount"] == 0
+    assert dataset["tasks"][0]["selectedCount"] == 0
+    assert image_row_selects == []
+
+
 def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
@@ -1066,6 +1202,103 @@ def test_roboflow_import_requires_api_key_payload(tmp_path: Path):
 
     assert response.status_code == 422
     assert "apiKey" in response.get_json()["errors"]
+
+
+def test_augmentation_task_uses_source_snapshot_after_selection_changes(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-augmentation-source-snapshot")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        source_image = DatasetImage(
+            dataset_id=dataset.id,
+            source_type="generation",
+            source_ordinal=1,
+            ordinal=1,
+            status="ready",
+            seed=17,
+            prompt_text="first source",
+            diversity_vars={"source": "first"},
+            preview_svg="data:image/png;base64,",
+            selected=True,
+            annotation_status="pending",
+            detection_categories=[],
+        )
+        db.session.add(source_image)
+        db.session.flush()
+        source_image_id = source_image.id
+        save_generated_image(
+            app.config["STORAGE_ROOT"],
+            dataset.id,
+            "image-000001",
+            _png_bytes((20, 40, 60)),
+            "image/png",
+        )
+        dataset.image_count = 1
+        dataset.selected_count = 1
+        db.session.commit()
+
+    with patch("app.api.datasets._dispatch_background_task"):
+        response = client.post(
+            f"/api/v1/datasets/{dataset_id}/tasks/augmentation",
+            headers=headers,
+            json={"multiplier": 2, "augmentation_methods": ["flip"]},
+        )
+
+    assert response.status_code == 201
+    task_payload = response.get_json()["task"]
+    task_id = task_payload["id"]
+    assert "sourceImageIds" not in task_payload["config"]["augmentation"]
+
+    with app.app_context():
+        source_image = db.session.get(DatasetImage, source_image_id)
+        assert source_image is not None
+        source_image.selected = False
+
+        new_source = DatasetImage(
+            dataset_id=dataset_id,
+            source_type="generation",
+            source_ordinal=2,
+            ordinal=2,
+            status="ready",
+            seed=29,
+            prompt_text="second source",
+            diversity_vars={"source": "second"},
+            preview_svg="data:image/png;base64,",
+            selected=True,
+            annotation_status="pending",
+            detection_categories=[],
+        )
+        db.session.add(new_source)
+        save_generated_image(
+            app.config["STORAGE_ROOT"],
+            dataset_id,
+            "image-000002",
+            _png_bytes((70, 90, 120)),
+            "image/png",
+        )
+        db.session.commit()
+
+        from app.worker_tasks import augment_dataset_task_images
+
+        augment_dataset_task_images.apply(args=(task_id,), throw=True)
+
+        task = db.session.get(DatasetTask, task_id)
+        assert task is not None
+        source_ids = (task.config_json or {})["augmentation"]["sourceImageIds"]
+        assert source_ids == [source_image_id]
+
+        augmented = DatasetImage.query.filter_by(source_task_id=task_id).one()
+        assert augmented.status == "augmented"
+        assert "first source" in augmented.prompt_text
+        assert augmented.diversity_vars["source"] == "first"
+        assert task.status == "completed"
 
 
 def test_retry_failed_augmentation_task_resets_augmentation_status(tmp_path: Path):

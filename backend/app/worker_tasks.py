@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from flask import current_app
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
 from app.clients.gemini_client import (
@@ -17,7 +18,9 @@ from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
 from app.services.dataset_service import (
     next_dataset_ordinal,
     now_utc,
+    sync_dataset_stats_from_db,
     sync_dataset_stats_inplace,
+    sync_dataset_task_stats_from_db,
     sync_dataset_task_inplace,
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
@@ -91,6 +94,42 @@ def _mark_video_import_failed(task_id: str, error: str) -> None:
             db.session.rollback()
             current_app.logger.exception("Failed to mark video import task %s as failed", task_id)
             return
+
+
+def _task_image_count(task_id: str) -> int:
+    return int(
+        db.session.query(func.count(DatasetImage.id))
+        .filter(DatasetImage.source_task_id == task_id)
+        .scalar()
+        or 0
+    )
+
+
+def _augmentation_source_query(task: DatasetTask, augmentation: dict[str, object]):
+    query = DatasetImage.query.filter(DatasetImage.dataset_id == task.dataset_id)
+    source_image_ids = [str(image_id) for image_id in augmentation.get("sourceImageIds", [])]
+    if source_image_ids:
+        return query.filter(DatasetImage.id.in_(source_image_ids)).order_by(
+            DatasetImage.ordinal.asc(),
+            DatasetImage.id.asc(),
+        )
+    return (
+        query.filter(DatasetImage.selected.is_(True))
+        .filter(DatasetImage.status != "augmented")
+        .order_by(DatasetImage.ordinal.asc(), DatasetImage.id.asc())
+    )
+
+
+def _augmentation_source_count(task: DatasetTask, augmentation: dict[str, object]) -> int:
+    return int(_augmentation_source_query(task, augmentation).count() or 0)
+
+
+def _augmentation_source_at(
+    task: DatasetTask,
+    augmentation: dict[str, object],
+    index: int,
+) -> DatasetImage | None:
+    return _augmentation_source_query(task, augmentation).offset(index).limit(1).first()
 
 
 @celery.task(bind=True)
@@ -178,7 +217,6 @@ def augment_dataset_task_images(self, task_id: str) -> None:
     methods = [str(method) for method in augmentation.get("methods", [])]
     settings = augmentation.get("settings") if isinstance(augmentation.get("settings"), dict) else {}
     storage_root = current_app.config["STORAGE_ROOT"]
-    source_image_ids = [str(image_id) for image_id in augmentation.get("sourceImageIds", [])]
 
     while True:
         task = db.session.get(DatasetTask, task_id)
@@ -193,8 +231,8 @@ def augment_dataset_task_images(self, task_id: str) -> None:
         if augmentation.get("status") != "running":
             return
 
-        source_images = [image for image in dataset.images if image.id in source_image_ids]
-        if not source_images:
+        source_count = _augmentation_source_count(task, augmentation)
+        if source_count <= 0:
             augmentation["status"] = "failed"
             augmentation["error"] = "source_images_not_found"
             augmentation["updatedAt"] = now_utc().isoformat()
@@ -203,7 +241,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             db.session.commit()
             return
 
-        completed_images = len(task.images)
+        completed_images = _task_image_count(task.id)
         if completed_images >= total_to_create:
             augmentation["status"] = "completed"
             augmentation["completedImages"] = completed_images
@@ -213,12 +251,21 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
             task.status = "completed"
             task.completed_at = now_utc()
-            sync_dataset_task_inplace(task)
-            sync_dataset_stats_inplace(dataset)
+            sync_dataset_task_stats_from_db(task)
+            sync_dataset_stats_from_db(dataset, commit=False)
             db.session.commit()
             break
 
-        source_image = source_images[completed_images % len(source_images)]
+        source_image = _augmentation_source_at(task, augmentation, completed_images % source_count)
+        if source_image is None:
+            augmentation["status"] = "failed"
+            augmentation["error"] = "source_images_not_found"
+            augmentation["updatedAt"] = now_utc().isoformat()
+            task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
+            task.status = "failed"
+            db.session.commit()
+            return
+
         dataset_ordinal = next_dataset_ordinal(dataset)
         augmentation_seed = source_image.seed + 1000 + completed_images
         augmented = augment_generated_image(
@@ -257,15 +304,14 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             confidence_score=source_image.confidence_score,
         )
         db.session.add(image)
-        dataset.images.append(image)
-        task.images.append(image)
+        db.session.flush()
 
         augmentation["completedImages"] = completed_images + 1
         augmentation["progressPercent"] = round((completed_images + 1) / total_to_create * 100)
         augmentation["updatedAt"] = now_utc().isoformat()
         task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
-        sync_dataset_task_inplace(task)
-        sync_dataset_stats_inplace(dataset)
+        sync_dataset_task_stats_from_db(task)
+        sync_dataset_stats_from_db(dataset, commit=False)
         db.session.commit()
         _maybe_remove_session(self.request.is_eager)
 

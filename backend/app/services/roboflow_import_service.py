@@ -15,8 +15,8 @@ from app.services.annotation_storage import save_annotation_result
 from app.services.dataset_service import (
     next_dataset_ordinal,
     now_utc,
-    sync_dataset_stats_inplace,
-    sync_dataset_task_inplace,
+    sync_dataset_stats_from_db,
+    sync_dataset_task_stats_from_db,
 )
 from app.services.image_storage import normalize_uploaded_image, preview_data_url, save_generated_image
 
@@ -193,7 +193,7 @@ def _persist_prepared_images(
         dataset_id=dataset.id,
         user_id=user_id,
         task_type="import",
-        task_name=f"Roboflow 导入批次 {len(dataset.tasks) + 1}",
+        task_name=f"Roboflow 导入批次 {int(dataset.task_count or 0) + 1}",
         subject=dataset.name,
         image_count=0,
         categories=categories,
@@ -211,7 +211,6 @@ def _persist_prepared_images(
         started_at=now_utc(),
     )
     db.session.add(task)
-    dataset.tasks.append(task)
     dataset.categories = categories
     db.session.flush()
 
@@ -246,8 +245,6 @@ def _persist_prepared_images(
             detection_categories=sorted({str(item["category"]) for item in prepared.detections if item.get("category")}),
         )
         db.session.add(image)
-        dataset.images.append(image)
-        task.images.append(image)
         db.session.flush()
 
         save_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id, prepared.detections)
@@ -264,8 +261,8 @@ def _persist_prepared_images(
     task.status = "completed"
     task.completed_at = now_utc()
     task.categories = categories
-    sync_dataset_task_inplace(task)
-    sync_dataset_stats_inplace(dataset)
+    sync_dataset_task_stats_from_db(task)
+    sync_dataset_stats_from_db(dataset, commit=False)
     dataset.annotation_json = {
         **(dataset.annotation_json or {}),
         "provider": "roboflow",

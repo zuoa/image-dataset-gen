@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from flask import current_app
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from app.extensions import db
 from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
@@ -16,34 +16,32 @@ def now_utc() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def next_dataset_ordinal(dataset: Dataset) -> int:
-    return max((image.ordinal for image in dataset.images), default=0) + 1
+def _dataset_id(dataset: Dataset | str) -> str:
+    return dataset.id if isinstance(dataset, Dataset) else dataset
 
 
-def next_dataset_export_version(dataset: Dataset) -> int:
-    return max((export.version for export in dataset.exports), default=0) + 1
+def next_dataset_ordinal(dataset: Dataset | str) -> int:
+    max_ordinal = (
+        db.session.query(func.max(DatasetImage.ordinal))
+        .filter(DatasetImage.dataset_id == _dataset_id(dataset))
+        .scalar()
+        or 0
+    )
+    return int(max_ordinal) + 1
+
+
+def next_dataset_export_version(dataset: Dataset | str) -> int:
+    max_version = (
+        db.session.query(func.max(DatasetExport.version))
+        .filter(DatasetExport.dataset_id == _dataset_id(dataset))
+        .scalar()
+        or 0
+    )
+    return int(max_version) + 1
 
 
 def sample_pool_split_map(dataset: Dataset) -> dict[str, str]:
-    selected = sorted([image for image in dataset.images if image.selected], key=lambda image: image.ordinal)
-    total = len(selected)
-    if total <= 1:
-        return {image.id: "train" for image in selected}
-    if total <= 3:
-        split_map = {image.id: "train" for image in selected[:-1]}
-        split_map[selected[-1].id] = "val"
-        return split_map
-
-    train_cutoff = max(1, int(total * 0.7))
-    val_cutoff = min(total, max(train_cutoff + 1, int(total * 0.9)))
-    split_map: dict[str, str] = {}
-    for image in selected[:train_cutoff]:
-        split_map[image.id] = "train"
-    for image in selected[train_cutoff:val_cutoff]:
-        split_map[image.id] = "val"
-    for image in selected[val_cutoff:]:
-        split_map[image.id] = "test"
-    return split_map
+    return _selected_split_maps(dataset.id)[0]
 
 
 def _is_image_annotated(image: DatasetImage) -> bool:
@@ -154,8 +152,121 @@ def _selected_split_maps(dataset_id: str) -> tuple[dict[str, str], dict[str, int
     return split_map, split_counts
 
 
+def _selected_split_counts(selected_count: int) -> dict[str, int]:
+    selected_count = max(0, int(selected_count or 0))
+    if selected_count <= 0:
+        return {"train": 0, "val": 0, "test": 0}
+    if selected_count <= 1:
+        return {"train": selected_count, "val": 0, "test": 0}
+    if selected_count <= 3:
+        return {"train": selected_count - 1, "val": 1, "test": 0}
+
+    train_cutoff = max(1, int(selected_count * 0.7))
+    val_cutoff = min(selected_count, max(train_cutoff + 1, int(selected_count * 0.9)))
+    return {
+        "train": train_cutoff,
+        "val": val_cutoff - train_cutoff,
+        "test": selected_count - val_cutoff,
+    }
+
+
+def _image_split_counts_for_totals(image_count: int, selected_count: int) -> dict[str, int]:
+    counts = _selected_split_counts(selected_count)
+    counts["unselected"] = max(0, int(image_count or 0) - int(selected_count or 0))
+    return counts
+
+
+def _selected_rank_bounds(selected_count: int, split: str) -> tuple[int, int]:
+    counts = _selected_split_counts(selected_count)
+    if split == "train":
+        return 1, counts["train"]
+    if split == "val":
+        return counts["train"] + 1, counts["train"] + counts["val"]
+    if split == "test":
+        return counts["train"] + counts["val"] + 1, counts["train"] + counts["val"] + counts["test"]
+    return 1, 0
+
+
+def _ranked_selected_images_subquery(dataset_id: str):
+    return (
+        db.session.query(
+            DatasetImage.id.label("id"),
+            func.row_number()
+            .over(order_by=[DatasetImage.ordinal.asc(), DatasetImage.id.asc()])
+            .label("selected_rank"),
+        )
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .filter(DatasetImage.selected.is_(True))
+        .subquery()
+    )
+
+
+def _filter_by_sample_split(query, dataset_id: str, split_filter: str, selected_count: int):
+    if split_filter == "unselected":
+        return query.filter(DatasetImage.selected.is_(False))
+
+    start_rank, end_rank = _selected_rank_bounds(selected_count, split_filter)
+    if end_rank < start_rank:
+        return query.filter(False)
+
+    ranked_selected = _ranked_selected_images_subquery(dataset_id)
+    return (
+        query.join(ranked_selected, DatasetImage.id == ranked_selected.c.id)
+        .filter(ranked_selected.c.selected_rank >= start_rank)
+        .filter(ranked_selected.c.selected_rank <= end_rank)
+    )
+
+
+def sample_pool_split_map_for_images(
+    dataset_id: str,
+    images: list[DatasetImage],
+    *,
+    selected_count: int | None = None,
+) -> dict[str, str]:
+    selected_ids = [image.id for image in images if image.selected]
+    if not selected_ids:
+        return {}
+
+    if selected_count is None:
+        selected_count = (
+            db.session.query(func.count(DatasetImage.id))
+            .filter(DatasetImage.dataset_id == dataset_id)
+            .filter(DatasetImage.selected.is_(True))
+            .scalar()
+            or 0
+        )
+
+    ranked_selected = _ranked_selected_images_subquery(dataset_id)
+    rows = (
+        db.session.query(ranked_selected.c.id, ranked_selected.c.selected_rank)
+        .filter(ranked_selected.c.id.in_(selected_ids))
+        .all()
+    )
+    return {
+        row.id: _sample_pool_split_for_selected_count(int(selected_count), int(row.selected_rank) - 1)
+        for row in rows
+    }
+
+
 def _image_class_counts_for_dataset(dataset: Dataset) -> dict[str, int]:
     counts: dict[str, int] = {category: 0 for category in (dataset.categories or [])}
+    if db.engine.dialect.name == "sqlite":
+        rows = db.session.execute(
+            text(
+                """
+                SELECT json_each.value AS category, COUNT(*) AS image_count
+                FROM dataset_images, json_each(dataset_images.detection_categories)
+                WHERE dataset_images.dataset_id = :dataset_id
+                GROUP BY json_each.value
+                """
+            ),
+            {"dataset_id": dataset.id},
+        ).all()
+        for row in rows:
+            category = str(row.category)
+            counts[category] = int(row.image_count or 0)
+        return counts
+
     rows = (
         DatasetImage.query.with_entities(DatasetImage.detection_categories)
         .filter_by(dataset_id=dataset.id)
@@ -183,6 +294,28 @@ def _image_ids_for_class(dataset_id: str, class_filter: str | None) -> set[str] 
         for row in rows
         if class_filter in (row.detection_categories or [])
     }
+
+
+def _filter_by_image_class(query, dataset_id: str, class_filter: str | None):
+    if not class_filter:
+        return query
+    if db.engine.dialect.name == "sqlite":
+        return query.filter(
+            text(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM json_each(dataset_images.detection_categories)
+                    WHERE json_each.value = :class_filter
+                )
+                """
+            )
+        ).params(class_filter=class_filter)
+
+    class_ids = _image_ids_for_class(dataset_id, class_filter)
+    if class_ids is not None:
+        return query.filter(DatasetImage.id.in_(class_ids))
+    return query
 
 
 def _annotation_counts_for_dataset(dataset_id: str, image_count: int) -> dict[str, int]:
@@ -266,8 +399,8 @@ def build_dataset_detail_payload(
     images_limit: int | None = None,
 ) -> dict[str, Any]:
     image_count = int(dataset.image_count or 0)
-    selected_split_map, split_counts = _selected_split_maps(dataset.id)
-    split_counts["unselected"] = max(0, image_count - len(selected_split_map))
+    selected_count = int(dataset.selected_count or 0)
+    split_counts = _image_split_counts_for_totals(image_count, selected_count)
     class_counts = _image_class_counts_for_dataset(dataset)
     annotation_counts = _annotation_counts_for_dataset(dataset.id, image_count)
 
@@ -293,20 +426,15 @@ def build_dataset_detail_payload(
     split_filter = (image_filter or {}).get("split") if image_filter else None
     annotation_filter = (image_filter or {}).get("annotation") if image_filter else None
 
-    class_ids = _image_ids_for_class(dataset.id, class_filter)
-    if class_ids is not None:
-        filtered_query = filtered_query.filter(DatasetImage.id.in_(class_ids))
+    filtered_query = _filter_by_image_class(filtered_query, dataset.id, class_filter)
 
     if split_filter:
-        if split_filter == "unselected":
-            filtered_query = filtered_query.filter(DatasetImage.selected.is_(False))
-        else:
-            split_ids = [
-                image_id
-                for image_id, split in selected_split_map.items()
-                if split == split_filter
-            ]
-            filtered_query = filtered_query.filter(DatasetImage.id.in_(split_ids))
+        filtered_query = _filter_by_sample_split(
+            filtered_query,
+            dataset.id,
+            str(split_filter),
+            selected_count,
+        )
 
     if annotation_filter == "annotated":
         filtered_query = filtered_query.filter(DatasetImage.annotation_status.in_(["annotated", "empty"]))
@@ -326,10 +454,16 @@ def build_dataset_detail_payload(
                 .all()
             )
 
+    page_split_map = (
+        sample_pool_split_map_for_images(dataset.id, page_images, selected_count=selected_count)
+        if include_images
+        else {}
+    )
+
     payload = {
         **_dataset_base_payload(dataset),
         "images": [
-            build_dataset_image_payload(dataset, image, split_map=selected_split_map)
+            build_dataset_image_payload(dataset, image, split_map=page_split_map)
             for image in page_images
         ] if include_images else [],
         "imagesTotal": filtered_total,
@@ -536,19 +670,41 @@ def build_dataset_summary_for_user(user_id: str) -> dict[str, Any]:
     return build_dataset_summary(datasets)
 
 
-def sync_dataset(dataset: Dataset) -> Dataset:
-    changed = False
-    for task in dataset.tasks:
-        changed = sync_dataset_task_inplace(task) or changed
+def dataset_has_selected_images(dataset_id: str) -> bool:
+    return (
+        db.session.query(DatasetImage.id)
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .filter(DatasetImage.selected.is_(True))
+        .limit(1)
+        .first()
+        is not None
+    )
 
-    changed = sync_dataset_stats_inplace(dataset) or changed
-    if changed:
-        db.session.commit()
-        db.session.refresh(dataset)
+
+def selected_original_image_ids(dataset_id: str) -> list[str]:
+    rows = (
+        DatasetImage.query.with_entities(DatasetImage.id)
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .filter(DatasetImage.selected.is_(True))
+        .filter(DatasetImage.status != "augmented")
+        .order_by(DatasetImage.ordinal.asc(), DatasetImage.id.asc())
+        .all()
+    )
+    return [str(row.id) for row in rows]
+
+
+def sync_dataset(dataset: Dataset) -> Dataset:
+    tasks = DatasetTask.query.filter_by(dataset_id=dataset.id).all()
+    for task in tasks:
+        sync_dataset_task_stats_from_db(task)
+
+    sync_dataset_stats_from_db(dataset, commit=False)
+    db.session.commit()
+    db.session.refresh(dataset)
     return dataset
 
 
-def sync_dataset_stats_from_db(dataset: Dataset) -> Dataset:
+def sync_dataset_stats_from_db(dataset: Dataset, *, commit: bool = True) -> Dataset:
     image_count = (
         db.session.query(func.count(DatasetImage.id))
         .filter(DatasetImage.dataset_id == dataset.id)
@@ -608,8 +764,11 @@ def sync_dataset_stats_from_db(dataset: Dataset) -> Dataset:
         dataset.status = status
         changed = True
     if changed:
-        db.session.commit()
-        db.session.refresh(dataset)
+        if commit:
+            db.session.commit()
+            db.session.refresh(dataset)
+        else:
+            db.session.flush()
     return dataset
 
 

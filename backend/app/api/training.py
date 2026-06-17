@@ -20,7 +20,8 @@ from app.schemas import (
 from app.services.dataset_export_service import get_dataset_archive_path
 from app.services.dataset_service import (
     build_dataset_export_payload,
-    build_dataset_payload,
+    build_dataset_detail_payload,
+    dataset_has_selected_images,
     next_dataset_export_version,
     now_utc,
     sync_dataset,
@@ -183,7 +184,7 @@ def create_training_job(dataset_id: str):
     user_id = get_jwt_identity()
     payload = TrainingJobSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
-    if not any(image.selected for image in dataset.images):
+    if not dataset_has_selected_images(dataset.id):
         return jsonify({"message": "no images selected for training"}), 400
     classes = sorted(dict.fromkeys(int(index) for index in payload["classes"]))
     invalid_classes = [index for index in classes if index >= len(dataset.categories)]
@@ -218,7 +219,10 @@ def create_training_job(dataset_id: str):
     )
     db.session.add(job)
     db.session.commit()
-    return jsonify({"job": _build_training_job_payload(job), "dataset": build_dataset_payload(dataset)}), 201
+    return jsonify({
+        "job": _build_training_job_payload(job),
+        "dataset": build_dataset_detail_payload(dataset, include_images=False),
+    }), 201
 
 
 @training_bp.get("/datasets/<dataset_id>/training-jobs")
@@ -319,7 +323,10 @@ def delete_training_job(dataset_id: str, job_id: str):
     shutil.rmtree(_artifact_root(job.id), ignore_errors=True)
     db.session.delete(job)
     db.session.commit()
-    return jsonify({"deletedJobId": deleted_job_id, "dataset": build_dataset_payload(sync_dataset(dataset))})
+    return jsonify({
+        "deletedJobId": deleted_job_id,
+        "dataset": build_dataset_detail_payload(sync_dataset(dataset), include_images=False),
+    })
 
 
 def _bounded_form_float(name: str, *, default: float, minimum: float, maximum: float) -> float:

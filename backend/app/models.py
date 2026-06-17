@@ -108,6 +108,9 @@ class Dataset(TimestampMixin, db.Model):
 
 class DatasetTask(TimestampMixin, db.Model):
     __tablename__ = "dataset_tasks"
+    __table_args__ = (
+        db.Index("ix_dataset_tasks_dataset_created_at", "dataset_id", "created_at"),
+    )
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
     dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
@@ -141,6 +144,11 @@ class DatasetTask(TimestampMixin, db.Model):
 
 class DatasetImage(TimestampMixin, db.Model):
     __tablename__ = "dataset_images"
+    __table_args__ = (
+        db.Index("ix_dataset_images_dataset_ordinal", "dataset_id", "ordinal"),
+        db.Index("ix_dataset_images_dataset_selected_ordinal", "dataset_id", "selected", "ordinal"),
+        db.Index("ix_dataset_images_dataset_annotation_status", "dataset_id", "annotation_status"),
+    )
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
     dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)
@@ -166,6 +174,9 @@ class DatasetImage(TimestampMixin, db.Model):
 
 class DatasetExport(TimestampMixin, db.Model):
     __tablename__ = "dataset_exports"
+    __table_args__ = (
+        db.Index("ix_dataset_exports_dataset_version", "dataset_id", "version"),
+    )
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
     dataset_id = db.Column(db.String(36), db.ForeignKey("datasets.id"), nullable=False, index=True)

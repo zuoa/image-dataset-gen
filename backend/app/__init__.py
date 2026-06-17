@@ -62,6 +62,7 @@ def create_app(
             except OperationalError:
                 pass
             _ensure_schema_columns()
+            _ensure_schema_indexes()
             _backfill_detection_categories(app)
             _ensure_demo_user(app)
 
@@ -158,6 +159,36 @@ def _ensure_schema_columns() -> None:
                 )
             )
             db.session.commit()
+
+
+def _ensure_schema_indexes() -> None:
+    inspector = inspect(db.engine)
+    table_names = set(inspector.get_table_names())
+    index_statements = {
+        "dataset_tasks": [
+            "CREATE INDEX IF NOT EXISTS ix_dataset_tasks_dataset_created_at "
+            "ON dataset_tasks (dataset_id, created_at)"
+        ],
+        "dataset_images": [
+            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_ordinal "
+            "ON dataset_images (dataset_id, ordinal)",
+            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_selected_ordinal "
+            "ON dataset_images (dataset_id, selected, ordinal)",
+            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_annotation_status "
+            "ON dataset_images (dataset_id, annotation_status)",
+        ],
+        "dataset_exports": [
+            "CREATE INDEX IF NOT EXISTS ix_dataset_exports_dataset_version "
+            "ON dataset_exports (dataset_id, version)"
+        ],
+    }
+
+    for table_name, statements in index_statements.items():
+        if table_name not in table_names:
+            continue
+        for statement in statements:
+            db.session.execute(text(statement))
+    db.session.commit()
 
 
 def _backfill_detection_categories(app: Flask, *, batch_size: int = 500) -> None:
