@@ -25,6 +25,8 @@ from app.services.dataset_service import (
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
 from app.services.video_import_service import (
+    DEFAULT_VIDEO_FRAME_INTERVAL,
+    DEFAULT_VIDEO_FRAME_INTERVAL_MODE,
     DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
     cleanup_video_import_source,
     expected_extracted_frame_count,
@@ -343,9 +345,9 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
             raise RuntimeError("视频源文件不存在，请重新上传。")
 
         frame_interval_mode = normalize_video_frame_interval_mode(
-            str(video_config.get("frameIntervalMode") or "frames")
+            str(video_config.get("frameIntervalMode") or DEFAULT_VIDEO_FRAME_INTERVAL_MODE)
         )
-        frame_interval = max(1, int(video_config.get("frameInterval", 30)))
+        frame_interval = max(1, int(video_config.get("frameInterval", DEFAULT_VIDEO_FRAME_INTERVAL)))
         frame_interval_seconds = max(
             0.01,
             float(video_config.get("frameIntervalSeconds") or DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS),

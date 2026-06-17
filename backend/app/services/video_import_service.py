@@ -19,8 +19,8 @@ ALLOWED_VIDEO_EXTENSIONS = {
     ".dav", ".mpg", ".mpeg", ".ps",
 }
 DEFAULT_VIDEO_FRAME_INTERVAL = 30
-DEFAULT_VIDEO_FRAME_INTERVAL_MODE = "frames"
-DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
+DEFAULT_VIDEO_FRAME_INTERVAL_MODE = "seconds"
+DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 5.0
 DEFAULT_VIDEO_OUTPUT_FORMAT = "jpg"
 DEFAULT_VIDEO_JPEG_QUALITY = 95
 DEFAULT_VIDEO_FILENAME_PREFIX = "frame"
@@ -59,7 +59,7 @@ def normalize_video_target_size(value: str | None) -> str:
 
 def normalize_video_frame_interval_mode(value: str | None) -> str:
     normalized = (value or DEFAULT_VIDEO_FRAME_INTERVAL_MODE).strip().lower()
-    return "seconds" if normalized == "seconds" else DEFAULT_VIDEO_FRAME_INTERVAL_MODE
+    return normalized if normalized in {"frames", "seconds"} else DEFAULT_VIDEO_FRAME_INTERVAL_MODE
 
 
 def video_target_size_max_dimension(value: str | None) -> int | None:

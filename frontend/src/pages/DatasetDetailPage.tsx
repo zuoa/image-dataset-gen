@@ -208,13 +208,14 @@ export function DatasetDetailPage() {
   const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
   const [activeImportTab, setActiveImportTab] = useState<ImportTab>("video");
-  const [videoFrameIntervalMode, setVideoFrameIntervalMode] = useState<VideoFrameIntervalMode>("frames");
+  const [videoFrameIntervalMode, setVideoFrameIntervalMode] = useState<VideoFrameIntervalMode>("seconds");
   const [videoFrameInterval, setVideoFrameInterval] = useState(30);
-  const [videoFrameIntervalSeconds, setVideoFrameIntervalSeconds] = useState(1);
+  const [videoFrameIntervalSeconds, setVideoFrameIntervalSeconds] = useState(5);
   const [videoOutputFormat, setVideoOutputFormat] = useState<VideoOutputFormat>("jpg");
   const [videoJpegQuality, setVideoJpegQuality] = useState(95);
   const [videoFilenamePrefix, setVideoFilenamePrefix] = useState("frame");
   const [videoTargetSize, setVideoTargetSize] = useState<VideoTargetSize>("original");
+  const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
   const [roboflowApiKey, setRoboflowApiKey] = useState("");
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
@@ -265,7 +266,7 @@ export function DatasetDetailPage() {
   const trainingClassIndexSet = new Set(trainingClassIndices);
   const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
   const normalizedVideoFrameInterval = Math.max(1, Math.min(10000, Math.round(videoFrameInterval) || 30));
-  const normalizedVideoFrameIntervalSeconds = Math.max(0.01, Math.min(3600, Number(videoFrameIntervalSeconds) || 1));
+  const normalizedVideoFrameIntervalSeconds = Math.max(0.01, Math.min(3600, Number(videoFrameIntervalSeconds) || 5));
   const videoFrameIntervalHint =
     videoFrameIntervalMode === "seconds"
       ? `每 ${normalizedVideoFrameIntervalSeconds.toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 秒取一张`
@@ -273,6 +274,9 @@ export function DatasetDetailPage() {
   const videoFilenamePrefixPreview = videoFilenamePrefix.trim().replace(/[^A-Za-z0-9_-]/g, "") || "frame";
   const videoOutputExample = `${videoFilenamePrefixPreview}_000000.${videoOutputFormat}`;
   const videoTargetSizeLabel = videoTargetSizeOptions.find((option) => option.value === videoTargetSize)?.label ?? "原图";
+  const selectedVideoFileSize = selectedVideoFile
+    ? `${(selectedVideoFile.size / 1024 / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MB`
+    : "";
 
   useEffect(() => {
     if (!token || !datasetId) return;
@@ -815,9 +819,20 @@ export function DatasetDetailPage() {
     }
   }
 
-  async function handleVideoImport(event: ChangeEvent<HTMLInputElement>) {
+  function handleVideoSelection(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!token || !datasetId || !file) return;
+    if (!file) return;
+    setSelectedVideoFile(file);
+    setImportSummary(null);
+    setActionError(null);
+    event.target.value = "";
+  }
+
+  async function handleVideoImport() {
+    if (!token || !datasetId || !selectedVideoFile) {
+      setActionError("请先选择视频。");
+      return;
+    }
     const frameInterval = normalizedVideoFrameInterval;
     const frameIntervalSeconds = normalizedVideoFrameIntervalSeconds;
     const jpegQuality = Math.max(1, Math.min(100, Math.round(videoJpegQuality) || 95));
@@ -825,7 +840,7 @@ export function DatasetDetailPage() {
     setIsImportingVideo(true);
     setImportSummary(null);
     try {
-      const response = await importDatasetVideo(datasetId, token, file, {
+      const response = await importDatasetVideo(datasetId, token, selectedVideoFile, {
         frameIntervalMode: videoFrameIntervalMode,
         frameInterval,
         frameIntervalSeconds,
@@ -842,12 +857,12 @@ export function DatasetDetailPage() {
           ? `已创建视频抽帧任务，${videoFrameIntervalHint}，尺寸 ${videoTargetSizeLabel}`
           : `已从视频抽取 ${importedCount} 张图片`,
       );
+      setSelectedVideoFile(null);
       setIsImportModalOpen(false);
       void pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
-      event.target.value = "";
       setIsImportingVideo(false);
     }
   }
@@ -1126,7 +1141,7 @@ export function DatasetDetailPage() {
                 type="file"
                 accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.dav,.mpg,.mpeg,.ps"
                 className="hidden"
-                onChange={handleVideoImport}
+                onChange={handleVideoSelection}
               />
             </div>
             {importSummary ? <div className="mt-3 text-sm text-neutral-500">{importSummary}</div> : null}
@@ -1860,7 +1875,7 @@ export function DatasetDetailPage() {
                       disabled={isAnyImporting}
                     >
                       <Upload className="mr-2 h-4 w-4" />
-                      {isImportingVideo ? "抽帧中..." : "选择视频"}
+                      {selectedVideoFile ? "更换视频" : "选择视频"}
                     </Button>
                   </div>
 
@@ -1924,7 +1939,19 @@ export function DatasetDetailPage() {
                     </div>
 
                     <div className="rounded-[18px] border border-neutral-200 bg-white/75 p-4 dark:border-white/10 dark:bg-black/20">
-                      <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">输出格式</div>
+                      <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">已选视频</div>
+                      <div className="mt-2 rounded-[14px] border border-neutral-200 px-3 py-2 text-sm text-neutral-700 dark:border-white/10 dark:text-neutral-200">
+                        {selectedVideoFile ? (
+                          <>
+                            <div className="truncate">{selectedVideoFile.name}</div>
+                            <div className="mt-1 text-xs text-neutral-500">{selectedVideoFileSize}</div>
+                          </>
+                        ) : (
+                          <span className="text-neutral-500">尚未选择视频</span>
+                        )}
+                      </div>
+
+                      <div className="mt-5 text-[11px] uppercase tracking-[0.24em] text-neutral-500">输出格式</div>
                       <div className={`${segmentedGroupClasses} mt-3 w-full`}>
                         {(["jpg", "png"] as const).map((format) => (
                           <button
@@ -1974,6 +2001,15 @@ export function DatasetDetailPage() {
                         ))}
                       </div>
                       <div className="mt-2 text-xs text-neutral-500">长边超过目标时等比缩小</div>
+                      <Button
+                        type="button"
+                        className="mt-5 w-full"
+                        onClick={() => void handleVideoImport()}
+                        disabled={!selectedVideoFile || isAnyImporting}
+                      >
+                        {isImportingVideo ? <Loader className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+                        {isImportingVideo ? "抽帧中..." : "开始抽帧"}
+                      </Button>
                     </div>
                   </div>
                 </div>

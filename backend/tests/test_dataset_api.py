@@ -719,6 +719,7 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
         headers=headers,
         data={
             "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=6)), "sample.avi"),
+            "frame_interval_mode": "frames",
             "frame_interval": "2",
             "output_format": "png",
             "jpeg_quality": "95",
@@ -748,6 +749,7 @@ def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_pat
         headers=headers,
         data={
             "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=6)), "sample-again.avi"),
+            "frame_interval_mode": "frames",
             "frame_interval": "2",
             "output_format": "png",
             "jpeg_quality": "95",
@@ -815,6 +817,39 @@ def test_video_import_supports_seconds_interval(tmp_path: Path):
     images = _fetch_images(client, dataset_id, headers)
     assert [image["diversityVars"]["sourceFrame"] for image in images] == ["0", "2", "4"]
     assert images[0]["diversityVars"]["outputFilename"] == "second_frame_000000.png"
+
+
+def test_video_import_defaults_to_seconds_interval(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-video-default-seconds")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/video",
+        headers=headers,
+        data={
+            "video": (BytesIO(_avi_video_bytes(tmp_path, frame_count=26)), "sample.avi"),
+            "output_format": "png",
+            "jpeg_quality": "95",
+            "filename_prefix": "default_second_frame",
+            "target_size": "original",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    video_config = payload["task"]["config"]["video"]
+    assert video_config["frameIntervalMode"] == "seconds"
+    assert video_config["frameIntervalSeconds"] == 5.0
+    assert video_config["frameRate"] == 5.0
+    assert video_config["effectiveFrameInterval"] == 25
+    assert video_config["expectedFrames"] == 2
+    assert payload["dataset"]["imageCount"] == 2
 
 
 def test_video_import_resizes_frames_to_target_size(tmp_path: Path):
