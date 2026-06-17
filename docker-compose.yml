@@ -5,7 +5,7 @@ x-backend-env: &backend-env
   DEMO_USERNAME: ${DEMO_USERNAME:-dataset}
   DEMO_PASSWORD: ${DEMO_PASSWORD:-Dataset123!}
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4173}
-  DATABASE_URL: ${DATABASE_URL:-sqlite:////app/storage/dataset_gen.db}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dataset_gen:dataset_gen@postgres:5432/dataset_gen}
   AUTO_CREATE_SCHEMA: ${AUTO_CREATE_SCHEMA:-true}
   STARTUP_MAINTENANCE_ASYNC: ${STARTUP_MAINTENANCE_ASYNC:-true}
   STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
@@ -29,6 +29,21 @@ x-backend-env: &backend-env
   TRAINING_DEFAULT_MODEL: ${TRAINING_DEFAULT_MODEL:-yolov8n.pt}
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dataset_gen}
+      POSTGRES_USER: ${POSTGRES_USER:-dataset_gen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataset_gen}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -46,6 +61,8 @@ services:
     restart: unless-stopped
     environment: *backend-env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -73,6 +90,8 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       backend:
@@ -111,5 +130,6 @@ services:
       - generated_images:/usr/share/nginx/html/images:ro
 
 volumes:
+  postgres_data:
   backend_storage:
   generated_images:

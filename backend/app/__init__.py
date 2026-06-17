@@ -14,14 +14,14 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 from flask import Flask, current_app, jsonify
 from marshmallow import ValidationError
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from werkzeug.security import generate_password_hash
 
 from app.api.auth import auth_bp
 from app.api.datasets import datasets_bp
 from app.api.system import system_bp
 from app.api.training import training_bp
-from app.config import Config
+from app.config import Config, normalize_database_uri
 from app.extensions import celery, cors, db, jwt
 from app.models import DatasetImage, User
 from app.services.model_profile_service import ensure_default_model_profiles
@@ -33,7 +33,7 @@ def create_app(
     app = Flask(__name__, instance_path=str(instance_path) if instance_path is not None else None)
     app.config.from_object(config_object or Config)
     _prepare_runtime_paths(app)
-    _configure_sqlite_engine(app)
+    _configure_database_engine(app)
 
     db.init_app(app)
     jwt.init_app(app)
@@ -61,28 +61,33 @@ def create_app(
     with app.app_context():
         os.makedirs(app.config["STORAGE_ROOT"], exist_ok=True)
         if app.config["AUTO_CREATE_SCHEMA"]:
-            if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
+            if _is_sqlite_file_uri(app.config["SQLALCHEMY_DATABASE_URI"]):
                 with db.engine.connect() as conn:
                     conn.execute(text("PRAGMA journal_mode=WAL"))
                     conn.execute(text("PRAGMA busy_timeout=60000"))
             try:
                 db.create_all()
             except OperationalError:
-                pass
-            _ensure_schema_columns()
-            _ensure_demo_user(app)
-            if app.config.get("STARTUP_MAINTENANCE_ASYNC", True):
-                _schedule_startup_maintenance(app)
+                app.logger.exception("Database schema initialization failed")
             else:
-                _run_startup_maintenance(app)
+                _ensure_schema_columns()
+                _ensure_demo_user(app)
+                if app.config.get("STARTUP_MAINTENANCE_ASYNC", True):
+                    _schedule_startup_maintenance(app)
+                else:
+                    _run_startup_maintenance(app)
 
     return app
 
 
 def _prepare_runtime_paths(app: Flask) -> None:
     os.makedirs(app.instance_path, exist_ok=True)
+    app.config["SQLALCHEMY_DATABASE_URI"] = normalize_database_uri(
+        app.config["SQLALCHEMY_DATABASE_URI"]
+    )
     app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_sqlite_uri(
-        app.config["SQLALCHEMY_DATABASE_URI"], app.instance_path
+        app.config["SQLALCHEMY_DATABASE_URI"],
+        app.instance_path,
     )
     sqlite_path = _sqlite_database_path(app.config["SQLALCHEMY_DATABASE_URI"])
     if sqlite_path is not None:
@@ -115,6 +120,10 @@ def _sqlite_database_path(database_uri: str) -> Path | None:
     return Path(database_uri.removeprefix("sqlite:///"))
 
 
+def _is_sqlite_file_uri(database_uri: str) -> bool:
+    return database_uri.startswith("sqlite:///") and database_uri != "sqlite:///:memory:"
+
+
 def _ensure_demo_user(app: Flask) -> None:
     demo_username = app.config["DEMO_USERNAME"]
     existing = User.query.filter_by(email=demo_username).first()
@@ -127,20 +136,30 @@ def _ensure_demo_user(app: Flask) -> None:
         plan="pro",
     )
     db.session.add(demo_user)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = User.query.filter_by(email=demo_username).first()
+        if existing:
+            ensure_default_model_profiles(existing)
+        return
     ensure_default_model_profiles(demo_user)
 
 
-def _configure_sqlite_engine(app: Flask) -> None:
+def _configure_database_engine(app: Flask) -> None:
     uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
-    if not uri.startswith("sqlite:///") or uri == "sqlite:///:memory:":
-        return
-    options = app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}
-    connect_args = dict(options.get("connect_args") or {})
-    connect_args.setdefault("timeout", 60)
-    connect_args.setdefault("check_same_thread", False)
-    options["connect_args"] = connect_args
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = options
+    options = dict(app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {})
+    if _is_sqlite_file_uri(uri):
+        connect_args = dict(options.get("connect_args") or {})
+        connect_args.setdefault("timeout", 60)
+        connect_args.setdefault("check_same_thread", False)
+        options["connect_args"] = connect_args
+    elif uri.startswith("postgresql"):
+        options.setdefault("pool_pre_ping", True)
+
+    if options:
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = options
 
 
 def _ensure_schema_columns() -> None:
@@ -165,10 +184,24 @@ def _ensure_schema_columns() -> None:
         if "detection_categories" not in image_columns:
             db.session.execute(
                 text(
-                    "ALTER TABLE dataset_images ADD COLUMN detection_categories JSON NOT NULL DEFAULT '[]'"
+                    "ALTER TABLE dataset_images "
+                    f"ADD COLUMN detection_categories {_json_column_type_sql()} "
+                    f"NOT NULL DEFAULT {_empty_json_array_default_sql()}"
                 )
             )
             db.session.commit()
+
+
+def _json_column_type_sql() -> str:
+    if db.engine.dialect.name == "postgresql":
+        return "JSONB"
+    return "JSON"
+
+
+def _empty_json_array_default_sql() -> str:
+    if db.engine.dialect.name == "postgresql":
+        return "'[]'::jsonb"
+    return "'[]'"
 
 
 def _ensure_schema_indexes() -> None:
@@ -192,6 +225,11 @@ def _ensure_schema_indexes() -> None:
             "ON dataset_exports (dataset_id, version)"
         ],
     }
+    if db.engine.dialect.name == "postgresql":
+        index_statements["dataset_images"].append(
+            "CREATE INDEX IF NOT EXISTS ix_dataset_images_detection_categories_gin "
+            "ON dataset_images USING GIN (detection_categories)"
+        )
 
     for table_name, statements in index_statements.items():
         if table_name not in table_names:

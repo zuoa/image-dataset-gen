@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.extensions import db
 
@@ -14,6 +15,10 @@ def generate_uuid() -> str:
 
 def naive_utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def json_column_type():
+    return db.JSON().with_variant(JSONB(), "postgresql")
 
 
 class TimestampMixin:
@@ -71,13 +76,13 @@ class Dataset(TimestampMixin, db.Model):
     user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=False, default="")
-    categories = db.Column(db.JSON, nullable=False, default=list)
+    categories = db.Column(json_column_type(), nullable=False, default=list)
     status = db.Column(db.String(32), nullable=False, default="draft", index=True)
     image_count = db.Column(db.Integer, nullable=False, default=0)
     selected_count = db.Column(db.Integer, nullable=False, default=0)
     task_count = db.Column(db.Integer, nullable=False, default=0)
     spent_cost = db.Column(db.Float, nullable=False, default=0.0)
-    annotation_json = db.Column(db.JSON, nullable=False, default=dict)
+    annotation_json = db.Column(json_column_type(), nullable=False, default=dict)
 
     user = db.relationship("User", back_populates="datasets")
     tasks = db.relationship(
@@ -119,9 +124,9 @@ class DatasetTask(TimestampMixin, db.Model):
     task_name = db.Column(db.String(255), nullable=False)
     subject = db.Column(db.String(255), nullable=False, default="")
     image_count = db.Column(db.Integer, nullable=False, default=0)
-    categories = db.Column(db.JSON, nullable=False, default=list)
-    config_json = db.Column(db.JSON, nullable=False, default=dict)
-    prompt_json = db.Column(db.JSON, nullable=False, default=dict)
+    categories = db.Column(json_column_type(), nullable=False, default=list)
+    config_json = db.Column(json_column_type(), nullable=False, default=dict)
+    prompt_json = db.Column(json_column_type(), nullable=False, default=dict)
     status = db.Column(db.String(32), nullable=False, default="draft", index=True)
     progress_percent = db.Column(db.Integer, nullable=False, default=0)
     images_generated = db.Column(db.Integer, nullable=False, default=0)
@@ -160,12 +165,12 @@ class DatasetImage(TimestampMixin, db.Model):
     latency_ms = db.Column(db.Integer, nullable=False, default=0)
     seed = db.Column(db.Integer, nullable=False, default=0)
     prompt_text = db.Column(db.Text, nullable=False, default="")
-    diversity_vars = db.Column(db.JSON, nullable=False, default=dict)
+    diversity_vars = db.Column(json_column_type(), nullable=False, default=dict)
     preview_svg = db.Column(db.Text, nullable=False, default="")
     selected = db.Column(db.Boolean, nullable=False, default=True)
     annotation_status = db.Column(db.String(32), nullable=False, default="pending")
     confidence_score = db.Column(db.Float, nullable=True)
-    detection_categories = db.Column(db.JSON, nullable=False, default=list)
+    detection_categories = db.Column(json_column_type(), nullable=False, default=list)
     generated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=naive_utcnow)
 
     dataset = db.relationship("Dataset", back_populates="images")
@@ -183,7 +188,7 @@ class DatasetExport(TimestampMixin, db.Model):
     version = db.Column(db.Integer, nullable=False, default=1)
     export_format = db.Column(db.String(32), nullable=False)
     status = db.Column(db.String(32), nullable=False, default="ready")
-    summary_json = db.Column(db.JSON, nullable=False, default=dict)
+    summary_json = db.Column(json_column_type(), nullable=False, default=dict)
     download_url = db.Column(db.String(255), nullable=False)
 
     dataset = db.relationship("Dataset", back_populates="exports")
@@ -195,7 +200,7 @@ class TrainingWorker(TimestampMixin, db.Model):
     id = db.Column(db.String(64), primary_key=True, default=generate_uuid)
     name = db.Column(db.String(120), nullable=False)
     status = db.Column(db.String(32), nullable=False, default="idle", index=True)
-    capabilities_json = db.Column(db.JSON, nullable=False, default=dict)
+    capabilities_json = db.Column(json_column_type(), nullable=False, default=dict)
     version = db.Column(db.String(64), nullable=False, default="")
     last_heartbeat_at = db.Column(db.DateTime(timezone=True), nullable=True)
     current_job_id = db.Column(db.String(36), nullable=True, index=True)
@@ -214,8 +219,8 @@ class TrainingJob(TimestampMixin, db.Model):
     worker_id = db.Column(db.String(64), db.ForeignKey("training_workers.id"), nullable=True, index=True)
     status = db.Column(db.String(32), nullable=False, default="queued", index=True)
     progress_percent = db.Column(db.Integer, nullable=False, default=0)
-    config_json = db.Column(db.JSON, nullable=False, default=dict)
-    metrics_json = db.Column(db.JSON, nullable=False, default=dict)
+    config_json = db.Column(json_column_type(), nullable=False, default=dict)
+    metrics_json = db.Column(json_column_type(), nullable=False, default=dict)
     error_message = db.Column(db.Text, nullable=False, default="")
     started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -270,7 +275,7 @@ class TrainingInferenceJob(TimestampMixin, db.Model):
     input_height = db.Column(db.Integer, nullable=False, default=0)
     result_mime_type = db.Column(db.String(64), nullable=False, default="")
     result_storage_path = db.Column(db.String(512), nullable=False, default="")
-    detections_json = db.Column(db.JSON, nullable=False, default=list)
+    detections_json = db.Column(json_column_type(), nullable=False, default=list)
     error_message = db.Column(db.Text, nullable=False, default="")
     started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     completed_at = db.Column(db.DateTime(timezone=True), nullable=True)

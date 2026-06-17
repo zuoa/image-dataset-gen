@@ -1,6 +1,6 @@
 # Dataset Forge
 
-基于 Flask + SQLite + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
+基于 Flask + PostgreSQL + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
 
 - Token 鉴权与演示账号
 - 数据集管理与批次化生成
@@ -38,9 +38,10 @@ docker compose up --build
 
 数据库说明：
 
-- Docker Compose 默认使用 SQLite，数据库文件位于容器内 `/app/storage/dataset_gen.db`
-- 本地直接运行后端时，默认数据库文件位于 `backend/instance/dataset_gen_dev.db`
-- `DATABASE_URL` 仍可覆盖，但项目默认链路已经统一到 SQLite
+- Docker Compose 默认启动 `postgres:16-alpine`，数据持久化在 `postgres_data` volume
+- 默认连接串为 `postgresql+psycopg://dataset_gen:dataset_gen@postgres:5432/dataset_gen`
+- 本地直接运行后端时，默认连接 `postgresql+psycopg://dataset_gen:dataset_gen@localhost:5432/dataset_gen`
+- 可通过 `DATABASE_URL` 覆盖数据库连接；测试环境仍使用内存 SQLite，便于快速运行 pytest
 
 ## 演示账号
 
@@ -210,4 +211,4 @@ Ultralytics 在 `amp=True` 时会运行 AMP 自检，并可能额外下载 `yolo
 
 - WebSocket、Bull、真实图像生成 API 尚未接入
 - 数据导出会生成真实 ZIP；只有在数据集样本池中确实存在图片文件后才会被打包
-- 当前使用 `AUTO_CREATE_SCHEMA=true` 自动建表，生产环境建议切换为 Alembic/Flask-Migrate
+- 当前使用 `AUTO_CREATE_SCHEMA=true` 自动建表，生产环境建议切换为 Alembic/Flask-Migrate 管理 PostgreSQL 迁移

@@ -10,8 +10,20 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _default_sqlite_uri() -> str:
-    return f"sqlite:///{(BACKEND_ROOT / 'instance' / 'dataset_gen_dev.db').resolve().as_posix()}"
+def _default_postgresql_uri() -> str:
+    return "postgresql+psycopg://dataset_gen:dataset_gen@localhost:5432/dataset_gen"
+
+
+def normalize_database_uri(database_uri: str) -> str:
+    if database_uri.startswith("postgres://"):
+        return f"postgresql+psycopg://{database_uri.removeprefix('postgres://')}"
+    if database_uri.startswith("postgresql://"):
+        return f"postgresql+psycopg://{database_uri.removeprefix('postgresql://')}"
+    return database_uri
+
+
+def _database_uri() -> str:
+    return normalize_database_uri(os.getenv("DATABASE_URL", _default_postgresql_uri()))
 
 
 def _default_storage_root() -> str:
@@ -41,7 +53,7 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
         days=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
     )
-    SQLALCHEMY_DATABASE_URI: str = os.getenv("DATABASE_URL", _default_sqlite_uri())
+    SQLALCHEMY_DATABASE_URI: str = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:4173")
     API_PREFIX: str = "/api/v1"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from typing import Any
 
 from flask import current_app
@@ -250,7 +251,8 @@ def sample_pool_split_map_for_images(
 
 def _image_class_counts_for_dataset(dataset: Dataset) -> dict[str, int]:
     counts: dict[str, int] = {category: 0 for category in (dataset.categories or [])}
-    if db.engine.dialect.name == "sqlite":
+    dialect_name = db.engine.dialect.name
+    if dialect_name == "sqlite":
         rows = db.session.execute(
             text(
                 """
@@ -258,6 +260,25 @@ def _image_class_counts_for_dataset(dataset: Dataset) -> dict[str, int]:
                 FROM dataset_images, json_each(dataset_images.detection_categories)
                 WHERE dataset_images.dataset_id = :dataset_id
                 GROUP BY json_each.value
+                """
+            ),
+            {"dataset_id": dataset.id},
+        ).all()
+        for row in rows:
+            category = str(row.category)
+            counts[category] = int(row.image_count or 0)
+        return counts
+    if dialect_name == "postgresql":
+        rows = db.session.execute(
+            text(
+                """
+                SELECT category.value AS category, COUNT(*) AS image_count
+                FROM dataset_images
+                CROSS JOIN LATERAL jsonb_array_elements_text(
+                    dataset_images.detection_categories
+                ) AS category(value)
+                WHERE dataset_images.dataset_id = :dataset_id
+                GROUP BY category.value
                 """
             ),
             {"dataset_id": dataset.id},
@@ -299,7 +320,8 @@ def _image_ids_for_class(dataset_id: str, class_filter: str | None) -> set[str] 
 def _filter_by_image_class(query, dataset_id: str, class_filter: str | None):
     if not class_filter:
         return query
-    if db.engine.dialect.name == "sqlite":
+    dialect_name = db.engine.dialect.name
+    if dialect_name == "sqlite":
         return query.filter(
             text(
                 """
@@ -311,6 +333,10 @@ def _filter_by_image_class(query, dataset_id: str, class_filter: str | None):
                 """
             )
         ).params(class_filter=class_filter)
+    if dialect_name == "postgresql":
+        return query.filter(
+            text("dataset_images.detection_categories @> CAST(:class_filter_json AS jsonb)")
+        ).params(class_filter_json=json.dumps([class_filter]))
 
     class_ids = _image_ids_for_class(dataset_id, class_filter)
     if class_ids is not None:
