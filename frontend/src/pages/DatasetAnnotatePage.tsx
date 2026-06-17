@@ -751,9 +751,9 @@ export function DatasetAnnotatePage() {
               </div>
               <CheckCircle2 className="h-5 w-5 text-neutral-400" />
             </div>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex min-w-0 items-center gap-2">
               <ListFilter className="h-4 w-4 shrink-0 text-neutral-400" />
-              <div className={cn(segmentedGroupClasses, "w-full justify-between")}>
+              <div className={cn(segmentedGroupClasses, "min-w-0 flex-1 justify-between")}>
                 {annotationFilterOptions.map((option) => {
                   const active = annotationFilter === option.value;
                   const count =
@@ -766,12 +766,12 @@ export function DatasetAnnotatePage() {
                     <button
                       key={option.value || "all"}
                       type="button"
-                      className={segmentedButtonClasses(active, "min-w-0 flex-1 px-2 py-1.5 text-xs")}
+                      className={segmentedButtonClasses(active, "min-w-0 flex-1 basis-0 px-2 py-1.5 text-xs")}
                       onClick={() => changeAnnotationFilter(option.value)}
                       title={option.value === "unannotated" ? "快捷键 U" : undefined}
                     >
-                      <span className="truncate">{option.label}</span>
-                      <span className={cn("text-[11px]", active ? "text-current" : "text-neutral-400")}>{count}</span>
+                      <span className="min-w-0 truncate whitespace-nowrap">{option.label}</span>
+                      <span className={cn("shrink-0 text-[11px] tabular-nums", active ? "text-current" : "text-neutral-400")}>{count}</span>
                     </button>
                   );
                 })}
