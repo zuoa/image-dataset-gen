@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ImageOff,
+  ListFilter,
   Loader2,
   MousePointer2,
   PencilRuler,
@@ -19,6 +20,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
+import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
 import {
   boxFromCorners,
   DEFAULT_BOX_SIZE,
@@ -30,13 +32,19 @@ import {
   type ImageViewport,
   type ResizeCorner,
 } from "../lib/annotation";
-import type { Dataset, DatasetImage } from "../lib/types";
+import type { Dataset, DatasetImage, ImageFilter } from "../lib/types";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
 const categoryPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
 const unsavedAnnotationMessage = "当前图片有未保存的标注改动，确认放弃并继续？";
 const PAGE_SIZE = 100;
+type AnnotationFilter = "" | "annotated" | "unannotated";
+const annotationFilterOptions: Array<{ value: AnnotationFilter; label: string }> = [
+  { value: "", label: "全部" },
+  { value: "unannotated", label: "未标注" },
+  { value: "annotated", label: "已处理" },
+];
 
 function annotationStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -50,6 +58,16 @@ function annotationStatusLabel(status: string) {
 
 function isProcessed(status: string) {
   return status === "annotated" || status === "empty";
+}
+
+function buildAnnotationImageFilter(annotationFilter: AnnotationFilter): ImageFilter | undefined {
+  return annotationFilter ? { annotation: annotationFilter } : undefined;
+}
+
+function imageMatchesAnnotationFilter(image: DatasetImage, annotationFilter: AnnotationFilter) {
+  if (!annotationFilter) return true;
+  const processed = isProcessed(image.annotationStatus);
+  return annotationFilter === "annotated" ? processed : !processed;
 }
 
 function categoryColor(category: string, categories: string[]) {
@@ -82,6 +100,7 @@ export function DatasetAnnotatePage() {
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [currentCategory, setCurrentCategory] = useState("object");
+  const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>("");
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -96,41 +115,61 @@ export function DatasetAnnotatePage() {
   hasMoreRef.current = hasMoreImages;
   const isLoadingMoreRef = useRef(false);
   isLoadingMoreRef.current = isLoadingMore;
+  const annotationFilterRef = useRef<AnnotationFilter>("");
+  annotationFilterRef.current = annotationFilter;
   const loadersRef = useRef<{
+    reloadFirstPage: (preferredImageId?: string | null) => Promise<DatasetImage[] | null>;
     loadMore: () => Promise<DatasetImage[] | null>;
-  }>({ loadMore: async () => null });
+  }>({ reloadFirstPage: async () => null, loadMore: async () => null });
 
   const images = loadedImages;
   const categories = dataset?.categories ?? [];
+  const annotationImageFilter = useMemo(() => buildAnnotationImageFilter(annotationFilter), [annotationFilter]);
   const activeIndex = activeImageId ? images.findIndex((image) => image.id === activeImageId) : images.length > 0 ? 0 : -1;
   const activeImage = activeIndex >= 0 ? images[activeIndex] : null;
   const processedCount = useMemo(
     () => images.filter((image) => isProcessed(image.annotationStatus)).length,
     [images],
   );
+  const annotationCounts = dataset?.imageAnnotationCounts;
+  const totalImageCount = dataset?.imageCount ?? imagesTotal;
+  const annotatedTotal = annotationCounts?.annotated ?? processedCount;
+  const unannotatedTotal = annotationCounts?.unannotated ?? Math.max(totalImageCount - annotatedTotal, 0);
+  const queueLabel =
+    annotationFilter === "unannotated"
+      ? `${imagesTotal} 张未标注`
+      : annotationFilter === "annotated"
+        ? `${imagesTotal} 张已处理`
+        : `${imagesTotal} 张样本`;
   const activeCategory = currentCategory || categories[0] || "object";
   const hasAnnotationChanges = activeImage !== null && !detectionsEqual(activeImage.detections, draftDetections);
   const canSave = activeImage !== null && !deletingImageId && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
   const isDeletingActiveImage = Boolean(activeImage && deletingImageId === activeImage.id);
+
+  function applyDatasetPage(nextDataset: Dataset, preferredImageId?: string | null) {
+    const pageImages = nextDataset.images ?? [];
+    const nextTotal = nextDataset.imagesTotal ?? pageImages.length;
+    setDataset(nextDataset);
+    setLoadedImages(pageImages);
+    setImagesTotal(nextTotal);
+    setImagesCursor(pageImages.length);
+    setHasMoreImages(pageImages.length < nextTotal);
+    setActiveImageId((current) => {
+      if (preferredImageId && pageImages.some((image) => image.id === preferredImageId)) return preferredImageId;
+      if (current && pageImages.some((image) => image.id === current)) return current;
+      return pageImages[0]?.id ?? null;
+    });
+  }
 
   useEffect(() => {
     if (!token || !datasetId) return;
 
     let disposed = false;
     setIsLoadingFirstPage(true);
-    void getDataset(datasetId, token, { offset: 0, limit: PAGE_SIZE })
+    void getDataset(datasetId, token, { offset: 0, limit: PAGE_SIZE, filter: annotationImageFilter })
       .then((response) => {
         if (disposed) return;
-        const pageImages = response.dataset.images ?? [];
-        setDataset(response.dataset);
-        setLoadedImages(pageImages);
-        setImagesTotal(response.dataset.imagesTotal ?? pageImages.length);
-        setImagesCursor(pageImages.length);
-        setHasMoreImages(pageImages.length < (response.dataset.imagesTotal ?? pageImages.length));
-        setActiveImageId((current) => {
-          if (current && pageImages.some((image) => image.id === current)) return current;
-          return pageImages[0]?.id ?? null;
-        });
+        applyDatasetPage(response.dataset);
         setActionError(null);
       })
       .catch((error) => {
@@ -145,16 +184,33 @@ export function DatasetAnnotatePage() {
     return () => {
       disposed = true;
     };
-  }, [datasetId, token]);
+  }, [annotationImageFilter, datasetId, token]);
 
   useEffect(() => {
+    loadersRef.current.reloadFirstPage = async (preferredImageId?: string | null) => {
+      if (!token || !datasetId) return null;
+      setIsLoadingFirstPage(true);
+      try {
+        const response = await getDataset(datasetId, token, { offset: 0, limit: PAGE_SIZE, filter: annotationImageFilter });
+        const pageImages = response.dataset.images ?? [];
+        applyDatasetPage(response.dataset, preferredImageId);
+        setActionError(null);
+        return pageImages;
+      } catch (error) {
+        setActionError((error as Error).message);
+        return null;
+      } finally {
+        setIsLoadingFirstPage(false);
+      }
+    };
+
     loadersRef.current.loadMore = async () => {
       if (!token || !datasetId) return null;
       if (isLoadingMoreRef.current || !hasMoreRef.current) return null;
       const offset = cursorRef.current;
       setIsLoadingMore(true);
       try {
-        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE });
+        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE, filter: buildAnnotationImageFilter(annotationFilterRef.current) });
         const pageImages = response.dataset.images ?? [];
         setDataset(response.dataset);
         setImagesTotal(response.dataset.imagesTotal ?? imagesTotal);
@@ -181,7 +237,7 @@ export function DatasetAnnotatePage() {
         setIsLoadingMore(false);
       }
     };
-  }, [datasetId, imagesTotal, token]);
+  }, [annotationImageFilter, datasetId, imagesTotal, token]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -288,20 +344,43 @@ export function DatasetAnnotatePage() {
   }, [hasAnnotationChanges, navigation.navigator]);
 
   useEffect(() => {
-    if (!activeImage) return;
     const handleKeydown = (event: KeyboardEvent) => {
       const isSaveShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s";
       if (isSaveShortcut) {
         event.preventDefault();
-        void saveAnnotations();
+        if (activeImage) void saveAnnotations();
+        return;
+      }
+      if (event.key === "Enter" && !isEditableTarget(event.target)) {
+        event.preventDefault();
+        if (activeImage) void saveAnnotations();
         return;
       }
 
       if (isEditableTarget(event.target)) return;
 
-      if (event.key === "a" || event.key === "A") {
+      const key = event.key.toLowerCase();
+      if (key === "a" || key === "b") {
         event.preventDefault();
+        if (!activeImage) return;
+        if (event.repeat) return;
         setIsAddingDetection((current) => !current);
+        return;
+      }
+      if (key === "n") {
+        event.preventDefault();
+        if (activeImage && !event.repeat) addCenteredDetection();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsAddingDetection(false);
+        setSelectedDetectionIndex(null);
+        return;
+      }
+      if (key === "u") {
+        event.preventDefault();
+        if (!event.repeat) changeAnnotationFilter(annotationFilter === "unannotated" ? "" : "unannotated");
         return;
       }
       if (event.key === "Delete" || event.key === "Backspace") {
@@ -313,12 +392,12 @@ export function DatasetAnnotatePage() {
       }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        moveActiveImage(-1);
+        if (activeImage) moveActiveImage(-1);
         return;
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
-        moveActiveImage(1);
+        if (activeImage) moveActiveImage(1);
         return;
       }
       if (/^[1-9]$/.test(event.key)) {
@@ -335,7 +414,7 @@ export function DatasetAnnotatePage() {
 
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [activeImage, categories, selectedDetectionIndex, hasAnnotationChanges, draftDetections]);
+  }, [activeImage, annotationFilter, canSave, categories, draftDetections, isSaving, selectedDetectionIndex]);
 
   function confirmDiscardChanges() {
     if (!hasAnnotationChanges) return true;
@@ -346,6 +425,15 @@ export function DatasetAnnotatePage() {
     if (!confirmDiscardChanges()) return;
     setActiveImageId(imageId);
     setActionError(null);
+  }
+
+  function changeAnnotationFilter(nextFilter: AnnotationFilter) {
+    if (nextFilter === annotationFilter) return;
+    if (!confirmDiscardChanges()) return;
+    setAnnotationFilter(nextFilter);
+    setActiveImageId(null);
+    setActionError(null);
+    queueScrollRef.current?.scrollTo({ top: 0 });
   }
 
   async function moveActiveImage(direction: -1 | 1) {
@@ -368,16 +456,20 @@ export function DatasetAnnotatePage() {
   }
 
   async function saveAnnotations() {
-    if (!token || !datasetId || !activeImage || deletingImageId) return;
+    if (!token || !datasetId || !activeImage || deletingImageId || isSaving || !canSave) return;
     setIsSaving(true);
     try {
       const response = await updateDatasetImageAnnotations(datasetId, activeImage.id, token, draftDetections);
       const updatedImage = response.image;
       setDataset((current) => (current ? { ...current, ...response.dataset } : response.dataset));
-      setLoadedImages((current) =>
-        current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)),
-      );
-      setActiveImageId(updatedImage.id);
+      if (imageMatchesAnnotationFilter(updatedImage, annotationFilterRef.current)) {
+        setLoadedImages((current) =>
+          current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)),
+        );
+        setActiveImageId(updatedImage.id);
+      } else {
+        await loadersRef.current.reloadFirstPage();
+      }
       setActionError(null);
     } catch (error) {
       setActionError((error as Error).message);
@@ -547,6 +639,17 @@ export function DatasetAnnotatePage() {
     });
   }
 
+  function addCenteredDetection() {
+    if (!activeImage) return;
+    const nextIndex = draftDetections.length;
+    setDraftDetections((current) => [
+      ...current,
+      { category: activeCategory, confidence: 1, bbox: [0.5, 0.5, DEFAULT_BOX_SIZE, DEFAULT_BOX_SIZE] },
+    ]);
+    setSelectedDetectionIndex(nextIndex);
+    setIsAddingDetection(false);
+  }
+
   if (!dataset) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white dark:bg-neutral-950">
@@ -558,7 +661,7 @@ export function DatasetAnnotatePage() {
     );
   }
 
-  if (imagesTotal === 0 && !isLoadingFirstPage) {
+  if (totalImageCount === 0 && !isLoadingFirstPage) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white p-8 text-center dark:bg-neutral-950">
         <div>
@@ -593,7 +696,7 @@ export function DatasetAnnotatePage() {
               </div>
               <h2 className="truncate text-lg font-medium text-neutral-900 dark:text-white">{dataset.name}</h2>
             </div>
-            <Badge>{processedCount} / {imagesTotal}</Badge>
+            <Badge>{annotatedTotal} / {totalImageCount}</Badge>
             {hasAnnotationChanges ? (
               <Badge>未保存</Badge>
             ) : activeImage && !isProcessed(activeImage.annotationStatus) ? (
@@ -641,9 +744,35 @@ export function DatasetAnnotatePage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</div>
-                <div className="text-sm text-neutral-900 dark:text-white">{imagesTotal} 张样本</div>
+                <div className="text-sm text-neutral-900 dark:text-white">{queueLabel}</div>
               </div>
               <CheckCircle2 className="h-5 w-5 text-neutral-400" />
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <ListFilter className="h-4 w-4 shrink-0 text-neutral-400" />
+              <div className={cn(segmentedGroupClasses, "w-full justify-between")}>
+                {annotationFilterOptions.map((option) => {
+                  const active = annotationFilter === option.value;
+                  const count =
+                    option.value === "unannotated"
+                      ? unannotatedTotal
+                      : option.value === "annotated"
+                        ? annotatedTotal
+                        : totalImageCount;
+                  return (
+                    <button
+                      key={option.value || "all"}
+                      type="button"
+                      className={segmentedButtonClasses(active, "min-w-0 flex-1 px-2 py-1.5 text-xs")}
+                      onClick={() => changeAnnotationFilter(option.value)}
+                      title={option.value === "unannotated" ? "快捷键 U" : undefined}
+                    >
+                      <span className="truncate">{option.label}</span>
+                      <span className={cn("text-[11px]", active ? "text-current" : "text-neutral-400")}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
           <div ref={queueScrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
@@ -678,7 +807,11 @@ export function DatasetAnnotatePage() {
                 </button>
               );
             })}
-            {hasMoreImages ? (
+            {images.length === 0 && !isLoadingFirstPage ? (
+              <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm leading-6 text-neutral-500 dark:border-white/10 dark:text-neutral-400">
+                当前筛选没有图片。
+              </div>
+            ) : hasMoreImages ? (
               <div ref={sentinelRef} className="flex items-center justify-center gap-2 py-3 text-xs text-neutral-500">
                 {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
@@ -706,6 +839,8 @@ export function DatasetAnnotatePage() {
                   isAddingDetection ? "dark:bg-lime-300 dark:text-neutral-950" : "dark:border-white/15 dark:bg-white/10 dark:text-white dark:hover:bg-white/15",
                 )}
                 onClick={() => setIsAddingDetection((current) => !current)}
+                title="快捷键 A / B"
+                disabled={!activeImage}
               >
                 <PencilRuler className="mr-2 h-4 w-4" />
                 {isAddingDetection ? "正在画框" : "新增框"}
@@ -790,7 +925,16 @@ export function DatasetAnnotatePage() {
                   setPreviewImageNaturalSize({ width: target.naturalWidth, height: target.naturalHeight });
                 }}
               />
-            ) : null}
+            ) : isLoadingFirstPage ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-5 text-center text-sm text-neutral-400">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                加载图片...
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center px-5 text-center text-sm text-neutral-400">
+                当前筛选没有图片。
+              </div>
+            )}
           </div>
         </main>
 
@@ -829,11 +973,15 @@ export function DatasetAnnotatePage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Current Image</div>
-                <div className="mt-1 text-lg text-neutral-900 dark:text-white">#{activeImage?.ordinal}</div>
+                <div className="mt-1 text-lg text-neutral-900 dark:text-white">
+                  {activeImage ? `#${activeImage.ordinal}` : "—"}
+                </div>
               </div>
-              <Badge>{annotationStatusLabel(activeImage?.annotationStatus ?? "")}</Badge>
+              <Badge>{activeImage ? annotationStatusLabel(activeImage.annotationStatus) : "无图片"}</Badge>
             </div>
-            <p className="mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">{activeImage?.promptText}</p>
+            <p className="mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+              {activeImage?.promptText ?? "当前筛选没有图片。"}
+            </p>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -845,14 +993,9 @@ export function DatasetAnnotatePage() {
               <Button
                 variant="secondary"
                 className="h-9 px-3"
-                onClick={() => {
-                  const nextIndex = draftDetections.length;
-                  setDraftDetections((current) => [
-                    ...current,
-                    { category: activeCategory, confidence: 1, bbox: [0.5, 0.5, DEFAULT_BOX_SIZE, DEFAULT_BOX_SIZE] },
-                  ]);
-                  setSelectedDetectionIndex(nextIndex);
-                }}
+                onClick={addCenteredDetection}
+                disabled={!activeImage}
+                title="快捷键 N"
               >
                 <PencilRuler className="h-4 w-4" />
               </Button>
