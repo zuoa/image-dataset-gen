@@ -43,6 +43,7 @@ const cvTaskOptions = [
   { value: "classification", label: "图像分类" },
   { value: "instance_segmentation", label: "实例分割" },
 ] as const;
+const PROMPT_PREVIEW_DEBOUNCE_MS = 800;
 
 function toggleValue(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
@@ -66,7 +67,7 @@ export function GenerationTaskPage() {
 
   useEffect(() => {
     if (!token || !datasetId) return;
-    void getDataset(datasetId, token)
+    void getDataset(datasetId, token, { offset: 0, limit: 0 })
       .then((response) => {
         setDataset(response.dataset);
         setDraft((current) => ({
@@ -120,17 +121,23 @@ export function GenerationTaskPage() {
 
   useEffect(() => {
     if (!token || !dataset) return;
+    let disposed = false;
     const timeout = window.setTimeout(() => {
       void previewGenerationPrompt({ ...deferredDraft, categories: dataset.categories }, token)
         .then((data) => {
+          if (disposed) return;
           startTransition(() => setPreview(data));
         })
         .catch(() => {
+          if (disposed) return;
           startTransition(() => setPreview(null));
         });
-    }, 250);
+    }, PROMPT_PREVIEW_DEBOUNCE_MS);
 
-    return () => window.clearTimeout(timeout);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+    };
   }, [dataset, deferredDraft, token]);
 
   async function handleGenerate() {

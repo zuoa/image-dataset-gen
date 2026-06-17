@@ -21,6 +21,9 @@ type DisplayDetection = {
 
 const activeTestStatuses = new Set(["queued", "assigned", "running"]);
 const detectionPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
+const TEST_STATUS_POLL_INITIAL_DELAY_MS = 1000;
+const TEST_STATUS_POLL_INTERVAL_MS = 4000;
+const TEST_STATUS_POLL_HIDDEN_INTERVAL_MS = 15000;
 
 export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelProps) {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -66,14 +69,27 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
       }
     };
 
-    const interval = window.setInterval(() => {
-      void poll();
-    }, 2000);
-    void poll();
+    let timeoutId: number | undefined;
+    const schedule = (delay: number) => {
+      if (disposed) return;
+      timeoutId = window.setTimeout(() => {
+        void poll().finally(() => {
+          const nextDelay =
+            document.visibilityState === "hidden"
+              ? TEST_STATUS_POLL_HIDDEN_INTERVAL_MS
+              : TEST_STATUS_POLL_INTERVAL_MS;
+          schedule(nextDelay);
+        });
+      }, delay);
+    };
+
+    schedule(TEST_STATUS_POLL_INITIAL_DELAY_MS);
 
     return () => {
       disposed = true;
-      window.clearInterval(interval);
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [job.datasetId, job.id, testJob?.id, testJob?.status, token]);
 

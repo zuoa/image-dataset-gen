@@ -87,6 +87,8 @@ const importTabOptions: Array<{ value: ImportTab; label: string; icon: typeof Fi
   { value: "roboflow", label: "Roboflow", icon: Download },
 ];
 const activeTrainingStatuses = new Set(["queued", "assigned", "preparing", "running", "uploading"]);
+const activeDatasetTaskStatuses = new Set(["running"]);
+const activeDatasetExportStatuses = new Set(["pending", "running"]);
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
 type SamplePoolAnnotationFilter = "" | "annotated" | "unannotated";
 const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> = [
@@ -100,6 +102,10 @@ const samplePoolAnnotationOptions: Array<{ value: Exclude<SamplePoolAnnotationFi
   { value: "unannotated", label: "未标注" },
 ];
 const PAGE_SIZE = 100;
+const DATASET_STATUS_POLL_INITIAL_DELAY_MS = 1500;
+const DATASET_STATUS_POLL_INTERVAL_MS = 8000;
+const DATASET_STATUS_POLL_HIDDEN_INTERVAL_MS = 45000;
+const DATASET_IMAGE_REFRESH_INTERVAL_MS = 24000;
 
 function buildImageFilter(
   classFilter: string,
@@ -145,6 +151,19 @@ function trainingStatusLabel(status: string) {
   return labels[status] ?? status;
 }
 
+function hasActiveDatasetWork(dataset: Dataset | null) {
+  if (!dataset) return false;
+  return (
+    dataset.tasks.some((task) => activeDatasetTaskStatuses.has(task.status)) ||
+    dataset.annotation?.status === "running" ||
+    dataset.exports.some((item) => activeDatasetExportStatuses.has(item.status))
+  );
+}
+
+function hasActiveTrainingWork(jobs: TrainingJob[]) {
+  return jobs.some((job) => activeTrainingStatuses.has(job.status));
+}
+
 export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
@@ -158,8 +177,6 @@ export function DatasetDetailPage() {
   const [trainingJobs, setTrainingJobs] = useState<TrainingJob[]>([]);
   const datasetRef = useRef<Dataset | null>(null);
   datasetRef.current = dataset;
-  const loadedImagesRef = useRef<DatasetImage[]>([]);
-  loadedImagesRef.current = loadedImages;
   const imagesTotalRef = useRef(0);
   imagesTotalRef.current = imagesTotal;
   const cursorRef = useRef(0);
@@ -168,11 +185,20 @@ export function DatasetDetailPage() {
   const pageLoadersRef = useRef<{
     fetchFirstPage: (filter: ImageFilter | undefined) => Promise<void>;
     fetchMore: (filter: ImageFilter | undefined) => Promise<void>;
-    refreshLoadedRange: (filter: ImageFilter | undefined) => Promise<void>;
-  }>({ fetchFirstPage: async () => {}, fetchMore: async () => {}, refreshLoadedRange: async () => {} });
+    refreshLoadedRange: (filter: ImageFilter | undefined) => Promise<Dataset | null>;
+    refreshMetadata: (filter: ImageFilter | undefined) => Promise<Dataset | null>;
+    refreshTrainingJobs: () => Promise<TrainingJob[] | null>;
+  }>({
+    fetchFirstPage: async () => {},
+    fetchMore: async () => {},
+    refreshLoadedRange: async () => null,
+    refreshMetadata: async () => null,
+    refreshTrainingJobs: async () => null,
+  });
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const trainingJobsRef = useRef<TrainingJob[]>([]);
   trainingJobsRef.current = trainingJobs;
+  const lastImageRefreshAtRef = useRef(0);
   const [isAugmentationModalOpen, setIsAugmentationModalOpen] = useState(false);
   const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -256,7 +282,6 @@ export function DatasetDetailPage() {
   const filteredDeleteSelectionCount = filteredImages.filter((image) => deleteSelectionIdSet.has(image.id)).length;
   const previewIndex = previewImageId ? images.findIndex((image) => image.id === previewImageId) : -1;
   const previewImage = previewIndex >= 0 ? images[previewIndex] : null;
-  const runningTask = dataset?.tasks.some((task) => task.status === "running");
   const annotationRunning = dataset?.annotation?.status === "running";
   const selectedOriginalCount = dataset?.selectedOriginalCount ?? 0;
   const latestExport = dataset?.exports[0];
@@ -298,6 +323,7 @@ export function DatasetDetailPage() {
           (response.dataset.imagesTotal ?? response.dataset.images.length) > response.dataset.images.length,
         );
         setTrainingJobs(trainingResponse.jobs);
+        lastImageRefreshAtRef.current = Date.now();
         setActionError(null);
       } catch (error) {
         if (!disposed) {
@@ -336,6 +362,7 @@ export function DatasetDetailPage() {
         const nextCursor = offset + incoming.length;
         setImagesCursor(nextCursor);
         setHasMoreImages(nextCursor < (response.dataset.imagesTotal ?? imagesTotalRef.current));
+        lastImageRefreshAtRef.current = Date.now();
       } catch (error) {
         if (!disposed) {
           setActionError((error as Error).message);
@@ -349,7 +376,7 @@ export function DatasetDetailPage() {
       const limit = Math.max(PAGE_SIZE, cursorRef.current);
       try {
         const response = await getDataset(datasetId, token, { offset: 0, limit, filter });
-        if (disposed) return;
+        if (disposed) return null;
         setDataset(response.dataset);
         setLoadedImages(response.dataset.images);
         const total = response.dataset.imagesTotal ?? response.dataset.images.length;
@@ -357,35 +384,109 @@ export function DatasetDetailPage() {
         const nextCursor = response.dataset.images.length;
         setImagesCursor(nextCursor);
         setHasMoreImages(nextCursor < total);
+        lastImageRefreshAtRef.current = Date.now();
+        return response.dataset;
       } catch (error) {
         if (!disposed) {
           setActionError((error as Error).message);
         }
+        return null;
       }
     };
 
-    // expose for handlers and polling
-    pageLoadersRef.current = { fetchFirstPage, fetchMore, refreshLoadedRange };
-
-    const initialFilter = buildImageFilter(samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter);
-    currentFilterRef.current = initialFilter;
-    void fetchFirstPage(initialFilter);
-
-    const interval = window.setInterval(() => {
-      const hasPendingExports = datasetRef.current?.exports.some(
-        (item) => item.status === "pending" || item.status === "running"
-      );
-      const hasActiveTraining = trainingJobsRef.current.some((job) => activeTrainingStatuses.has(job.status));
-      if (runningTask || annotationRunning || hasPendingExports || hasActiveTraining) {
-        void refreshLoadedRange(currentFilterRef.current);
+    const refreshMetadata = async (filter: ImageFilter | undefined) => {
+      try {
+        const response = await getDataset(datasetId, token, { offset: 0, limit: 0, filter });
+        if (disposed) return null;
+        mergeDatasetMetadata(response.dataset);
+        const total = response.dataset.imagesTotal ?? imagesTotalRef.current;
+        setImagesTotal(total);
+        setHasMoreImages(cursorRef.current < total);
+        return response.dataset;
+      } catch (error) {
+        if (!disposed) {
+          setActionError((error as Error).message);
+        }
+        return null;
       }
-    }, 2000);
+    };
+
+    const refreshTrainingJobs = async () => {
+      try {
+        const response = await listTrainingJobs(datasetId, token);
+        if (disposed) return null;
+        setTrainingJobs(response.jobs);
+        return response.jobs;
+      } catch (error) {
+        if (!disposed) {
+          setActionError((error as Error).message);
+        }
+        return null;
+      }
+    };
+
+    pageLoadersRef.current = { fetchFirstPage, fetchMore, refreshLoadedRange, refreshMetadata, refreshTrainingJobs };
 
     return () => {
       disposed = true;
-      window.clearInterval(interval);
     };
-  }, [annotationRunning, datasetId, runningTask, token, trainingRunning]);
+  }, [datasetId, token]);
+
+  useEffect(() => {
+    if (!token || !datasetId) return;
+    let disposed = false;
+    let timeoutId: number | undefined;
+
+    const schedule = (delay: number) => {
+      if (disposed) return;
+      timeoutId = window.setTimeout(() => {
+        void pollStatus();
+      }, delay);
+    };
+
+    const pollStatus = async () => {
+      const activeBefore = hasActiveDatasetWork(datasetRef.current) || hasActiveTrainingWork(trainingJobsRef.current);
+      if (!activeBefore) {
+        schedule(DATASET_STATUS_POLL_INTERVAL_MS);
+        return;
+      }
+
+      const isVisible = document.visibilityState !== "hidden";
+      const shouldRefreshImages =
+        isVisible && Date.now() - lastImageRefreshAtRef.current >= DATASET_IMAGE_REFRESH_INTERVAL_MS;
+
+      let latestDataset: Dataset | null = null;
+      let latestTrainingJobs: TrainingJob[] | null = null;
+
+      if (shouldRefreshImages) {
+        latestDataset = await pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
+      } else {
+        latestDataset = await pageLoadersRef.current.refreshMetadata(currentFilterRef.current);
+      }
+
+      if (hasActiveTrainingWork(trainingJobsRef.current)) {
+        latestTrainingJobs = await pageLoadersRef.current.refreshTrainingJobs();
+      }
+
+      const activeAfter =
+        hasActiveDatasetWork(latestDataset ?? datasetRef.current) ||
+        hasActiveTrainingWork(latestTrainingJobs ?? trainingJobsRef.current);
+      if (isVisible && activeBefore && !activeAfter) {
+        await pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
+      }
+
+      schedule(isVisible ? DATASET_STATUS_POLL_INTERVAL_MS : DATASET_STATUS_POLL_HIDDEN_INTERVAL_MS);
+    };
+
+    schedule(DATASET_STATUS_POLL_INITIAL_DELAY_MS);
+
+    return () => {
+      disposed = true;
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [datasetId, token]);
 
   useEffect(() => {
     const categoryCount = dataset?.categories.length ?? 0;
