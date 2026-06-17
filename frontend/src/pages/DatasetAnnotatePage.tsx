@@ -27,6 +27,7 @@ import {
   detectionStyle,
   detectionsEqual,
   fitImageViewport,
+  minimumBoxSizeForImage,
   pointerToStage,
   type Detection,
   type ImageViewport,
@@ -556,10 +557,14 @@ export function DatasetAnnotatePage() {
     const bottom = yCenter + height / 2;
     const anchorX = corner.includes("w") ? right : left;
     const anchorY = corner.includes("n") ? bottom : top;
+    const minBoxSize = minimumBoxSizeForImage(
+      previewImageNaturalSize?.width ?? rect.width,
+      previewImageNaturalSize?.height ?? rect.height,
+    );
 
     const handleMove = (moveEvent: MouseEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
-      const bbox = boxFromCorners(anchorX, anchorY, pointer.x, pointer.y);
+      const bbox = boxFromCorners(anchorX, anchorY, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
         current.map((detection, detectionIndex) => (detectionIndex === index ? { ...detection, bbox } : detection)),
       );
@@ -585,6 +590,10 @@ export function DatasetAnnotatePage() {
     const rect = viewportRef.current.getBoundingClientRect();
     const start = pointerToStage(rect, event.clientX, event.clientY);
     const nextIndex = draftDetections.length;
+    const minBoxSize = minimumBoxSizeForImage(
+      previewImageNaturalSize?.width ?? rect.width,
+      previewImageNaturalSize?.height ?? rect.height,
+    );
 
     setDraftDetections((current) => [
       ...current,
@@ -594,7 +603,7 @@ export function DatasetAnnotatePage() {
 
     const handleMove = (moveEvent: MouseEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
-      const bbox = boxFromCorners(start.x, start.y, pointer.x, pointer.y);
+      const bbox = boxFromCorners(start.x, start.y, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
         current.map((detection, detectionIndex) => (detectionIndex === nextIndex ? { ...detection, bbox } : detection)),
       );

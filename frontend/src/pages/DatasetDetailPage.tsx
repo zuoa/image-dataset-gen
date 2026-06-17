@@ -35,6 +35,7 @@ import {
   detectionStyle,
   detectionsEqual,
   fitImageViewport,
+  minimumBoxSizeForImage,
   pointerToStage,
   type ImageViewport,
   type ResizeCorner,
@@ -1070,10 +1071,14 @@ export function DatasetDetailPage() {
     const bottom = yCenter + height / 2;
     const anchorX = corner.includes("w") ? right : left;
     const anchorY = corner.includes("n") ? bottom : top;
+    const minBoxSize = minimumBoxSizeForImage(
+      previewImageNaturalSize?.width ?? rect.width,
+      previewImageNaturalSize?.height ?? rect.height,
+    );
 
     const handleMove = (moveEvent: MouseEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
-      const bbox = boxFromCorners(anchorX, anchorY, pointer.x, pointer.y);
+      const bbox = boxFromCorners(anchorX, anchorY, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
         current.map((detection, detectionIndex) => (detectionIndex === index ? { ...detection, bbox } : detection)),
       );
@@ -1095,6 +1100,10 @@ export function DatasetDetailPage() {
     const start = pointerToStage(rect, event.clientX, event.clientY);
     const category = dataset.categories[0] ?? "object";
     const nextIndex = draftDetections.length;
+    const minBoxSize = minimumBoxSizeForImage(
+      previewImageNaturalSize?.width ?? rect.width,
+      previewImageNaturalSize?.height ?? rect.height,
+    );
 
     setDraftDetections((current) => [
       ...current,
@@ -1104,7 +1113,7 @@ export function DatasetDetailPage() {
 
     const handleMove = (moveEvent: MouseEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
-      const bbox = boxFromCorners(start.x, start.y, pointer.x, pointer.y);
+      const bbox = boxFromCorners(start.x, start.y, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
         current.map((detection, detectionIndex) => (detectionIndex === nextIndex ? { ...detection, bbox } : detection)),
       );

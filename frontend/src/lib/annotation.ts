@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import type { DatasetImage } from "./types";
 
 export const DEFAULT_BOX_SIZE = 0.22;
-export const MIN_BOX_SIZE = 0.04;
+export const MIN_BOX_SIZE_PX = 16;
 
 export type Detection = DatasetImage["detections"][number];
 export type ResizeCorner = "nw" | "ne" | "sw" | "se";
@@ -68,13 +68,27 @@ export function fitImageViewport(
   };
 }
 
-export function boxFromCorners(startX: number, startY: number, endX: number, endY: number): [number, number, number, number] {
+export function minimumBoxSizeForImage(widthPx: number, heightPx: number) {
+  return {
+    width: clamp(MIN_BOX_SIZE_PX / Math.max(widthPx, MIN_BOX_SIZE_PX)),
+    height: clamp(MIN_BOX_SIZE_PX / Math.max(heightPx, MIN_BOX_SIZE_PX)),
+  };
+}
+
+export function boxFromCorners(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  minWidth: number,
+  minHeight: number,
+): [number, number, number, number] {
   const left = clamp(Math.min(startX, endX));
   const right = clamp(Math.max(startX, endX));
   const top = clamp(Math.min(startY, endY));
   const bottom = clamp(Math.max(startY, endY));
-  const width = Math.max(right - left, MIN_BOX_SIZE);
-  const height = Math.max(bottom - top, MIN_BOX_SIZE);
+  const width = Math.max(right - left, minWidth);
+  const height = Math.max(bottom - top, minHeight);
   const xCenter = clamp((left + right) / 2, width / 2, 1 - width / 2);
   const yCenter = clamp((top + bottom) / 2, height / 2, 1 - height / 2);
   return [xCenter, yCenter, width, height];
