@@ -278,14 +278,12 @@ def test_training_job_model(dataset_id: str, job_id: str):
 
     try:
         confidence_threshold = _bounded_form_float("confidence_threshold", default=0.25, minimum=0.01, maximum=1.0)
-        image_size = _bounded_form_int("image_size", default=640, minimum=64, maximum=2048)
         test_job = create_training_inference_job(
             job,
             image_bytes,
             filename=uploaded.filename,
             artifact_id=(request.form.get("artifact_id") or "").strip(),
             confidence_threshold=confidence_threshold,
-            image_size=image_size,
         )
     except TrainingInferenceError as exc:
         return jsonify({"message": str(exc)}), exc.status_code
@@ -337,19 +335,6 @@ def _bounded_form_float(name: str, *, default: float, minimum: float, maximum: f
         value = float(raw_value)
     except ValueError as exc:
         raise TrainingInferenceError(f"{name} must be a number", 422) from exc
-    if value < minimum or value > maximum:
-        raise TrainingInferenceError(f"{name} must be between {minimum} and {maximum}", 422)
-    return value
-
-
-def _bounded_form_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
-    raw_value = request.form.get(name)
-    if raw_value is None or raw_value == "":
-        return default
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise TrainingInferenceError(f"{name} must be an integer", 422) from exc
     if value < minimum or value > maximum:
         raise TrainingInferenceError(f"{name} must be between {minimum} and {maximum}", 422)
     return value

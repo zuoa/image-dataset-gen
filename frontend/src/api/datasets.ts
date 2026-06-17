@@ -266,13 +266,11 @@ export function createTrainingInferenceTest(
     image: File;
     artifactId?: string;
     confidenceThreshold: number;
-    imageSize: number;
   },
 ) {
   const body = new FormData();
   body.append("image", payload.image);
   body.append("confidence_threshold", String(payload.confidenceThreshold));
-  body.append("image_size", String(payload.imageSize));
   if (payload.artifactId) {
     body.append("artifact_id", payload.artifactId);
   }

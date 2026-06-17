@@ -32,21 +32,17 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.25);
   const [displayThreshold, setDisplayThreshold] = useState(0.25);
-  const [imageSize, setImageSize] = useState(job.config.imageSize || 640);
   const [testJob, setTestJob] = useState<TrainingInferenceTest | null>(null);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [showDownloadConfidence, setShowDownloadConfidence] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const imageSize = job.config.imageSize || 640;
 
   useEffect(() => {
     if (artifactId && modelArtifacts.some((artifact) => artifact.id === artifactId)) return;
     setArtifactId(modelArtifacts[0]?.id ?? "");
   }, [artifactId, modelArtifacts]);
-
-  useEffect(() => {
-    setImageSize(job.config.imageSize || 640);
-  }, [job.config.imageSize, job.id]);
 
   useEffect(() => {
     if (!token || !testJob || !activeTestStatuses.has(testJob.status)) return;
@@ -129,7 +125,6 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
         image: imageFile,
         artifactId,
         confidenceThreshold,
-        imageSize,
       });
       setTestJob(response.test);
     } catch (nextError) {
@@ -250,12 +245,9 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
               </span>
               <Input
                 type="number"
-                min={64}
-                max={2048}
-                step={32}
                 value={imageSize}
-                onChange={(event) => setImageSize(Number(event.target.value) || 640)}
-                disabled={isTesting}
+                readOnly
+                disabled
               />
             </label>
 

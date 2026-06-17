@@ -271,7 +271,7 @@ def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):
     assert test_job["status"] == "queued"
     assert test_job["artifact"]["id"] == artifact_id
     assert test_job["confidenceThreshold"] == 0.4
-    assert test_job["imageSize"] == 512
+    assert test_job["imageSize"] == 320
     assert test_job["image"]["mimeType"] == "image/jpeg"
 
     client.post(
@@ -286,6 +286,7 @@ def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):
     assert assigned["modelDownloadUrl"].endswith(f"/api/v1/training/inference-jobs/{test_job['id']}/model")
     assert assigned["imageDownloadUrl"].endswith(f"/api/v1/training/inference-jobs/{test_job['id']}/image")
     assert assigned["categories"] == ["widget"]
+    assert assigned["imageSize"] == 320
 
     model_download = client.get(
         f"/api/v1/training/inference-jobs/{test_job['id']}/model",

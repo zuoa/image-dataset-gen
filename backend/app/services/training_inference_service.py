@@ -27,7 +27,6 @@ def create_training_inference_job(
     filename: str,
     artifact_id: str = "",
     confidence_threshold: float = 0.25,
-    image_size: int = 640,
 ) -> TrainingInferenceJob:
     normalized = normalize_uploaded_image(image_bytes)
     if normalized is None:
@@ -45,7 +44,7 @@ def create_training_inference_job(
         artifact_id=artifact.id,
         status="queued",
         confidence_threshold=confidence_threshold,
-        image_size=image_size,
+        image_size=training_image_size(job),
         input_filename=secure_filename(filename) or "test-image",
         input_mime_type=str(normalized["mime_type"]),
         input_width=int(normalized["width"]),
@@ -60,6 +59,16 @@ def create_training_inference_job(
     input_path.write_bytes(bytes(normalized["image_bytes"]))
     test_job.input_storage_path = str(input_path)
     return test_job
+
+
+def training_image_size(job: TrainingJob) -> int:
+    config = job.config_json or {}
+    raw_value = config.get("imageSize", config.get("image_size"))
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 640
+    return min(max(value, 64), 2048)
 
 
 def complete_training_inference_job(test_job: TrainingInferenceJob, detections: object) -> None:
