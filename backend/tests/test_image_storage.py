@@ -1,4 +1,5 @@
 import importlib.util
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -60,3 +61,29 @@ def test_save_generated_image_replaces_stale_extension(tmp_path: Path):
     assert saved_path.read_bytes() == b"new"
     assert not stale_path.exists()
     assert image_storage.existing_generated_image(str(tmp_path), "dataset-1", "image-000001") == saved_path
+
+
+def test_augment_generated_image_returns_geometry_ops(tmp_path: Path):
+    buffer = BytesIO()
+    Image.new("RGB", (10, 8), color=(255, 255, 255)).save(buffer, format="PNG")
+    image_storage.save_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        buffer.getvalue(),
+        "image/png",
+    )
+
+    result = image_storage.augment_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        "image-000002",
+        ["flip"],
+        17,
+        {"flip": {"mode": "horizontal"}},
+    )
+
+    assert result is not None
+    assert result["applied_methods"] == ["flip"]
+    assert result["augmentation_ops"] == [{"method": "flip", "mode": "horizontal", "size": [10, 8]}]

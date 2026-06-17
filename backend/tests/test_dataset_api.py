@@ -1336,6 +1336,157 @@ def test_augmentation_task_uses_source_snapshot_after_selection_changes(tmp_path
         assert task.status == "completed"
 
 
+def test_augmentation_inherits_transformed_annotations(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-augmentation-annotations")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        source_image = DatasetImage(
+            dataset_id=dataset.id,
+            source_type="generation",
+            source_ordinal=1,
+            ordinal=1,
+            status="ready",
+            seed=17,
+            prompt_text="annotated source",
+            diversity_vars={},
+            preview_svg="data:image/png;base64,",
+            selected=True,
+            annotation_status="annotated",
+            detection_categories=["pedestrian"],
+            confidence_score=0.88,
+        )
+        db.session.add(source_image)
+        db.session.flush()
+        source_image_id = source_image.id
+        save_generated_image(
+            app.config["STORAGE_ROOT"],
+            dataset.id,
+            "image-000001",
+            _png_bytes((20, 40, 60)),
+            "image/png",
+        )
+        save_annotation_result(
+            app.config["STORAGE_ROOT"],
+            dataset.id,
+            source_image.id,
+            [{"category": "pedestrian", "confidence": 0.88, "bbox": [0.25, 0.5, 0.2, 0.4]}],
+        )
+        dataset.image_count = 1
+        dataset.selected_count = 1
+        db.session.commit()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/augmentation",
+        headers=headers,
+        json={
+            "multiplier": 2,
+            "augmentation_methods": ["flip"],
+            "augmentation_settings": {"flip": {"mode": "horizontal"}},
+        },
+    )
+
+    assert response.status_code == 201
+    images = _fetch_images(client, dataset_id, headers)
+    augmented = next(image for image in images if image["sourceType"] == "augmentation")
+    assert augmented["annotationStatus"] == "annotated"
+    assert augmented["detections"] == [
+        {"category": "pedestrian", "confidence": 0.88, "bbox": [0.75, 0.5, 0.2, 0.4]}
+    ]
+
+    stored = load_annotation_result(str(tmp_path), dataset_id, augmented["id"])
+    assert stored is not None
+    assert stored["detections"][0]["bbox"] == [0.75, 0.5, 0.2, 0.4]
+
+    with app.app_context():
+        source = db.session.get(DatasetImage, source_image_id)
+        assert source is not None
+        augmented_model = db.session.get(DatasetImage, augmented["id"])
+        assert augmented_model is not None
+        assert source.annotation_status == "annotated"
+        assert augmented_model.detection_categories == ["pedestrian"]
+        assert augmented_model.confidence_score == 0.88
+
+    export_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/export",
+        headers=headers,
+        json={"export_format": "yolo", "image_format": "keep"},
+    )
+    assert export_response.status_code == 201
+
+    download = client.get(f"/api/v1/datasets/{dataset_id}/exports/1/download", headers=headers)
+    assert download.status_code == 200
+    archive = zipfile.ZipFile(BytesIO(download.data))
+    augmented_labels = [
+        archive.read(name).decode("utf-8")
+        for name in archive.namelist()
+        if name.endswith("pedestrian_000002.txt")
+    ]
+    assert augmented_labels == ["0 0.750000 0.500000 0.200000 0.400000\n"]
+
+
+def test_augmentation_inherits_empty_annotations(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-augmentation-empty-annotations")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        source_image = DatasetImage(
+            dataset_id=dataset.id,
+            source_type="generation",
+            source_ordinal=1,
+            ordinal=1,
+            status="ready",
+            seed=17,
+            prompt_text="empty source",
+            diversity_vars={},
+            preview_svg="data:image/png;base64,",
+            selected=True,
+            annotation_status="empty",
+            detection_categories=[],
+            confidence_score=None,
+        )
+        db.session.add(source_image)
+        db.session.flush()
+        save_generated_image(
+            app.config["STORAGE_ROOT"],
+            dataset.id,
+            "image-000001",
+            _png_bytes((20, 40, 60)),
+            "image/png",
+        )
+        dataset.image_count = 1
+        dataset.selected_count = 1
+        db.session.commit()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/augmentation",
+        headers=headers,
+        json={"multiplier": 2, "augmentation_methods": ["flip"]},
+    )
+
+    assert response.status_code == 201
+    augmented = next(
+        image for image in _fetch_images(client, dataset_id, headers) if image["sourceType"] == "augmentation"
+    )
+    assert augmented["annotationStatus"] == "empty"
+    stored = load_annotation_result(str(tmp_path), dataset_id, augmented["id"])
+    assert stored == {"bboxSemantics": "center_size", "detections": []}
+
+
 def test_retry_failed_augmentation_task_resets_augmentation_status(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

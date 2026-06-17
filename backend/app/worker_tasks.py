@@ -15,6 +15,13 @@ from app.clients.gemini_client import (
 from app.clients.jimeng_client import JimengGenerationError, generate_image as generate_jimeng_image
 from app.extensions import celery, db
 from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
+from app.services.annotation_storage import (
+    extract_detection_categories,
+    infer_default_bbox_semantics,
+    load_annotation_result,
+    save_annotation_result,
+    transform_detections_for_augmentation,
+)
 from app.services.dataset_service import (
     next_dataset_ordinal,
     now_utc,
@@ -132,6 +139,55 @@ def _augmentation_source_at(
     index: int,
 ) -> DatasetImage | None:
     return _augmentation_source_query(task, augmentation).offset(index).limit(1).first()
+
+
+def _max_detection_confidence(detections: list[dict[str, object]]) -> float | None:
+    values: list[float] = []
+    for detection in detections:
+        try:
+            values.append(float(detection["confidence"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return max(values, default=None)
+
+
+def _inherit_augmented_annotation(
+    storage_root: str,
+    dataset: Dataset,
+    source_image: DatasetImage,
+    target_image: DatasetImage,
+    augmentation_ops: list[dict[str, object]],
+) -> None:
+    if source_image.annotation_status == "empty":
+        save_annotation_result(storage_root, dataset.id, target_image.id, [])
+        target_image.annotation_status = "empty"
+        target_image.detection_categories = []
+        target_image.confidence_score = None
+        return
+
+    if source_image.annotation_status != "annotated":
+        return
+
+    source_annotation = load_annotation_result(
+        storage_root,
+        dataset.id,
+        source_image.id,
+        default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
+    )
+    if source_annotation is None:
+        return
+
+    source_detections = source_annotation.get("detections", [])
+    if not isinstance(source_detections, list):
+        source_detections = []
+    transformed_detections = transform_detections_for_augmentation(
+        source_detections,
+        augmentation_ops,
+    )
+    save_annotation_result(storage_root, dataset.id, target_image.id, transformed_detections)
+    target_image.annotation_status = "annotated" if transformed_detections else "empty"
+    target_image.confidence_score = _max_detection_confidence(transformed_detections)
+    target_image.detection_categories = extract_detection_categories(storage_root, dataset.id, target_image.id)
 
 
 @celery.task(bind=True)
@@ -307,6 +363,13 @@ def augment_dataset_task_images(self, task_id: str) -> None:
         )
         db.session.add(image)
         db.session.flush()
+        _inherit_augmented_annotation(
+            storage_root,
+            dataset,
+            source_image,
+            image,
+            [dict(item) for item in augmented.get("augmentation_ops", []) if isinstance(item, dict)],
+        )
 
         augmentation["completedImages"] = completed_images + 1
         augmentation["progressPercent"] = round((completed_images + 1) / total_to_create * 100)
@@ -319,7 +382,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
 
     dataset = db.session.get(Dataset, task.dataset_id)
     if dataset is not None:
-        _enqueue_auto_annotation_dataset(dataset)
+        _enqueue_auto_annotation_dataset(dataset, skip_annotated=True)
 
 
 @celery.task(bind=True)
@@ -494,7 +557,6 @@ def annotate_dataset_images_task(
     skip_annotated: bool = False,
 ) -> None:
     from app.clients.annotator_client import annotate_dataset_images
-    from app.services.annotation_storage import extract_detection_categories, save_annotation_result
 
     dataset = db.session.get(Dataset, dataset_id)
     if dataset is None:
@@ -506,7 +568,7 @@ def annotate_dataset_images_task(
 
     images_to_process = dataset.images
     if skip_annotated:
-        images_to_process = [img for img in dataset.images if img.annotation_status != "annotated"]
+        images_to_process = [img for img in dataset.images if img.annotation_status not in {"annotated", "empty"}]
 
     if not images_to_process:
         dataset.annotation_json = {
@@ -689,11 +751,11 @@ def _pause_dataset_task_generation(task: DatasetTask, error_message: str) -> Non
     task.completed_at = None
 
 
-def _enqueue_auto_annotation_dataset(dataset: Dataset) -> None:
+def _enqueue_auto_annotation_dataset(dataset: Dataset, *, skip_annotated: bool = False) -> None:
     vl_config = {
         "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
         "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
         "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
         "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
     }
-    _dispatch_followup_task(annotate_dataset_images_task, str(dataset.id), 0.5, vl_config)
+    _dispatch_followup_task(annotate_dataset_images_task, str(dataset.id), 0.5, vl_config, skip_annotated)

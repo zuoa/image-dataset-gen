@@ -5,6 +5,7 @@ from io import BytesIO
 import random
 import shutil
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
@@ -99,8 +100,10 @@ def augment_generated_image(
     with Image.open(source_path) as source_image:
         preserve_alpha = source_image.mode in {"RGBA", "LA"} or "transparency" in source_image.info
         working = source_image.convert("RGBA" if preserve_alpha else "RGB")
+        augmentation_ops: list[dict[str, Any]] = []
         for method in applied_methods:
-            working = _apply_augmentation(working, method, rng, settings)
+            working, op = _apply_augmentation_with_op(working, method, rng, settings)
+            augmentation_ops.append(op)
 
         output = BytesIO()
         if source_format == "PNG":
@@ -114,6 +117,7 @@ def augment_generated_image(
         "image_bytes": image_bytes,
         "mime_type": mime_type,
         "applied_methods": applied_methods,
+        "augmentation_ops": augmentation_ops,
     }
 
 
@@ -183,21 +187,34 @@ def _apply_augmentation(
     rng: random.Random,
     settings: dict[str, object] | None = None,
 ) -> Image.Image:
+    return _apply_augmentation_with_op(image, method, rng, settings)[0]
+
+
+def _apply_augmentation_with_op(
+    image: Image.Image,
+    method: str,
+    rng: random.Random,
+    settings: dict[str, object] | None = None,
+) -> tuple[Image.Image, dict[str, Any]]:
     method_settings = _method_settings(settings, method)
+    width, height = image.size
     if method == "flip":
         flip_mode = str(method_settings.get("mode", "random"))
         if flip_mode == "horizontal":
-            return ImageOps.mirror(image)
+            return ImageOps.mirror(image), {"method": "flip", "mode": "horizontal", "size": [width, height]}
         if flip_mode == "vertical":
-            return ImageOps.flip(image)
-        return ImageOps.mirror(image) if rng.random() < 0.7 else ImageOps.flip(image)
+            return ImageOps.flip(image), {"method": "flip", "mode": "vertical", "size": [width, height]}
+        resolved_mode = "horizontal" if rng.random() < 0.7 else "vertical"
+        if resolved_mode == "horizontal":
+            return ImageOps.mirror(image), {"method": "flip", "mode": "horizontal", "size": [width, height]}
+        return ImageOps.flip(image), {"method": "flip", "mode": "vertical", "size": [width, height]}
     if method == "rotate":
         max_angle = max(0.0, float(method_settings.get("max_angle", MAX_ROTATION_ANGLE_DEGREES)))
         angle = rng.uniform(-max_angle, max_angle)
         fill = (245, 245, 245, 255) if image.mode == "RGBA" else (245, 245, 245)
-        return image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=fill)
+        rotated = image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=fill)
+        return rotated, {"method": "rotate", "angle": angle, "size": [width, height]}
     if method == "crop":
-        width, height = image.size
         min_scale = float(method_settings.get("min_scale", 0.82))
         max_scale = float(method_settings.get("max_scale", 0.94))
         crop_ratio = rng.uniform(min(min_scale, max_scale), max(min_scale, max_scale))
@@ -206,11 +223,16 @@ def _apply_augmentation(
         left = rng.randint(0, max(0, width - crop_w))
         top = rng.randint(0, max(0, height - crop_h))
         cropped = image.crop((left, top, left + crop_w, top + crop_h))
-        return cropped.resize((width, height), Image.Resampling.LANCZOS)
+        resized = cropped.resize((width, height), Image.Resampling.LANCZOS)
+        return resized, {
+            "method": "crop",
+            "crop": [left, top, left + crop_w, top + crop_h],
+            "size": [width, height],
+        }
     if method == "color_jitter":
         strength = max(0.0, float(method_settings.get("strength", 0.18)))
         if strength <= 0:
-            return image
+            return image, {"method": "color_jitter", "size": [width, height], "geometry": "none"}
         working = image
         brightness = ImageEnhance.Brightness(working)
         working = brightness.enhance(rng.uniform(max(0.1, 1 - strength), 1 + strength))
@@ -219,29 +241,44 @@ def _apply_augmentation(
         if working.mode in {"RGB", "RGBA"}:
             color = ImageEnhance.Color(working)
             working = color.enhance(rng.uniform(max(0.1, 1 - strength), 1 + strength))
-        return working
+        return working, {"method": "color_jitter", "size": [width, height], "geometry": "none"}
     if method == "blur":
         max_radius = max(0.0, float(method_settings.get("max_radius", 2.4)))
         if max_radius <= 0:
-            return image
+            return image, {"method": "blur", "size": [width, height], "geometry": "none"}
         radius = rng.uniform(min(0.8, max_radius), max_radius)
-        return image.filter(ImageFilter.GaussianBlur(radius=radius))
+        return image.filter(ImageFilter.GaussianBlur(radius=radius)), {
+            "method": "blur",
+            "radius": radius,
+            "size": [width, height],
+            "geometry": "none",
+        }
     if method == "noise":
         max_sigma = max(0.0, float(method_settings.get("max_sigma", 28.0)))
         if max_sigma <= 0:
-            return image
+            return image, {"method": "noise", "size": [width, height], "geometry": "none"}
         min_sigma = min(12.0, max(4.0, max_sigma * 0.45))
-        noise = Image.effect_noise(image.size, rng.uniform(min_sigma, max_sigma)).convert("L")
+        sigma = rng.uniform(min_sigma, max_sigma)
+        noise = Image.effect_noise(image.size, sigma).convert("L")
         if image.mode == "RGBA":
             alpha = image.getchannel("A")
             rgb = image.convert("RGB")
             merged = ImageChops.add(rgb, Image.merge("RGB", (noise, noise, noise)), scale=1.0, offset=-18)
-            return Image.merge("RGBA", (*merged.split(), alpha))
-        return ImageChops.add(image.convert("RGB"), Image.merge("RGB", (noise, noise, noise)), scale=1.0, offset=-18)
+            return Image.merge("RGBA", (*merged.split(), alpha)), {
+                "method": "noise",
+                "sigma": sigma,
+                "size": [width, height],
+                "geometry": "none",
+            }
+        return ImageChops.add(
+            image.convert("RGB"),
+            Image.merge("RGB", (noise, noise, noise)),
+            scale=1.0,
+            offset=-18,
+        ), {"method": "noise", "sigma": sigma, "size": [width, height], "geometry": "none"}
     if method == "occlusion":
         working = image.copy()
         draw = ImageDraw.Draw(working)
-        width, height = working.size
         min_ratio = float(method_settings.get("min_ratio", 0.14))
         max_ratio = float(method_settings.get("max_ratio", 0.28))
         occ_ratio = rng.uniform(min(min_ratio, max_ratio), max(min_ratio, max_ratio))
@@ -255,12 +292,16 @@ def _apply_augmentation(
             rng.randint(18, 70),
         )
         draw.rounded_rectangle((left, top, left + occ_w, top + occ_h), radius=6, fill=fill)
-        return working
+        return working, {
+            "method": "occlusion",
+            "box": [left, top, left + occ_w, top + occ_h],
+            "size": [width, height],
+            "geometry": "none",
+        }
     if method == "perspective":
-        width, height = image.size
         max_warp = max(0.0, float(method_settings.get("max_warp", 0.08)))
         if max_warp <= 0:
-            return image
+            return image, {"method": "perspective", "size": [width, height], "geometry": "none"}
         dx = width * rng.uniform(min(0.03, max_warp), max_warp)
         dy = height * rng.uniform(min(0.03, max_warp), max_warp)
         quad = (
@@ -273,5 +314,6 @@ def _apply_augmentation(
             rng.uniform(0, dx),
             height - rng.uniform(0, dy),
         )
-        return image.transform(image.size, Image.Transform.QUAD, quad, resample=Image.Resampling.BICUBIC)
-    return image
+        transformed = image.transform(image.size, Image.Transform.QUAD, quad, resample=Image.Resampling.BICUBIC)
+        return transformed, {"method": "perspective", "quad": list(quad), "size": [width, height]}
+    return image, {"method": method, "size": [width, height], "geometry": "none"}
