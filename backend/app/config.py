@@ -49,6 +49,7 @@ class Config:
     DEMO_PASSWORD: str = os.getenv("DEMO_PASSWORD", "Dataset123!")
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", _default_encryption_key())
     AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
+    STARTUP_MAINTENANCE_ASYNC: bool = os.getenv("STARTUP_MAINTENANCE_ASYNC", "true").lower() == "true"
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
     MAX_IMPORTED_IMAGES: int = int(os.getenv("MAX_IMPORTED_IMAGES", "2000"))
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
@@ -84,6 +85,7 @@ class TestConfig(Config):
     TESTING: bool = True
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
     AUTO_CREATE_SCHEMA: bool = True
+    STARTUP_MAINTENANCE_ASYNC: bool = False
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND: str = "cache+memory://"
     CELERY_TASK_ALWAYS_EAGER: bool = True

@@ -13,4 +13,6 @@ frontend/dist/
 *.sqlite3
 *.db
 /backend/storage/
+/backend/tmp-storage/
+.startup-maintenance.lock
 .idea

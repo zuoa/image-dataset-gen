@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+import contextlib
 import os
 from pathlib import Path
+import threading
 
-from flask import Flask, jsonify
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback
+    fcntl = None
+
+from flask import Flask, current_app, jsonify
 from marshmallow import ValidationError
 from sqlalchemy import inspect, or_, text
 from sqlalchemy.exc import OperationalError
@@ -62,9 +70,11 @@ def create_app(
             except OperationalError:
                 pass
             _ensure_schema_columns()
-            _ensure_schema_indexes()
-            _backfill_detection_categories(app)
             _ensure_demo_user(app)
+            if app.config.get("STARTUP_MAINTENANCE_ASYNC", True):
+                _schedule_startup_maintenance(app)
+            else:
+                _run_startup_maintenance(app)
 
     return app
 
@@ -187,8 +197,55 @@ def _ensure_schema_indexes() -> None:
         if table_name not in table_names:
             continue
         for statement in statements:
-            db.session.execute(text(statement))
+            try:
+                db.session.execute(text(statement))
+            except OperationalError:
+                db.session.rollback()
+                current_app.logger.warning("Skipping startup index maintenance because the database is locked")
+                return
     db.session.commit()
+
+
+def _run_startup_maintenance(app: Flask) -> None:
+    def maintain() -> None:
+        _ensure_schema_indexes()
+        _backfill_detection_categories(app)
+
+    _run_with_startup_maintenance_lock(app, maintain)
+
+
+def _schedule_startup_maintenance(app: Flask) -> None:
+    def run() -> None:
+        with app.app_context():
+            try:
+                _run_startup_maintenance(app)
+            except Exception:
+                app.logger.exception("Startup maintenance failed")
+            finally:
+                db.session.remove()
+
+    thread = threading.Thread(target=run, name="startup-maintenance", daemon=True)
+    thread.start()
+
+
+def _run_with_startup_maintenance_lock(app: Flask, callback: Callable[[], None]) -> None:
+    lock_path = Path(app.config["STORAGE_ROOT"]) / ".startup-maintenance.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        acquired = False
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                app.logger.info("Startup maintenance is already running; skipping in this process")
+                return
+        try:
+            callback()
+        finally:
+            if acquired:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _backfill_detection_categories(app: Flask, *, batch_size: int = 500) -> None:
