@@ -370,7 +370,7 @@ export function DatasetAnnotatePage() {
       }
       if (key === "n") {
         event.preventDefault();
-        if (activeImage && !event.repeat) addCenteredDetection();
+        if (!event.repeat) enterAddingDetectionMode();
         return;
       }
       if (event.key === "Escape") {
@@ -648,15 +648,9 @@ export function DatasetAnnotatePage() {
     });
   }
 
-  function addCenteredDetection() {
+  function enterAddingDetectionMode() {
     if (!activeImage) return;
-    const nextIndex = draftDetections.length;
-    setDraftDetections((current) => [
-      ...current,
-      { category: activeCategory, confidence: 1, bbox: [0.5, 0.5, DEFAULT_BOX_SIZE, DEFAULT_BOX_SIZE] },
-    ]);
-    setSelectedDetectionIndex(nextIndex);
-    setIsAddingDetection(false);
+    setIsAddingDetection(true);
   }
 
   if (!dataset) {
@@ -1002,9 +996,9 @@ export function DatasetAnnotatePage() {
               <Button
                 variant="secondary"
                 className="h-9 px-3"
-                onClick={addCenteredDetection}
+                onClick={enterAddingDetectionMode}
                 disabled={!activeImage}
-                title="快捷键 N"
+                title="进入画框状态，快捷键 N"
               >
                 <PencilRuler className="h-4 w-4" />
               </Button>
