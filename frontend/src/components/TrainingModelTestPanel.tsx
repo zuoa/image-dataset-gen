@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { Download, ImageUp, ScanSearch, SlidersHorizontal, Target } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { Download, ImageUp, Maximize2, ScanSearch, SlidersHorizontal, Target, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { createTrainingInferenceTest, getTrainingInferenceTest } from "../api/datasets";
 import { detectionStyle } from "../lib/annotation";
@@ -24,6 +24,10 @@ const detectionPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa",
 const TEST_STATUS_POLL_INITIAL_DELAY_MS = 1000;
 const TEST_STATUS_POLL_INTERVAL_MS = 4000;
 const TEST_STATUS_POLL_HIDDEN_INTERVAL_MS = 15000;
+const IMAGE_VIEWER_MIN_SCALE = 1;
+const IMAGE_VIEWER_MAX_SCALE = 3;
+const IMAGE_VIEWER_SCALE_STEP = 0.25;
+const IMAGE_VIEWER_INITIAL_SCALE = 1.5;
 
 export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelProps) {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -35,6 +39,8 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
   const [testJob, setTestJob] = useState<TrainingInferenceTest | null>(null);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [showDownloadConfidence, setShowDownloadConfidence] = useState(true);
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+  const [imageViewerScale, setImageViewerScale] = useState(IMAGE_VIEWER_INITIAL_SCALE);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const imageSize = job.config.imageSize || 640;
@@ -103,10 +109,12 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
   useEffect(() => {
     if (!result) {
       setSelectedDetectionIndex(null);
+      setIsImageViewerOpen(false);
       return;
     }
     setDisplayThreshold(result.confidenceThreshold);
     setSelectedDetectionIndex(null);
+    setImageViewerScale(IMAGE_VIEWER_INITIAL_SCALE);
   }, [result?.confidenceThreshold, testJob?.id]);
 
   useEffect(() => {
@@ -114,6 +122,24 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
     if (filteredDetections.some(({ index }) => index === selectedDetectionIndex)) return;
     setSelectedDetectionIndex(null);
   }, [filteredDetections, selectedDetectionIndex]);
+
+  useEffect(() => {
+    if (!isImageViewerOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsImageViewerOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isImageViewerOpen]);
 
   async function runModelTest() {
     if (!token || !imageFile || !canRun) return;
@@ -156,6 +182,15 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
     } catch {
       triggerDownload(result.annotatedImage, filename);
     }
+  }
+
+  function openImageViewer() {
+    setImageViewerScale(IMAGE_VIEWER_INITIAL_SCALE);
+    setIsImageViewerOpen(true);
+  }
+
+  function adjustImageViewerScale(delta: number) {
+    setImageViewerScale((currentScale) => clampScale(currentScale + delta));
   }
 
   return (
@@ -283,46 +318,24 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
           {result ? (
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
               <div className="overflow-hidden rounded-[16px] border border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950">
-                <div className="flex min-h-[320px] items-center justify-center p-3">
-                  <div className="relative inline-block max-h-[560px] max-w-full">
-                    <img
-                      src={result.sourceImage || result.annotatedImage}
-                      alt="模型测试结果"
-                      className="block max-h-[560px] max-w-full object-contain"
-                      draggable={false}
-                    />
-                    {result.sourceImage ? (
-                      <div className="absolute inset-0" onClick={() => setSelectedDetectionIndex(null)}>
-                        {filteredDetections.map(({ detection, index }) => {
-                          const selected = selectedDetectionIndex === index;
-                          const color = selected ? "#bef264" : detectionColor(index);
-                          return (
-                            <button
-                              key={`${detection.category}-${index}`}
-                              type="button"
-                              aria-label={`选择 ${detection.category}，置信度 ${formatConfidence(detection.confidence)}`}
-                              className={cn(
-                                "absolute rounded-lg border-2 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-lime-300",
-                                selected ? "z-10 shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "hover:shadow-[0_0_0_2px_rgba(0,0,0,0.28)]",
-                              )}
-                              style={{ ...detectionStyle(detection.bbox), borderColor: color }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setSelectedDetectionIndex(index);
-                              }}
-                            >
-                              <span
-                                className="absolute left-0 top-0 max-w-full -translate-y-full truncate rounded-t-md px-2 py-1 text-[11px] font-medium text-neutral-950"
-                                style={{ backgroundColor: color }}
-                              >
-                                #{index + 1} {detection.category} · {formatConfidence(detection.confidence)}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
+                <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-3 py-2 dark:border-white/10">
+                  <div className="text-xs text-neutral-500">
+                    {filteredDetections.length} 个可见检测框
                   </div>
+                  <Button variant="secondary" className="px-3 py-1.5 text-xs" onClick={openImageViewer}>
+                    <Maximize2 className="mr-1.5 h-3.5 w-3.5" />
+                    放大查看
+                  </Button>
+                </div>
+                <div className="flex min-h-[320px] items-center justify-center p-3">
+                  <AnnotatedResultImage
+                    result={result}
+                    detections={filteredDetections}
+                    selectedDetectionIndex={selectedDetectionIndex}
+                    onSelectDetection={setSelectedDetectionIndex}
+                    className="max-h-[560px] max-w-full"
+                    imageClassName="max-h-[560px] max-w-full object-contain"
+                  />
                 </div>
               </div>
               <div className="space-y-4">
@@ -413,12 +426,138 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
           )}
         </div>
       </div>
+
+      {result && isImageViewerOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black/90 text-white backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="放大查看模型测试结果"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-neutral-950/80 px-4 py-3 shadow-2xl">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-400">Preview</div>
+              <div className="mt-1 text-sm font-medium">模型测试结果</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20 disabled:opacity-40"
+                onClick={() => adjustImageViewerScale(-IMAGE_VIEWER_SCALE_STEP)}
+                disabled={imageViewerScale <= IMAGE_VIEWER_MIN_SCALE}
+                aria-label="缩小结果图"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </button>
+              <div className="min-w-16 text-center text-xs tabular-nums text-neutral-300">
+                {Math.round(imageViewerScale * 100)}%
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20 disabled:opacity-40"
+                onClick={() => adjustImageViewerScale(IMAGE_VIEWER_SCALE_STEP)}
+                disabled={imageViewerScale >= IMAGE_VIEWER_MAX_SCALE}
+                aria-label="放大结果图"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20"
+                onClick={() => setIsImageViewerOpen(false)}
+                aria-label="关闭放大查看"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-5">
+            <div className="flex min-h-full min-w-full items-center justify-center">
+              <AnnotatedResultImage
+                result={result}
+                detections={filteredDetections}
+                selectedDetectionIndex={selectedDetectionIndex}
+                onSelectDetection={setSelectedDetectionIndex}
+                className="max-w-none shrink-0 rounded-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+                imageClassName="h-auto w-full max-w-none object-contain"
+                style={{ width: `${imageViewerScale * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type AnnotatedResultImageProps = {
+  result: TrainingInferenceResult;
+  detections: DisplayDetection[];
+  selectedDetectionIndex: number | null;
+  onSelectDetection: (index: number | null) => void;
+  className?: string;
+  imageClassName?: string;
+  style?: CSSProperties;
+};
+
+function AnnotatedResultImage({
+  result,
+  detections,
+  selectedDetectionIndex,
+  onSelectDetection,
+  className,
+  imageClassName,
+  style,
+}: AnnotatedResultImageProps) {
+  return (
+    <div className={cn("relative inline-block", className)} style={style}>
+      <img
+        src={result.sourceImage || result.annotatedImage}
+        alt="模型测试结果"
+        className={cn("block", imageClassName)}
+        draggable={false}
+      />
+      {result.sourceImage ? (
+        <div className="absolute inset-0" onClick={() => onSelectDetection(null)}>
+          {detections.map(({ detection, index }) => {
+            const selected = selectedDetectionIndex === index;
+            const color = selected ? "#bef264" : detectionColor(index);
+            return (
+              <button
+                key={`${detection.category}-${index}`}
+                type="button"
+                aria-label={`选择 ${detection.category}，置信度 ${formatConfidence(detection.confidence)}`}
+                className={cn(
+                  "absolute rounded-lg border-2 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-lime-300",
+                  selected ? "z-10 shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "hover:shadow-[0_0_0_2px_rgba(0,0,0,0.28)]",
+                )}
+                style={{ ...detectionStyle(detection.bbox), borderColor: color }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectDetection(index);
+                }}
+              >
+                <span
+                  className="absolute left-0 top-0 max-w-full -translate-y-full truncate rounded-t-md px-2 py-1 text-[11px] font-medium text-neutral-950"
+                  style={{ backgroundColor: color }}
+                >
+                  #{index + 1} {detection.category} · {formatConfidence(detection.confidence)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function detectionColor(index: number) {
   return detectionPalette[index % detectionPalette.length];
+}
+
+function clampScale(value: number) {
+  return Math.min(Math.max(value, IMAGE_VIEWER_MIN_SCALE), IMAGE_VIEWER_MAX_SCALE);
 }
 
 function formatConfidence(value: number) {
