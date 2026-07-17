@@ -13,8 +13,8 @@ from app.extensions import db
 from app.models import Dataset, DatasetImage, DatasetTask
 from app.services.annotation_storage import save_annotation_result
 from app.services.dataset_service import (
-    next_dataset_ordinal,
     now_utc,
+    reserve_dataset_ordinals,
     sync_dataset_category_rows,
     sync_dataset_stats_from_db,
     sync_dataset_task_stats_from_db,
@@ -199,6 +199,7 @@ def _persist_prepared_images(
     model_format: str,
     task: DatasetTask | None = None,
 ) -> dict[str, Any]:
+    next_ordinal = reserve_dataset_ordinals(dataset, len(prepared_images))
     if task is None:
         task = DatasetTask(
             dataset_id=dataset.id,
@@ -228,8 +229,6 @@ def _persist_prepared_images(
     dataset.categories = categories
     sync_dataset_category_rows(dataset)
     db.session.flush()
-
-    next_ordinal = next_dataset_ordinal(dataset)
     annotated_count = 0
     empty_annotation_count = 0
 

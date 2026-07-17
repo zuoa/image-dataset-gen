@@ -102,8 +102,41 @@ def _dataset_id(dataset: Dataset | str) -> str:
     return dataset.id if isinstance(dataset, Dataset) else dataset
 
 
-def next_dataset_ordinal(dataset: Dataset | str) -> int:
+def reserve_dataset_ordinals(dataset: Dataset | str, count: int) -> int:
+    """Reserve a contiguous ordinal range without holding the dataset row during slow work."""
     dataset_id = _dataset_id(dataset)
+    reservation_size = max(1, int(count))
+    if db.engine.dialect.name == "postgresql":
+        statement = text(
+            """
+            UPDATE datasets
+            SET next_image_ordinal = GREATEST(
+                next_image_ordinal,
+                COALESCE(
+                    (
+                        SELECT MAX(dataset_images.ordinal) + 1
+                        FROM dataset_images
+                        WHERE dataset_images.dataset_id = :dataset_id
+                    ),
+                    1
+                )
+            ) + :reservation_size
+            WHERE id = :dataset_id
+            RETURNING next_image_ordinal - :reservation_size
+            """
+        ).bindparams(bindparam("dataset_id", type_=Dataset.id.type))
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            return int(
+                connection.execute(
+                    statement,
+                    {"dataset_id": dataset_id, "reservation_size": reservation_size},
+                ).scalar_one()
+            )
+
+    # SQLite test/development databases do not provide a useful independent
+    # autocommit connection for an in-memory database. Keep the allocation in
+    # the current transaction there; production PostgreSQL uses the short
+    # autocommit statement above.
     locked_dataset = db.session.execute(
         select(Dataset).where(Dataset.id == dataset_id).with_for_update()
     ).scalar_one()
@@ -114,12 +147,38 @@ def next_dataset_ordinal(dataset: Dataset | str) -> int:
         or 0
     )
     ordinal = max(int(locked_dataset.next_image_ordinal or 1), max_ordinal + 1)
-    locked_dataset.next_image_ordinal = ordinal + 1
+    locked_dataset.next_image_ordinal = ordinal + reservation_size
     return ordinal
+
+
+def next_dataset_ordinal(dataset: Dataset | str) -> int:
+    return reserve_dataset_ordinals(dataset, 1)
 
 
 def next_dataset_export_version(dataset: Dataset | str) -> int:
     dataset_id = _dataset_id(dataset)
+    if db.engine.dialect.name == "postgresql":
+        statement = text(
+            """
+            UPDATE datasets
+            SET next_export_version = GREATEST(
+                next_export_version,
+                COALESCE(
+                    (
+                        SELECT MAX(dataset_exports.version) + 1
+                        FROM dataset_exports
+                        WHERE dataset_exports.dataset_id = :dataset_id
+                    ),
+                    1
+                )
+            ) + 1
+            WHERE id = :dataset_id
+            RETURNING next_export_version - 1
+            """
+        ).bindparams(bindparam("dataset_id", type_=Dataset.id.type))
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            return int(connection.execute(statement, {"dataset_id": dataset_id}).scalar_one())
+
     locked_dataset = db.session.execute(
         select(Dataset).where(Dataset.id == dataset_id).with_for_update()
     ).scalar_one()

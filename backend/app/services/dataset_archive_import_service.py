@@ -13,8 +13,8 @@ from app.extensions import db
 from app.models import Dataset, DatasetImage, DatasetTask
 from app.services.annotation_storage import save_annotation_result
 from app.services.dataset_service import (
-    next_dataset_ordinal,
     now_utc,
+    reserve_dataset_ordinals,
     sync_dataset_category_rows,
     sync_dataset_stats_from_db,
     sync_dataset_task_stats_from_db,
@@ -95,16 +95,26 @@ def _prepare_archive(
             split_directories = _find_yolo_split_directories(dataset_root, split)
             if split_directories is not None:
                 images_dir, labels_dir = split_directories
-                loaded.append(
-                    (
-                        "val" if split == "valid" else split,
-                        sv.DetectionDataset.from_yolo(
-                            str(images_dir), str(labels_dir), str(data_yaml)
-                        ),
+                try:
+                    loaded.append(
+                        (
+                            "val" if split == "valid" else split,
+                            sv.DetectionDataset.from_yolo(
+                                str(images_dir), str(labels_dir), str(data_yaml)
+                            ),
+                        )
                     )
-                )
+                except Exception as exc:
+                    raise DatasetArchiveImportError(
+                        "无法解析 YOLO 标注，请检查 data.yaml 和标签文件。"
+                    ) from exc
         if loaded:
-            return _prepare_supervision_datasets(loaded, "yolo")
+            try:
+                return _prepare_supervision_datasets(loaded, "yolo")
+            except Exception as exc:
+                raise DatasetArchiveImportError(
+                    "无法解析 YOLO 标注，请检查 data.yaml 和标签文件。"
+                ) from exc
 
     coco_annotations = sorted(root.rglob("instances_*.json"))
     if coco_annotations:
@@ -116,31 +126,46 @@ def _prepare_archive(
             if not images_dir.is_dir():
                 images_dir = dataset_root / "images" / split
             if images_dir.is_dir():
-                loaded.append(
-                    (
-                        split,
-                        sv.DetectionDataset.from_coco(
-                            str(images_dir), str(annotation_path)
-                        ),
+                try:
+                    loaded.append(
+                        (
+                            split,
+                            sv.DetectionDataset.from_coco(
+                                str(images_dir), str(annotation_path)
+                            ),
+                        )
                     )
-                )
+                except Exception as exc:
+                    raise DatasetArchiveImportError(
+                        "无法解析 COCO 标注，请检查 JSON 标注文件。"
+                    ) from exc
         if loaded:
-            return _prepare_supervision_datasets(loaded, "coco")
+            try:
+                return _prepare_supervision_datasets(loaded, "coco")
+            except Exception as exc:
+                raise DatasetArchiveImportError(
+                    "无法解析 COCO 标注，请检查 JSON 标注文件。"
+                ) from exc
 
     voc_annotations = next((path for path in root.rglob("Annotations") if path.is_dir()), None)
     if voc_annotations is not None:
         dataset_root = voc_annotations.parent
         images_dir = dataset_root / "JPEGImages"
         if images_dir.is_dir():
-            loaded = [
-                (
-                    "",
-                    sv.DetectionDataset.from_pascal_voc(
-                        str(images_dir), str(voc_annotations)
-                    ),
-                )
-            ]
-            return _prepare_supervision_datasets(loaded, "voc")
+            try:
+                loaded = [
+                    (
+                        "",
+                        sv.DetectionDataset.from_pascal_voc(
+                            str(images_dir), str(voc_annotations)
+                        ),
+                    )
+                ]
+                return _prepare_supervision_datasets(loaded, "voc")
+            except Exception as exc:
+                raise DatasetArchiveImportError(
+                    "无法解析 Pascal VOC 标注，请检查 XML 标注文件。"
+                ) from exc
 
     return _prepare_plain_images(root)
 
@@ -227,6 +252,7 @@ def _persist_archive_images(
     detected_format: str,
     skipped: list[str],
 ) -> dict[str, Any]:
+    next_ordinal = reserve_dataset_ordinals(dataset, len(prepared))
     task = DatasetTask(
         dataset_id=dataset.id,
         user_id=user_id,
@@ -246,7 +272,6 @@ def _persist_archive_images(
     dataset.categories = categories
     sync_dataset_category_rows(dataset)
     db.session.flush()
-    next_ordinal = next_dataset_ordinal(dataset)
     annotated_count = 0
     for source_ordinal, item in enumerate(prepared, start=1):
         image_key = f"image-{next_ordinal:06d}"

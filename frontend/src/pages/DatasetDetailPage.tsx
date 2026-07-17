@@ -260,6 +260,7 @@ export function DatasetDetailPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [archiveImportFile, setArchiveImportFile] = useState<{ name: string; size: number } | null>(null);
   const [activeImportTab, setActiveImportTab] = useState<ImportTab>("video");
   const [videoFrameIntervalMode, setVideoFrameIntervalMode] = useState<VideoFrameIntervalMode>("seconds");
   const [videoFrameInterval, setVideoFrameInterval] = useState(30);
@@ -737,6 +738,7 @@ export function DatasetDetailPage() {
   }
 
   function openImportModal() {
+    setActionError(null);
     setIsImportModalOpen(true);
     setIsAugmentationModalOpen(false);
     setIsAnnotationModalOpen(false);
@@ -1000,8 +1002,10 @@ export function DatasetDetailPage() {
   async function handleArchiveImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!token || !datasetId || !file) return;
+    setArchiveImportFile({ name: file.name, size: file.size });
     setIsImporting(true);
     setImportSummary(null);
+    setActionError(null);
     try {
       const response = await importDatasetImagesArchive(datasetId, token, file);
       mergeDatasetMetadata(response.dataset);
@@ -1016,6 +1020,7 @@ export function DatasetDetailPage() {
       setActionError((error as Error).message);
     } finally {
       event.target.value = "";
+      setArchiveImportFile(null);
       setIsImporting(false);
     }
   }
@@ -2097,6 +2102,15 @@ export function DatasetDetailPage() {
             </div>
 
             <div className="mt-5">
+              {actionError ? (
+                <div
+                  className="mb-4 rounded-2xl border border-red-300/50 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-950/30 dark:text-red-100"
+                  role="alert"
+                >
+                  {actionError}
+                </div>
+              ) : null}
+
               {activeImportTab === "video" ? (
                 <div
                   className="rounded-[22px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]"
@@ -2282,11 +2296,24 @@ export function DatasetDetailPage() {
                       className="w-full justify-center sm:w-auto"
                       onClick={() => archiveInputRef.current?.click()}
                       disabled={isAnyImporting}
+                      aria-busy={isImporting}
                     >
-                      <Upload className="mr-2 h-4 w-4" />
+                      {isImporting ? <Loader className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
                       {isImporting ? "导入中..." : "选择 ZIP"}
                     </Button>
                   </div>
+                  {isImporting && archiveImportFile ? (
+                    <div
+                      className="mt-4 flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-neutral-300"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Loader className="h-4 w-4 shrink-0 animate-spin" />
+                      <span className="min-w-0 truncate">
+                        正在上传并解析 {archiveImportFile.name}（{(archiveImportFile.size / 1024 / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MB）
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

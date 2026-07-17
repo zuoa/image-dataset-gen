@@ -751,6 +751,10 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert dataset["taskCount"] == 1
     images = _fetch_images(client, dataset_id, headers)
     assert all(image["sourceType"] == "import" for image in images)
+    with app.app_context():
+        imported_dataset = db.session.get(Dataset, dataset_id)
+        assert imported_dataset is not None
+        assert imported_dataset.next_image_ordinal == 3
 
     export_response = client.post(
         f"/api/v1/datasets/{dataset_id}/export",
@@ -774,6 +778,85 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     assert image_names
     exported_image = Image.open(BytesIO(archive.read(image_names[0])))
     assert exported_image.mode == "RGBA"
+
+
+def test_import_yolo_archive_preserves_annotations_and_split(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-yolo-import")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr(
+            "export/data.yaml",
+            "train: images/train\nval: images/val\nnames: [pedestrian, umbrella]\n",
+        )
+        archive.writestr("export/images/train/sample.png", _png_bytes())
+        archive.writestr(
+            "export/labels/train/sample.txt",
+            "0 0.500000 0.500000 0.250000 0.500000\n",
+        )
+    archive_buffer.seek(0)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["summary"] == {
+        "annotatedCount": 1,
+        "detectedFormat": "yolo",
+        "emptyAnnotationCount": 0,
+        "importedCount": 1,
+        "skippedCount": 0,
+        "skippedFiles": [],
+    }
+    image = _fetch_images(client, dataset_id, headers)[0]
+    assert image["annotationStatus"] == "annotated"
+    assert image["split"] == "train"
+    assert image["detections"] == [
+        {
+            "category": "pedestrian",
+            "confidence": 1.0,
+            "bbox": [0.5, 0.5, 0.25, 0.5],
+        }
+    ]
+
+
+def test_import_rejects_malformed_yolo_archive_with_actionable_error(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-invalid-yolo-import")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("data.yaml", "train: images/train\n")
+        archive.writestr("images/train/sample.png", _png_bytes())
+        archive.writestr("labels/train/sample.txt", "0 0.5 0.5 0.2 0.2\n")
+    archive_buffer.seek(0)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "message": "无法解析 YOLO 标注，请检查 data.yaml 和标签文件。"
+    }
 
 
 def test_selection_can_target_visible_image_scope(tmp_path: Path):
