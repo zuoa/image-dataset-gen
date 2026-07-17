@@ -133,6 +133,36 @@ def test_yolo_archive_round_trips_multiple_detections(tmp_path):
     label_name = next(name for name in archive.namelist() if name.endswith(".txt"))
     assert len(archive.read(label_name).decode("utf-8").splitlines()) == 2
 
+    reimported_dataset_id = _create_dataset(client, headers)
+    reimported = client.post(
+        f"/api/v1/datasets/{reimported_dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (BytesIO(downloaded.data), "exported-dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert reimported.status_code == 200
+    assert reimported.get_json()["summary"] == {
+        "annotatedCount": 1,
+        "detectedFormat": "yolo",
+        "emptyAnnotationCount": 0,
+        "importedCount": 1,
+        "skippedCount": 0,
+        "skippedFiles": [],
+    }
+    reimported_image = client.get(
+        f"/api/v1/datasets/{reimported_dataset_id}", headers=headers
+    ).get_json()["dataset"]["images"][0]
+    assert reimported_image["annotationStatus"] == "annotated"
+    reimported_annotations = load_annotation_result(
+        str(tmp_path), reimported_dataset_id, reimported_image["id"]
+    )
+    assert reimported_annotations is not None
+    assert len(reimported_annotations["detections"]) == 2
+    assert {item["category"] for item in reimported_annotations["detections"]} == {
+        "pedestrian",
+        "umbrella",
+    }
+
 
 def test_roboflow_connection_encrypts_secret_and_never_returns_it(tmp_path, monkeypatch):
     class ConnectionConfig(TestConfig):

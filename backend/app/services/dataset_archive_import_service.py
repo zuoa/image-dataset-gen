@@ -92,9 +92,9 @@ def _prepare_archive(
         dataset_root = data_yaml.parent
         loaded: list[tuple[str, Any]] = []
         for split in ("train", "valid", "val", "test"):
-            images_dir = dataset_root / split / "images"
-            labels_dir = dataset_root / split / "labels"
-            if images_dir.is_dir() and labels_dir.is_dir():
+            split_directories = _find_yolo_split_directories(dataset_root, split)
+            if split_directories is not None:
+                images_dir, labels_dir = split_directories
                 loaded.append(
                     (
                         "val" if split == "valid" else split,
@@ -143,6 +143,21 @@ def _prepare_archive(
             return _prepare_supervision_datasets(loaded, "voc")
 
     return _prepare_plain_images(root)
+
+
+def _find_yolo_split_directories(dataset_root: Path, split: str) -> tuple[Path, Path] | None:
+    candidates = (
+        (dataset_root / split / "images", dataset_root / split / "labels"),
+        (dataset_root / "images" / split, dataset_root / "labels" / split),
+    )
+    return next(
+        (
+            (images_dir, labels_dir)
+            for images_dir, labels_dir in candidates
+            if images_dir.is_dir() and labels_dir.is_dir()
+        ),
+        None,
+    )
 
 
 def _prepare_supervision_datasets(
