@@ -43,17 +43,23 @@ export function getAntTheme(resolved: "light" | "dark"): ThemeConfig {
     token: {
       fontFamily: "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       fontFamilyCode: "'IBM Plex Mono', monospace",
-      borderRadius: 12,
-      borderRadiusLG: 16,
-      borderRadiusSM: 8,
+      borderRadius: 8,
+      borderRadiusLG: 10,
+      borderRadiusSM: 6,
       borderRadiusXS: 4,
+      controlHeight: 36,
+      controlHeightSM: 28,
       colorPrimary: "#2563eb",
       colorInfo: "#2563eb",
       colorSuccess: "#16a34a",
       colorWarning: "#d97706",
       colorError: "#dc2626",
       colorTextBase: isDark ? "#fafafa" : "#171717",
-      colorBgBase: isDark ? "#0a0a0a" : "#ffffff",
+      colorTextSecondary: isDark ? "#a3a3a3" : "#525252",
+      colorBgBase: isDark ? "#0b0f14" : "#ffffff",
+      colorBgLayout: isDark ? "#0b0f14" : "#f6f7f9",
+      colorBgContainer: isDark ? "#11151b" : "#ffffff",
+      colorBorder: isDark ? "#2a3038" : "#d7dce3",
     },
     components: {
       Layout: {
@@ -62,13 +68,13 @@ export function getAntTheme(resolved: "light" | "dark"): ThemeConfig {
         siderBg: "transparent",
       },
       Card: {
-        borderRadiusLG: 16,
+        borderRadiusLG: 10,
       },
       Modal: {
-        borderRadiusLG: 16,
+        borderRadiusLG: 10,
       },
       Drawer: {
-        borderRadiusLG: 16,
+        borderRadiusLG: 10,
       },
       Button: {
         borderRadius: 8,

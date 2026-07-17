@@ -1,43 +1,46 @@
-import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   ArrowLeft,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Eye,
+  EyeOff,
   ImageOff,
   Keyboard,
-  ListFilter,
   Loader2,
+  Maximize2,
   Menu,
+  MoreHorizontal,
   MousePointer2,
   PencilRuler,
+  Redo2,
   Save,
   Trash2,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { Link, UNSAFE_NavigationContext, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Button,
-  Card,
   Drawer,
+  Dropdown,
   Grid,
-  Input,
-  Layout,
   Modal,
-  Segmented,
   Select,
-  Slider,
-  Space,
-  Switch,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 
 import { deleteDatasetImage, getDataset, updateDatasetImageAnnotations } from "../api/datasets";
 import { AuthImage } from "../components/AuthImage";
+import { AnnotationInspectorPanel } from "../components/annotation/AnnotationInspectorPanel";
+import { AnnotationQueuePanel } from "../components/annotation/AnnotationQueuePanel";
+import type { AnnotationFilter } from "../components/annotation/types";
 import { EmptyState } from "../components/common/EmptyState";
 import { LoadingState } from "../components/common/LoadingState";
-import { StatusBadge } from "../components/common/StatusBadge";
 import { confirm } from "../hooks/useConfirm";
 import {
   boxFromCorners,
@@ -58,12 +61,10 @@ import { useAuthStore } from "../store/auth";
 const categoryPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
 const unsavedAnnotationMessage = "当前图片有未保存的标注改动，确认放弃并继续？";
 const PAGE_SIZE = 100;
-type AnnotationFilter = "" | "annotated" | "unannotated";
-const annotationFilterOptions: Array<{ value: AnnotationFilter; label: string }> = [
-  { value: "", label: "全部" },
-  { value: "unannotated", label: "未标注" },
-  { value: "annotated", label: "已处理" },
-];
+const MAX_HISTORY_LENGTH = 50;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 3;
+const ZOOM_STEP = 0.25;
 
 function annotationStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -94,10 +95,24 @@ function categoryColor(category: string, categories: string[]) {
   return categoryPalette[index % categoryPalette.length];
 }
 
-function isEditableTarget(target: EventTarget | null) {
+function isInteractiveTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  const tagName = target.tagName.toLowerCase();
-  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
+  return Boolean(target.closest("input, textarea, select, button, a, [role='button'], [contenteditable='true']"));
+}
+
+function isDetectionArray(value: unknown): value is Detection[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const detection = item as Partial<Detection>;
+    return (
+      typeof detection.category === "string" &&
+      typeof detection.confidence === "number" &&
+      Array.isArray(detection.bbox) &&
+      detection.bbox.length === 4 &&
+      detection.bbox.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
+    );
+  });
 }
 
 export function DatasetAnnotatePage() {
@@ -125,9 +140,14 @@ export function DatasetAnnotatePage() {
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>("");
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState<boolean | undefined>(undefined);
-  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [boxesVisible, setBoxesVisible] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const [saveAnnouncement, setSaveAnnouncement] = useState("");
+  const [draftRecovered, setDraftRecovered] = useState(false);
+  const [, setHistoryRevision] = useState(0);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +163,9 @@ export function DatasetAnnotatePage() {
   isLoadingMoreRef.current = isLoadingMore;
   const annotationFilterRef = useRef<AnnotationFilter>("");
   annotationFilterRef.current = annotationFilter;
+  const undoStackRef = useRef<Detection[][]>([]);
+  const redoStackRef = useRef<Detection[][]>([]);
+  const draftOwnerImageIdRef = useRef<string | null>(null);
   const loadersRef = useRef<{
     reloadFirstPage: (preferredImageId?: string | null) => Promise<DatasetImage[] | null>;
     loadMore: () => Promise<DatasetImage[] | null>;
@@ -163,21 +186,15 @@ export function DatasetAnnotatePage() {
   const canSave = activeImage !== null && !deletingImageId && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
   const isDeletingActiveImage = Boolean(activeImage && deletingImageId === activeImage.id);
   const isDesktop = Boolean(screens.xl);
-  const showInspector = inspectorOpen ?? isDesktop;
-  const queueInitializedRef = useRef(false);
+  const isTablet = Boolean(screens.md);
+  const canUndo = undoStackRef.current.length > 0;
+  const canRedo = redoStackRef.current.length > 0;
+  const draftStorageKey = activeImage && datasetId ? `dataset-forge:annotation-draft:${datasetId}:${activeImage.id}` : null;
 
   useEffect(() => {
-    if (inspectorOpen === undefined && screens.xl !== undefined) {
-      setInspectorOpen(screens.xl);
-    }
-  }, [screens.xl]);
-
-  useEffect(() => {
-    if (!queueInitializedRef.current && screens.xl !== undefined) {
-      queueInitializedRef.current = true;
-      setQueueCollapsed(!screens.xl);
-    }
-  }, [screens.xl]);
+    setQueueOpen(false);
+    setInspectorOpen(false);
+  }, [isDesktop, isTablet]);
 
   function applyDatasetPage(nextDataset: Dataset, preferredImageId?: string | null) {
     const pageImages = nextDataset.images ?? [];
@@ -290,7 +307,7 @@ export function DatasetAnnotatePage() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [dataset, hasMoreImages]);
+  }, [dataset, hasMoreImages, isDesktop, queueOpen]);
 
   useEffect(() => {
     if (categories.length === 0) {
@@ -301,10 +318,55 @@ export function DatasetAnnotatePage() {
   }, [categories]);
 
   useEffect(() => {
-    setDraftDetections(activeImage?.detections ?? []);
+    if (!activeImage) {
+      draftOwnerImageIdRef.current = null;
+      setDraftDetections([]);
+      setDraftRecovered(false);
+      return;
+    }
+
+    let initialDetections = activeImage.detections;
+    let recovered = false;
+    if (draftStorageKey) {
+      try {
+        const stored = window.sessionStorage.getItem(draftStorageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as unknown;
+          if (isDetectionArray(parsed)) {
+            initialDetections = parsed;
+            recovered = !detectionsEqual(parsed, activeImage.detections);
+          }
+        }
+      } catch {
+        window.sessionStorage.removeItem(draftStorageKey);
+      }
+    }
+
+    draftOwnerImageIdRef.current = null;
+    setDraftDetections(initialDetections);
+    setDraftRecovered(recovered);
     setSelectedDetectionIndex(null);
     setIsAddingDetection(false);
-  }, [activeImage]);
+    setBoxesVisible(true);
+    setZoom(1);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    setHistoryRevision((current) => current + 1);
+  }, [activeImage?.id, draftStorageKey]);
+
+  useEffect(() => {
+    if (!activeImage || !draftStorageKey) return;
+    if (draftOwnerImageIdRef.current !== activeImage.id) {
+      draftOwnerImageIdRef.current = activeImage.id;
+      return;
+    }
+    if (hasAnnotationChanges) {
+      window.sessionStorage.setItem(draftStorageKey, JSON.stringify(draftDetections));
+    } else {
+      window.sessionStorage.removeItem(draftStorageKey);
+      setDraftRecovered(false);
+    }
+  }, [activeImage, draftDetections, draftStorageKey, hasAnnotationChanges]);
 
   useEffect(() => {
     setPreviewImageNaturalSize(null);
@@ -321,7 +383,12 @@ export function DatasetAnnotatePage() {
     const syncViewport = () => {
       const rect = stage.getBoundingClientRect();
       setImageViewport(
-        fitImageViewport(rect.width, rect.height, previewImageNaturalSize.width, previewImageNaturalSize.height),
+        fitImageViewport(
+          Math.max(rect.width - 32, 0),
+          Math.max(rect.height - 32, 0),
+          previewImageNaturalSize.width,
+          previewImageNaturalSize.height,
+        ),
       );
     };
 
@@ -384,36 +451,54 @@ export function DatasetAnnotatePage() {
 
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const hasCommandModifier = event.metaKey || event.ctrlKey;
+      if (hasCommandModifier && key === "z") {
+        if (isInteractiveTarget(event.target)) return;
+        event.preventDefault();
+        if (event.shiftKey) redoDetectionChange();
+        else undoDetectionChange();
+        return;
+      }
       const isSaveShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s";
       if (isSaveShortcut) {
         event.preventDefault();
         if (activeImage) void saveAnnotations();
         return;
       }
-      if (event.key === "Enter" && !isEditableTarget(event.target)) {
+      if (event.key === "Enter" && !isInteractiveTarget(event.target)) {
         event.preventDefault();
-        if (activeImage) void saveAnnotations();
+        if (activeImage) void confirmAndAdvance();
         return;
       }
 
-      if (isEditableTarget(event.target)) return;
+      if (isInteractiveTarget(event.target)) return;
 
-      const key = event.key.toLowerCase();
       if (key === "?") {
         event.preventDefault();
         setHelpOpen((current) => !current);
         return;
       }
-      if (key === "a" || key === "b") {
+      if (key === "b") {
         event.preventDefault();
         if (!activeImage) return;
         if (event.repeat) return;
         setIsAddingDetection((current) => !current);
         return;
       }
-      if (key === "n") {
+      if (key === "=" || key === "+") {
         event.preventDefault();
-        if (!event.repeat) enterAddingDetectionMode();
+        setZoom((current) => Math.min(MAX_ZOOM, current + ZOOM_STEP));
+        return;
+      }
+      if (key === "-") {
+        event.preventDefault();
+        setZoom((current) => Math.max(MIN_ZOOM, current - ZOOM_STEP));
+        return;
+      }
+      if (key === "0") {
+        event.preventDefault();
+        setZoom(1);
         return;
       }
       if (event.key === "Escape") {
@@ -472,9 +557,10 @@ export function DatasetAnnotatePage() {
   }
 
   async function selectImage(imageId: string) {
-    if (!(await confirmDiscardChanges())) return;
+    if (!(await confirmDiscardChanges())) return false;
     setActiveImageId(imageId);
     setActionError(null);
+    return true;
   }
 
   async function changeAnnotationFilter(nextFilter: AnnotationFilter) {
@@ -493,16 +579,15 @@ export function DatasetAnnotatePage() {
     if (nextIndex >= images.length) {
       if (hasMoreImages) {
         const page = await loadersRef.current.loadMore();
-        const after = page ? loadedImagesRef.current : loadedImagesRef.current;
-        const target = after[nextIndex];
+        const target = loadedImagesRef.current[nextIndex] ?? page?.[0];
         if (target) {
-          selectImage(target.id);
+          await selectImage(target.id);
         }
         return;
       }
       return;
     }
-    selectImage(images[nextIndex].id);
+    await selectImage(images[nextIndex].id);
   }
 
   async function advanceAfterImageLeavesQueue(removedImageId: string) {
@@ -552,25 +637,78 @@ export function DatasetAnnotatePage() {
     setActiveImageId(followingImage?.id ?? previousImage?.id ?? null);
   }
 
-  async function saveAnnotations() {
-    if (!token || !datasetId || !activeImage || deletingImageId || isSaving || !canSave) return;
+  async function advanceAfterSavedImage(savedIndex: number) {
+    let target = loadedImagesRef.current[savedIndex + 1] ?? null;
+    if (!target && hasMoreRef.current) {
+      const page = await loadersRef.current.loadMore();
+      target = loadedImagesRef.current[savedIndex + 1] ?? page?.[0] ?? null;
+    }
+    if (target) {
+      setActiveImageId(target.id);
+      return true;
+    }
+    return false;
+  }
+
+  async function saveAnnotations(options: { advance?: boolean; detections?: Detection[] } = {}) {
+    const detectionsToSave = options.detections ?? draftDetections;
+    const hasChangesToSave = activeImage !== null && !detectionsEqual(activeImage.detections, detectionsToSave);
+    const canSaveCurrent = activeImage !== null && (hasChangesToSave || !isProcessed(activeImage.annotationStatus));
+    if (!token || !datasetId || !activeImage || deletingImageId || isSaving || !canSaveCurrent) return false;
+    const savedIndex = activeIndex;
     setIsSaving(true);
+    setSaveAnnouncement("正在保存当前图片的标注…");
     try {
-      const response = await updateDatasetImageAnnotations(datasetId, activeImage.id, token, draftDetections);
+      const response = await updateDatasetImageAnnotations(datasetId, activeImage.id, token, detectionsToSave);
       const updatedImage = response.image;
+      if (draftStorageKey) window.sessionStorage.removeItem(draftStorageKey);
+      setDraftRecovered(false);
       setDataset((current) => (current ? { ...current, ...response.dataset } : response.dataset));
       if (imageMatchesAnnotationFilter(updatedImage, annotationFilterRef.current)) {
         setLoadedImages((current) => current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)));
-        setActiveImageId(updatedImage.id);
+        setDraftDetections(updatedImage.detections);
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        setHistoryRevision((current) => current + 1);
+        if (options.advance) {
+          const advanced = await advanceAfterSavedImage(savedIndex);
+          setSaveAnnouncement(advanced ? "标注已保存，已进入下一张。" : "标注已保存，已到达队列末尾。");
+        } else {
+          setActiveImageId(updatedImage.id);
+          setSaveAnnouncement("当前图片的标注已保存。");
+        }
       } else {
         await advanceAfterImageLeavesQueue(updatedImage.id);
+        setSaveAnnouncement("标注已保存，已进入下一张待处理图片。");
       }
       setActionError(null);
+      return true;
     } catch (error) {
       setActionError((error as Error).message);
+      setSaveAnnouncement("保存失败，请检查错误信息后重试。");
+      return false;
     } finally {
       setIsSaving(false);
     }
+  }
+
+  async function confirmAndAdvance() {
+    if (!activeImage) return;
+    if (canSave) {
+      await saveAnnotations({ advance: true });
+      return;
+    }
+    await moveActiveImage(1);
+  }
+
+  async function markEmptyAndAdvance() {
+    if (!activeImage) return;
+    const alreadyEmpty = activeImage.annotationStatus === "empty" && draftDetections.length === 0;
+    if (alreadyEmpty) {
+      await moveActiveImage(1);
+      return;
+    }
+    await saveAnnotations({ advance: true, detections: [] });
   }
 
   async function removeDatasetImage(image: DatasetImage) {
@@ -608,17 +746,55 @@ export function DatasetAnnotatePage() {
     }
   }
 
-  function beginDragDetection(index: number, event: ReactMouseEvent<HTMLDivElement>) {
+  function recordHistorySnapshot(snapshot: Detection[]) {
+    const lastSnapshot = undoStackRef.current[undoStackRef.current.length - 1];
+    if (lastSnapshot && detectionsEqual(lastSnapshot, snapshot)) return;
+    undoStackRef.current = [...undoStackRef.current.slice(-(MAX_HISTORY_LENGTH - 1)), snapshot];
+    redoStackRef.current = [];
+    setHistoryRevision((current) => current + 1);
+  }
+
+  function updateDraftDetections(updater: (current: Detection[]) => Detection[]) {
+    const next = updater(draftDetections);
+    if (detectionsEqual(draftDetections, next)) return;
+    recordHistorySnapshot(draftDetections);
+    setDraftDetections(next);
+  }
+
+  function undoDetectionChange() {
+    const previous = undoStackRef.current[undoStackRef.current.length - 1];
+    if (!previous) return;
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    redoStackRef.current = [...redoStackRef.current, draftDetections].slice(-MAX_HISTORY_LENGTH);
+    setDraftDetections(previous);
+    setSelectedDetectionIndex(null);
+    setSaveAnnouncement("已撤销上一步标注操作。");
+    setHistoryRevision((current) => current + 1);
+  }
+
+  function redoDetectionChange() {
+    const next = redoStackRef.current[redoStackRef.current.length - 1];
+    if (!next) return;
+    redoStackRef.current = redoStackRef.current.slice(0, -1);
+    undoStackRef.current = [...undoStackRef.current, draftDetections].slice(-MAX_HISTORY_LENGTH);
+    setDraftDetections(next);
+    setSelectedDetectionIndex(null);
+    setSaveAnnouncement("已重做标注操作。");
+    setHistoryRevision((current) => current + 1);
+  }
+
+  function beginDragDetection(index: number, event: ReactPointerEvent<HTMLDivElement>) {
     if (!viewportRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     setSelectedDetectionIndex(index);
     const rect = viewportRef.current.getBoundingClientRect();
     const origin = draftDetections[index];
+    recordHistorySnapshot(draftDetections);
     const startX = event.clientX;
     const startY = event.clientY;
 
-    const handleMove = (moveEvent: MouseEvent) => {
+    const handleMove = (moveEvent: PointerEvent) => {
       const deltaX = (moveEvent.clientX - startX) / rect.width;
       const deltaY = (moveEvent.clientY - startY) / rect.height;
       setDraftDetections((current) =>
@@ -633,21 +809,24 @@ export function DatasetAnnotatePage() {
     };
 
     const handleUp = () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
     };
 
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
   }
 
-  function beginResizeDetection(index: number, corner: ResizeCorner, event: ReactMouseEvent<HTMLButtonElement>) {
+  function beginResizeDetection(index: number, corner: ResizeCorner, event: ReactPointerEvent<HTMLButtonElement>) {
     if (!viewportRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     setSelectedDetectionIndex(index);
     const rect = viewportRef.current.getBoundingClientRect();
     const origin = draftDetections[index];
+    recordHistorySnapshot(draftDetections);
     const [xCenter, yCenter, width, height] = origin.bbox;
     const left = xCenter - width / 2;
     const right = xCenter + width / 2;
@@ -660,7 +839,7 @@ export function DatasetAnnotatePage() {
       previewImageNaturalSize?.height ?? rect.height,
     );
 
-    const handleMove = (moveEvent: MouseEvent) => {
+    const handleMove = (moveEvent: PointerEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
       const bbox = boxFromCorners(anchorX, anchorY, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
@@ -669,15 +848,17 @@ export function DatasetAnnotatePage() {
     };
 
     const handleUp = () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
     };
 
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
   }
 
-  function handleStageMouseDown(event: ReactMouseEvent<HTMLDivElement>) {
+  function handleStagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!viewportRef.current) return;
     if (!isAddingDetection) {
       setSelectedDetectionIndex(null);
@@ -693,13 +874,14 @@ export function DatasetAnnotatePage() {
       previewImageNaturalSize?.height ?? rect.height,
     );
 
+    recordHistorySnapshot(draftDetections);
     setDraftDetections((current) => [
       ...current,
       { category: activeCategory, confidence: 1, bbox: [start.x, start.y, DEFAULT_BOX_SIZE, DEFAULT_BOX_SIZE] },
     ]);
     setSelectedDetectionIndex(nextIndex);
 
-    const handleMove = (moveEvent: MouseEvent) => {
+    const handleMove = (moveEvent: PointerEvent) => {
       const pointer = pointerToStage(rect, moveEvent.clientX, moveEvent.clientY);
       const bbox = boxFromCorners(start.x, start.y, pointer.x, pointer.y, minBoxSize.width, minBoxSize.height);
       setDraftDetections((current) =>
@@ -709,16 +891,18 @@ export function DatasetAnnotatePage() {
 
     const handleUp = () => {
       setIsAddingDetection(false);
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
     };
 
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
   }
 
   function updateDetectionCategory(index: number, category: string) {
-    setDraftDetections((current) =>
+    updateDraftDetections((current) =>
       current.map((detection, detectionIndex) =>
         detectionIndex === index ? { ...detection, category: category.slice(0, 120) || "object" } : detection,
       ),
@@ -726,7 +910,7 @@ export function DatasetAnnotatePage() {
   }
 
   function updateDetectionConfidence(index: number, value: number) {
-    setDraftDetections((current) =>
+    updateDraftDetections((current) =>
       current.map((detection, detectionIndex) => {
         if (detectionIndex !== index) return detection;
         return {
@@ -738,7 +922,7 @@ export function DatasetAnnotatePage() {
   }
 
   function removeDetection(index: number) {
-    setDraftDetections((current) => current.filter((_, detectionIndex) => detectionIndex !== index));
+    updateDraftDetections((current) => current.filter((_, detectionIndex) => detectionIndex !== index));
     setSelectedDetectionIndex((current) => {
       if (current === null) return null;
       if (current === index) return null;
@@ -751,30 +935,12 @@ export function DatasetAnnotatePage() {
     setIsAddingDetection(true);
   }
 
-  const queueLabel =
-    annotationFilter === "unannotated"
-      ? `${imagesTotal} 张未标注`
-      : annotationFilter === "annotated"
-        ? `${imagesTotal} 张已处理`
-        : `${imagesTotal} 张样本`;
-
-  const annotationFilterSegmentedOptions = annotationFilterOptions.map((option) => {
-    const count =
-      option.value === "unannotated"
-        ? unannotatedTotal
-        : option.value === "annotated"
-          ? annotatedTotal
-          : totalImageCount;
-    return {
-      value: option.value,
-      label: (
-        <div className="flex items-center justify-center gap-1 px-1">
-          <span>{option.label}</span>
-          <span className="text-[11px] tabular-nums opacity-70">{count}</span>
-        </div>
-      ),
-    };
-  });
+  function changeActiveCategory(category: string) {
+    setCurrentCategory(category);
+    if (selectedDetectionIndex !== null) {
+      updateDetectionCategory(selectedDetectionIndex, category);
+    }
+  }
 
   const saveStatus = hasAnnotationChanges
     ? "unsaved"
@@ -784,13 +950,16 @@ export function DatasetAnnotatePage() {
 
   const shortcuts = [
     { keys: "← / →", action: "上一张 / 下一张" },
-    { keys: "N", action: "新建检测框" },
-    { keys: "Enter / Ctrl + S", action: "保存当前图片标注" },
+    { keys: "B", action: "切换画框模式" },
+    { keys: "Enter", action: "保存并进入下一张" },
+    { keys: "Ctrl / ⌘ + S", action: "保存当前图片" },
+    { keys: "Ctrl / ⌘ + Z", action: "撤销" },
+    { keys: "Ctrl / ⌘ + Shift + Z", action: "重做" },
     { keys: "Delete / Backspace", action: "删除选中的检测框" },
     { keys: "Esc", action: "取消画框 / 取消选择" },
     { keys: "1-9", action: "选择对应编号的类别" },
-    { keys: "A / B", action: "切换画框模式" },
     { keys: "U", action: "切换未标注筛选" },
+    { keys: "+ / - / 0", action: "放大 / 缩小 / 适应画布" },
     { keys: "?", action: "显示 / 隐藏快捷键帮助" },
   ];
 
@@ -825,442 +994,420 @@ export function DatasetAnnotatePage() {
     );
   }
 
+  const queuePanel = (
+    <AnnotationQueuePanel
+      activeImageId={activeImage?.id ?? null}
+      annotatedTotal={annotatedTotal}
+      annotationFilter={annotationFilter}
+      hasMoreImages={hasMoreImages}
+      images={images}
+      imagesTotal={imagesTotal}
+      isLoadingFirstPage={isLoadingFirstPage}
+      isLoadingMore={isLoadingMore}
+      onFilterChange={(filter) => void changeAnnotationFilter(filter)}
+      onSelectImage={(imageId) => {
+        void selectImage(imageId).then((selected) => {
+          if (selected) setQueueOpen(false);
+        });
+      }}
+      queueScrollRef={queueScrollRef}
+      sentinelRef={sentinelRef}
+      totalImageCount={totalImageCount}
+      unannotatedTotal={unannotatedTotal}
+    />
+  );
+
+  const inspectorPanel = (
+    <AnnotationInspectorPanel
+      activeCategory={activeCategory}
+      activeImage={activeImage}
+      categories={categories}
+      categoryColor={(category) => categoryColor(category, categories)}
+      detections={draftDetections}
+      onAddDetection={enterAddingDetectionMode}
+      onCategoryChange={changeActiveCategory}
+      onDetectionCategoryChange={updateDetectionCategory}
+      onDetectionConfidenceChange={updateDetectionConfidence}
+      onRemoveDetection={removeDetection}
+      onSelectDetection={setSelectedDetectionIndex}
+      selectedDetectionIndex={selectedDetectionIndex}
+      statusLabel={activeImage ? annotationStatusLabel(activeImage.annotationStatus) : "无图片"}
+    />
+  );
+
+  const scaledViewport = imageViewport
+    ? { width: imageViewport.width * zoom, height: imageViewport.height * zoom }
+    : null;
+  const suggestedDetections = Boolean(activeImage && !isProcessed(activeImage.annotationStatus) && !hasAnnotationChanges);
+
   return (
-    <Layout className="h-screen min-h-0 w-full overflow-hidden bg-neutral-100 dark:bg-neutral-950">
-      <Layout.Header className="!h-auto !bg-white !px-4 !py-3 dark:!bg-neutral-950 border-b border-neutral-200 dark:border-white/10">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Space wrap className="items-center">
-            <Link to={`/datasets/${dataset.id}`}>
-              <Button type="text" icon={<ArrowLeft className="h-4 w-4" />} title="返回数据集" />
+    <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-[#f6f7f9] text-neutral-900 dark:bg-[#0b0f14] dark:text-white">
+      <header className="z-20 shrink-0 border-b border-[#d7dce3] bg-white px-3 py-2 dark:border-white/10 dark:bg-[#11151b] sm:px-4">
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Link
+              to={`/datasets/${dataset.id}`}
+              aria-label="返回数据集"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-neutral-300 dark:hover:bg-white/10 dark:hover:text-white"
+            >
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
             </Link>
             <div className="min-w-0">
-              <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                <PencilRuler className="mr-1 inline h-3.5 w-3.5" />
-                Annotation Mode
-              </Typography.Text>
-              <Typography.Title level={4} className="!mb-0 truncate !text-lg !font-medium">
+              <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <PencilRuler aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>标注工作台</span>
+              </div>
+              <Typography.Text className="block max-w-[44vw] truncate text-base font-semibold sm:max-w-sm">
                 {dataset.name}
-              </Typography.Title>
+              </Typography.Text>
             </div>
-            <Tag>{annotatedTotal} / {totalImageCount}</Tag>
+            <Tag className="!mr-0 font-mono tabular-nums">{annotatedTotal}/{totalImageCount}</Tag>
             {saveStatus === "unsaved" ? (
-              <Tag color="warning">未保存</Tag>
+              <Tag color="warning" className="!mr-0">未保存</Tag>
             ) : saveStatus === "pending" ? (
-              <Tag color="processing">待确认</Tag>
+              <Tag color="processing" className="!mr-0">待确认</Tag>
             ) : (
-              <Tag color="success">已同步</Tag>
+              <Tag color="success" className="!mr-0">已保存</Tag>
             )}
-          </Space>
+            {draftRecovered ? <Tag color="blue" className="hidden !mr-0 md:inline-flex">已恢复草稿</Tag> : null}
+          </div>
 
-          <Space wrap className="items-center">
-            {actionError ? (
-              <Alert
-                message={actionError}
-                type="error"
-                showIcon
-                closable
-                onClose={() => setActionError(null)}
-                className="max-w-xs py-1 text-xs"
-              />
-            ) : null}
-            <Button
-              icon={<Keyboard className="h-4 w-4" />}
-              onClick={() => setHelpOpen(true)}
-              title="快捷键帮助 (?)">
-              快捷键
-            </Button>
-            <Button
-              icon={<ChevronLeft className="h-4 w-4" />}
-              onClick={() => void moveActiveImage(-1)}
-              disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
-              上一张
-            </Button>
-            <Button
-              icon={<ChevronRight className="h-4 w-4" />}
-              iconPosition="end"
-              onClick={() => void moveActiveImage(1)}
-              disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}>
-              下一张
-            </Button>
-            <Button
-              danger
-              icon={isDeletingActiveImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              onClick={() => activeImage && void removeDatasetImage(activeImage)}
-              disabled={!activeImage || isSaving || Boolean(deletingImageId)}>
-              删除图片
-            </Button>
-            <Button
-              type="primary"
-              icon={isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              onClick={() => void saveAnnotations()}
-              disabled={isSaving || !canSave}>
-              保存
-            </Button>
-          </Space>
-        </div>
-      </Layout.Header>
-
-      <Layout className="min-h-0 flex-1 overflow-hidden">
-        <Layout.Sider
-          width={280}
-          collapsedWidth={0}
-          collapsible
-          trigger={null}
-          collapsed={queueCollapsed}
-          className="!bg-white dark:!bg-neutral-950 border-r border-neutral-200 dark:border-white/10"
-        >
-          <div className="flex h-full flex-col">
-            <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</Typography.Text>
-                  <Typography.Text className="text-sm font-medium">{queueLabel}</Typography.Text>
-                </div>
-                <CheckCircle2 className="h-5 w-5 text-neutral-400" />
-              </div>
-              <div className="mt-3 flex min-w-0 items-center gap-2">
-                <ListFilter className="h-4 w-4 shrink-0 text-neutral-400" />
-                <Segmented
-                  className="min-w-0 flex-1"
-                  size="small"
-                  value={annotationFilter}
-                  onChange={(value) => changeAnnotationFilter(value as AnnotationFilter)}
-                  options={annotationFilterSegmentedOptions}
+          <div className="flex items-center justify-between gap-2 sm:justify-end">
+            <div className="flex items-center gap-1">
+              <Tooltip title="撤销（Ctrl/⌘ + Z）">
+                <Button
+                  type="text"
+                  icon={<Undo2 aria-hidden="true" className="h-4 w-4" />}
+                  onClick={undoDetectionChange}
+                  disabled={!canUndo}
+                  aria-label="撤销标注操作"
                 />
-              </div>
+              </Tooltip>
+              <Tooltip title="重做（Ctrl/⌘ + Shift + Z）">
+                <Button
+                  type="text"
+                  icon={<Redo2 aria-hidden="true" className="h-4 w-4" />}
+                  onClick={redoDetectionChange}
+                  disabled={!canRedo}
+                  aria-label="重做标注操作"
+                />
+              </Tooltip>
+              <Button
+                icon={<ChevronLeft aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void moveActiveImage(-1)}
+                disabled={activeIndex <= 0 || Boolean(deletingImageId)}
+                aria-label="上一张图片"
+              >
+                <span className="hidden lg:inline">上一张</span>
+              </Button>
+              <Button
+                icon={<ChevronRight aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void moveActiveImage(1)}
+                disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}
+                aria-label="下一张图片"
+              >
+                <span className="hidden lg:inline">下一张</span>
+              </Button>
             </div>
-            <div ref={queueScrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-              {images.map((image, index) => {
-                const active = image.id === activeImage?.id;
-                return (
-                  <Card
-                    key={image.id}
-                    size="small"
-                    hoverable
-                    onClick={() => selectImage(image.id)}
-                    className={cn(
-                      "cursor-pointer transition",
-                      active
-                        ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.06]"
-                        : "border-transparent hover:border-neutral-200 hover:bg-neutral-100 dark:hover:border-white/10 dark:hover:bg-white/[0.04]",
-                    )}
-                    bodyStyle={{ padding: 12 }}
-                  >
-                    <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-3">
-                      <div className="relative aspect-square overflow-hidden rounded-lg bg-neutral-200 dark:bg-neutral-800">
-                        <AuthImage src={image.previewSvg} alt={image.promptText} className="h-full w-full object-cover" />
-                        <div className="absolute left-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
-                          {index + 1}
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <Typography.Text className="truncate text-sm font-medium">#{image.ordinal}</Typography.Text>
-                          <Typography.Text className="text-xs text-neutral-500">{image.detections.length}</Typography.Text>
-                        </div>
-                        <Typography.Text className="mt-1 block truncate text-xs text-neutral-500">
-                          {annotationStatusLabel(image.annotationStatus)}
-                        </Typography.Text>
-                        <Typography.Text className="mt-1 block truncate text-[11px] text-neutral-400">
-                          {image.selected ? "已保留" : image.sourceType}
-                        </Typography.Text>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-              {images.length === 0 && !isLoadingFirstPage ? (
-                <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm leading-6 text-neutral-500 dark:border-white/10 dark:text-neutral-400">
-                  当前筛选没有图片。
-                </div>
-              ) : hasMoreImages ? (
-                <div ref={sentinelRef} className="flex items-center justify-center gap-2 py-3 text-xs text-neutral-500">
-                  {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
-                </div>
-              ) : images.length > 0 ? (
-                <div className="py-3 text-center text-xs text-neutral-400">已加载全部 {imagesTotal} 张</div>
+
+            <div className="flex items-center gap-2">
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    {
+                      key: "delete-image",
+                      danger: true,
+                      disabled: !activeImage || isSaving || Boolean(deletingImageId),
+                      icon: isDeletingActiveImage
+                        ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                        : <Trash2 aria-hidden="true" className="h-4 w-4" />,
+                      label: "删除当前图片",
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "delete-image" && activeImage) void removeDatasetImage(activeImage);
+                  },
+                }}
+              >
+                <Button
+                  icon={<MoreHorizontal aria-hidden="true" className="h-4 w-4" />}
+                  aria-label="更多图片操作"
+                />
+              </Dropdown>
+              <Button
+                type="primary"
+                icon={isSaving ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void confirmAndAdvance()}
+                disabled={isSaving || !activeImage || Boolean(deletingImageId)}
+              >
+                保存并下一张
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {actionError ? (
+        <Alert
+          message={actionError}
+          description="请检查网络或数据状态后重试。当前草稿仍保留在此浏览器中。"
+          type="error"
+          showIcon
+          closable
+          onClose={() => setActionError(null)}
+          className="z-10 shrink-0 rounded-none border-x-0 border-t-0"
+        />
+      ) : null}
+
+      <div className="sr-only" role="status" aria-live="polite">{saveAnnouncement}</div>
+
+      <div className={cn("grid min-h-0 flex-1 overflow-hidden", isDesktop ? "grid-cols-[248px_minmax(0,1fr)_336px]" : "grid-cols-1")}>
+        {isDesktop ? <div className="min-h-0 border-r border-[#d7dce3] dark:border-white/10">{queuePanel}</div> : null}
+
+        <main id="annotation-canvas" className="relative flex min-h-0 flex-col bg-[#0b0f14]">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2 text-white">
+            <div className="flex min-w-0 items-center gap-2">
+              {!isDesktop ? (
+                <Button
+                  type="text"
+                  icon={<Menu aria-hidden="true" className="h-4 w-4" />}
+                  onClick={() => setQueueOpen(true)}
+                  className="!text-white hover:!bg-white/10"
+                  aria-label="打开标注队列"
+                />
+              ) : null}
+              <MousePointer2 aria-hidden="true" className="h-4 w-4 shrink-0 text-neutral-500" />
+              <div className="min-w-0">
+                <Typography.Text className="block truncate text-sm font-medium !text-white">样本 #{activeImage?.ordinal ?? "—"}</Typography.Text>
+                <Typography.Text className="block truncate text-xs !text-neutral-400">{activeImage?.sourceType ?? "没有可处理图片"}</Typography.Text>
+              </div>
+              {suggestedDetections ? <Tag color="gold" className="hidden !mr-0 md:inline-flex">模型建议</Tag> : null}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Select
+                aria-label="当前画框类别"
+                value={activeCategory}
+                className="w-28 sm:w-36"
+                options={(categories.length > 0 ? categories : ["object"]).map((category, index) => ({
+                  value: category,
+                  label: `${index + 1}. ${category}`,
+                }))}
+                onChange={(value) => changeActiveCategory(value as string)}
+              />
+              <Tooltip title={boxesVisible ? "隐藏检测框" : "显示检测框"}>
+                <Button
+                  icon={boxesVisible ? <Eye aria-hidden="true" className="h-4 w-4" /> : <EyeOff aria-hidden="true" className="h-4 w-4" />}
+                  onClick={() => setBoxesVisible((current) => !current)}
+                  aria-label={boxesVisible ? "隐藏检测框" : "显示检测框"}
+                />
+              </Tooltip>
+              <Button
+                type={isAddingDetection ? "primary" : "default"}
+                icon={<PencilRuler aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => setIsAddingDetection((current) => !current)}
+                disabled={!activeImage}
+                aria-pressed={isAddingDetection}
+              >
+                {isAddingDetection ? "拖动画框" : "新增框"}
+              </Button>
+              <Tag color="blue" className="!mr-0 font-mono">{draftDetections.length}</Tag>
+              <Button onClick={() => void markEmptyAndAdvance()} disabled={!activeImage || isSaving}>
+                <span className="hidden sm:inline">标记为空</span>
+                <span className="sm:hidden">空标注</span>
+              </Button>
+              {!isDesktop ? (
+                <Button onClick={() => setInspectorOpen(true)}>检查器</Button>
               ) : null}
             </div>
           </div>
-        </Layout.Sider>
 
-        <Layout.Content className="relative flex min-h-0 flex-col bg-neutral-950">
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
-            <Space className="items-center">
-              {!isDesktop && (
-                <Button
-                  type="text"
-                  icon={<Menu className="h-4 w-4" />}
-                  onClick={() => setQueueCollapsed((current) => !current)}
-                  className="text-white"
-                />
-              )}
-              <MousePointer2 className="h-4 w-4 text-neutral-400" />
-              <div className="min-w-0">
-                <Typography.Text className="block truncate text-sm text-white">样本 #{activeImage?.ordinal}</Typography.Text>
-                <Typography.Text className="block truncate text-xs text-neutral-400">{activeImage?.sourceType}</Typography.Text>
-              </div>
-            </Space>
-            <Space wrap className="items-center">
-              <Switch
-                checked={isAddingDetection}
-                onChange={(checked) => setIsAddingDetection(checked)}
-                checkedChildren="画框中"
-                unCheckedChildren="画框"
-                disabled={!activeImage}
-              />
-              <Button
-                type={isAddingDetection ? "primary" : "default"}
-                icon={<PencilRuler className="h-4 w-4" />}
-                onClick={() => setIsAddingDetection((current) => !current)}
-                disabled={!activeImage}
-                title="快捷键 A / B / N"
-              >
-                {isAddingDetection ? "正在画框" : "新增框"}
-              </Button>
-              <Tag color="processing">{draftDetections.length} boxes</Tag>
-              {!showInspector && (
-                <Button type="default" onClick={() => setInspectorOpen(true)}>
-                  详情
-                </Button>
-              )}
-            </Space>
-          </div>
-
-          <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-5">
-            {activeImage && imageViewport && imageViewport.width > 0 && imageViewport.height > 0 ? (
-              <div
-                ref={viewportRef}
-                className={cn("relative select-none", isAddingDetection ? "cursor-crosshair" : "cursor-default")}
-                style={{ width: imageViewport.width, height: imageViewport.height }}
-                onMouseDown={handleStageMouseDown}
-              >
+          <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto overscroll-contain bg-[#0b0f14]">
+            <div className="flex min-h-full min-w-full items-center justify-center p-4">
+              {activeImage && scaledViewport && scaledViewport.width > 0 && scaledViewport.height > 0 ? (
+                <div
+                  ref={viewportRef}
+                  className={cn(
+                    "relative shrink-0 select-none touch-none bg-neutral-900 shadow-2xl",
+                    isAddingDetection ? "cursor-crosshair" : "cursor-default",
+                  )}
+                  style={{ width: scaledViewport.width, height: scaledViewport.height }}
+                  onPointerDown={handleStagePointerDown}
+                >
+                  <AuthImage
+                    src={activeImage.previewSvg}
+                    alt={activeImage.promptText}
+                    width={previewImageNaturalSize?.width ?? Math.round(scaledViewport.width)}
+                    height={previewImageNaturalSize?.height ?? Math.round(scaledViewport.height)}
+                    className="h-full w-full"
+                    draggable={false}
+                    onLoad={(event) => {
+                      const target = event.currentTarget;
+                      setPreviewImageNaturalSize({ width: target.naturalWidth, height: target.naturalHeight });
+                    }}
+                  />
+                  {boxesVisible ? (
+                    <div className="pointer-events-none absolute inset-0">
+                      {draftDetections.map((detection, index) => {
+                        const selected = selectedDetectionIndex === index;
+                        const color = selected ? "#b7f34a" : categoryColor(detection.category, categories);
+                        return (
+                          <div
+                            key={`${detection.category}-${index}`}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`选择检测框 ${index + 1}，类别 ${detection.category}`}
+                            className={cn(
+                              "pointer-events-auto absolute border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                              suggestedDetections ? "border-dashed" : "border-solid",
+                              selected ? "shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "",
+                            )}
+                            style={{ ...detectionStyle(detection.bbox), borderColor: color }}
+                            onPointerDown={(event) => beginDragDetection(index, event)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setSelectedDetectionIndex(index);
+                              } else if (event.key === "Delete" || event.key === "Backspace") {
+                                event.preventDefault();
+                                removeDetection(index);
+                              }
+                            }}
+                          >
+                            <div
+                              className="absolute left-0 top-0 max-w-full -translate-y-full truncate px-1.5 py-0.5 font-mono text-[10px] font-medium text-neutral-950"
+                              style={{ backgroundColor: color }}
+                            >
+                              {detection.category} · {(detection.confidence * 100).toFixed(0)}%
+                            </div>
+                            {selected
+                              ? (["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
+                                  <button
+                                    key={corner}
+                                    type="button"
+                                    aria-label={`从${corner}方向缩放检测框 ${index + 1}`}
+                                    className={cn(
+                                      "absolute h-11 w-11 touch-none appearance-none border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400",
+                                      corner === "nw"
+                                        ? "-left-[22px] -top-[22px]"
+                                        : corner === "ne"
+                                          ? "-right-[22px] -top-[22px]"
+                                          : corner === "sw"
+                                            ? "-bottom-[22px] -left-[22px]"
+                                            : "-bottom-[22px] -right-[22px]",
+                                    )}
+                                    onPointerDown={(event) => beginResizeDetection(index, corner, event)}
+                                  >
+                                    <span
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[#0b0f14]"
+                                    />
+                                  </button>
+                                ))
+                              : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : activeImage ? (
                 <AuthImage
                   src={activeImage.previewSvg}
                   alt={activeImage.promptText}
-                  className="h-full w-full"
+                  width={960}
+                  height={640}
+                  className="max-h-full max-w-full object-contain"
                   draggable={false}
                   onLoad={(event) => {
                     const target = event.currentTarget;
                     setPreviewImageNaturalSize({ width: target.naturalWidth, height: target.naturalHeight });
                   }}
                 />
-                <div className="pointer-events-none absolute inset-0">
-                  {draftDetections.map((detection, index) => {
-                    const selected = selectedDetectionIndex === index;
-                    const color = selected ? "#bef264" : categoryColor(detection.category, categories);
-                    return (
-                      <div
-                        key={`${detection.category}-${index}`}
-                        className={cn(
-                          "pointer-events-auto absolute rounded-lg border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.35)]",
-                          selected ? "shadow-[0_0_0_9999px_rgba(0,0,0,0.08)]" : "",
-                        )}
-                        style={{ ...detectionStyle(detection.bbox), borderColor: color }}
-                        onMouseDown={(event) => beginDragDetection(index, event)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setSelectedDetectionIndex(index);
-                        }}
-                      >
-                        <div
-                          className="absolute left-0 top-0 max-w-full -translate-y-full truncate rounded-t-md px-2 py-1 text-[11px] font-medium text-neutral-950"
-                          style={{ backgroundColor: color }}
-                        >
-                          {detection.category} · {(detection.confidence * 100).toFixed(0)}%
-                        </div>
-                        {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
-                          <button
-                            key={corner}
-                            type="button"
-                            title="缩放检测框"
-                            className={cn(
-                              "absolute h-3.5 w-3.5 rounded-full border border-white bg-neutral-950",
-                              corner === "nw"
-                                ? "-left-2 -top-2"
-                                : corner === "ne"
-                                  ? "-right-2 -top-2"
-                                  : corner === "sw"
-                                    ? "-bottom-2 -left-2"
-                                    : "-bottom-2 -right-2",
-                            )}
-                            onMouseDown={(event) => beginResizeDetection(index, corner, event)}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })}
+              ) : isLoadingFirstPage ? (
+                <div className="flex items-center justify-center gap-2 px-5 text-center text-sm text-neutral-400">
+                  <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                  正在加载图片…
                 </div>
-              </div>
-            ) : activeImage ? (
-              <AuthImage
-                src={activeImage.previewSvg}
-                alt={activeImage.promptText}
-                className="max-h-full max-w-full object-contain"
-                draggable={false}
-                onLoad={(event) => {
-                  const target = event.currentTarget;
-                  setPreviewImageNaturalSize({ width: target.naturalWidth, height: target.naturalHeight });
-                }}
-              />
-            ) : isLoadingFirstPage ? (
-              <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-5 text-center text-sm text-neutral-400">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                加载图片...
-              </div>
-            ) : (
-              <div className="flex min-h-0 flex-1 items-center justify-center px-5 text-center text-sm text-neutral-400">
-                当前筛选没有图片。
-              </div>
-            )}
-          </div>
-        </Layout.Content>
-      </Layout>
-
-      <Drawer
-        title="检测框详情"
-        placement={isDesktop ? "right" : "bottom"}
-        width={isDesktop ? 380 : "100%"}
-        height={isDesktop ? "100%" : "60%"}
-        open={showInspector}
-        onClose={() => setInspectorOpen(false)}
-        mask={!isDesktop}
-        zIndex={100}
-        styles={{ body: { padding: 0 } }}
-      >
-        <div className="flex h-full flex-col">
-          <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
-            <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Categories</Typography.Text>
-            <Space wrap className="mt-3">
-              {(categories.length > 0 ? categories : ["object"]).map((category, index) => {
-                const active = category === activeCategory;
-                return (
-                  <Button
-                    key={category}
-                    type={active ? "primary" : "default"}
-                    onClick={() => {
-                      setCurrentCategory(category);
-                      if (selectedDetectionIndex !== null) {
-                        updateDetectionCategory(selectedDetectionIndex, category);
-                      }
-                    }}
-                    className="flex items-center gap-2"
-                  >
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(category, categories) }} />
-                    <span className="truncate">{index + 1}. {category}</span>
-                  </Button>
-                );
-              })}
-            </Space>
-          </div>
-
-          <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Current Image</Typography.Text>
-                <Typography.Text className="mt-1 block text-lg font-medium">
-                  {activeImage ? `#${activeImage.ordinal}` : "—"}
-                </Typography.Text>
-              </div>
-              {activeImage ? (
-                <StatusBadge status={activeImage.annotationStatus}>{annotationStatusLabel(activeImage.annotationStatus)}</StatusBadge>
               ) : (
-                <Tag>无图片</Tag>
+                <div className="px-5 text-center text-sm text-neutral-400">当前筛选没有图片。</div>
               )}
             </div>
-            <Typography.Paragraph className="!mb-0 mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-              {activeImage?.promptText ?? "当前筛选没有图片。"}
-            </Typography.Paragraph>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Annotations</Typography.Text>
-                <Typography.Text className="text-sm font-medium">{draftDetections.length} 个检测框</Typography.Text>
-              </div>
+          <footer className="flex h-9 shrink-0 items-center justify-between gap-3 border-t border-white/10 px-3 text-xs text-neutral-400">
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="flex cursor-pointer appearance-none items-center gap-1.5 rounded border border-white/10 bg-white/5 px-1.5 py-1 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            >
+              <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">B 画框 · 1–9 类别 · Enter 保存下一张</span>
+              <span className="sm:hidden">快捷键</span>
+            </button>
+            <div className="flex items-center gap-1">
               <Button
-                icon={<PencilRuler className="h-4 w-4" />}
-                onClick={enterAddingDetectionMode}
-                disabled={!activeImage}
-                title="进入画框状态，快捷键 N"
+                type="text"
+                size="small"
+                icon={<ZoomOut aria-hidden="true" className="h-3.5 w-3.5" />}
+                onClick={() => setZoom((current) => Math.max(MIN_ZOOM, current - ZOOM_STEP))}
+                disabled={zoom <= MIN_ZOOM}
+                className="!text-neutral-300 hover:!bg-white/10"
+                aria-label="缩小画布"
               />
+              <span className="w-12 text-center font-mono tabular-nums">{Math.round(zoom * 100)}%</span>
+              <Button
+                type="text"
+                size="small"
+                icon={<ZoomIn aria-hidden="true" className="h-3.5 w-3.5" />}
+                onClick={() => setZoom((current) => Math.min(MAX_ZOOM, current + ZOOM_STEP))}
+                disabled={zoom >= MAX_ZOOM}
+                className="!text-neutral-300 hover:!bg-white/10"
+                aria-label="放大画布"
+              />
+              <Button
+                type="text"
+                size="small"
+                icon={<Maximize2 aria-hidden="true" className="h-3.5 w-3.5" />}
+                onClick={() => setZoom(1)}
+                className="!text-neutral-300 hover:!bg-white/10"
+                aria-label="适应画布"
+              />
+              <span className="ml-2 hidden font-mono tabular-nums sm:inline">{activeIndex + 1}/{imagesTotal}</span>
             </div>
+          </footer>
+        </main>
 
-            <div className="space-y-3">
-              {draftDetections.map((detection, index) => {
-                const selected = selectedDetectionIndex === index;
-                return (
-                  <Card
-                    key={`${detection.category}-${index}`}
-                    size="small"
-                    onClick={() => setSelectedDetectionIndex(index)}
-                    className={cn(
-                      "cursor-pointer transition",
-                      selected
-                        ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.06]"
-                        : "border-neutral-200 bg-white dark:border-white/10 dark:bg-black/20",
-                    )}
-                    extra={
-                      <Button
-                        type="text"
-                        danger
-                        size="small"
-                        icon={<Trash2 className="h-4 w-4" />}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeDetection(index);
-                        }}
-                        title="删除检测框"
-                      />
-                    }
-                  >
-                    <div className="mb-3 flex items-center gap-2">
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(detection.category, categories) }} />
-                      <Typography.Text className="truncate text-sm font-medium">Box {index + 1}</Typography.Text>
-                    </div>
-                    <div className="grid gap-3">
-                      {categories.length > 0 ? (
-                        <Select
-                          value={detection.category}
-                          options={categories.map((category) => ({ value: category, label: category }))}
-                          onChange={(value) => updateDetectionCategory(index, value as string)}
-                          onClick={(event) => event.stopPropagation()}
-                        />
-                      ) : (
-                        <Input
-                          value={detection.category}
-                          onChange={(event) => updateDetectionCategory(index, event.target.value)}
-                          onClick={(event) => event.stopPropagation()}
-                        />
-                      )}
-                      <div>
-                        <Typography.Text className="block text-[11px] uppercase tracking-[0.18em] text-neutral-500">
-                          Confidence {(detection.confidence * 100).toFixed(0)}%
-                        </Typography.Text>
-                        <Slider
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={detection.confidence}
-                          onChange={(value) => updateDetectionConfidence(index, value as number)}
-                          tooltip={{ formatter: (value) => `${((value as number) * 100).toFixed(0)}%` }}
-                        />
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-              {draftDetections.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm leading-6 text-neutral-500 dark:border-white/10 dark:text-neutral-400">
-                  当前图片没有检测框。
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </Drawer>
+        {isDesktop ? <div className="min-h-0 border-l border-[#d7dce3] dark:border-white/10">{inspectorPanel}</div> : null}
+      </div>
+
+      {!isDesktop ? (
+        <Drawer
+          title="标注队列"
+          placement="left"
+          width="min(320px, calc(100vw - 24px))"
+          open={queueOpen}
+          onClose={() => setQueueOpen(false)}
+          styles={{ body: { padding: 0 }, header: { paddingBlock: 12 } }}
+        >
+          {queuePanel}
+        </Drawer>
+      ) : null}
+
+      {!isDesktop ? (
+        <Drawer
+          title="标注检查器"
+          placement={isTablet ? "right" : "bottom"}
+          width={isTablet ? 360 : "100%"}
+          height={isTablet ? "100%" : "78%"}
+          open={inspectorOpen}
+          onClose={() => setInspectorOpen(false)}
+          styles={{ body: { padding: 0 }, header: { paddingBlock: 12 } }}
+        >
+          {inspectorPanel}
+        </Drawer>
+      ) : null}
 
       <Modal
         title="键盘快捷键"
@@ -1281,6 +1428,6 @@ export function DatasetAnnotatePage() {
           ))}
         </div>
       </Modal>
-    </Layout>
+    </div>
   );
 }

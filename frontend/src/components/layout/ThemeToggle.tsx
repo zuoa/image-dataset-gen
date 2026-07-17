@@ -21,7 +21,7 @@ export function ThemeToggle() {
   const items: MenuProps["items"] = modes.map((m) => ({
     key: m.key,
     label: m.label,
-    icon: <m.icon className="h-4 w-4" />,
+    icon: <m.icon aria-hidden="true" className="h-4 w-4" />,
   }));
 
   return (
@@ -36,7 +36,7 @@ export function ThemeToggle() {
       trigger={["click"]}
     >
       <Tooltip title="切换主题">
-        <Button type="text" icon={<Icon className="h-4 w-4" />} />
+        <Button type="text" icon={<Icon aria-hidden="true" className="h-4 w-4" />} aria-label="切换主题" />
       </Tooltip>
     </Dropdown>
   );

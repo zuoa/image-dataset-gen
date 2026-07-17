@@ -23,7 +23,7 @@ export function UserMenu() {
     {
       key: "logout",
       label: "退出登录",
-      icon: <LogOut className="h-4 w-4" />,
+      icon: <LogOut aria-hidden="true" className="h-4 w-4" />,
       danger: true,
       onClick: () => signOut(),
     },
@@ -31,7 +31,11 @@ export function UserMenu() {
 
   return (
     <Dropdown menu={{ items }} placement="bottomRight" trigger={["click"]}>
-      <Button type="text" icon={<Avatar size="small" icon={<User className="h-4 w-4" />} />}>
+      <Button
+        type="text"
+        icon={<Avatar size="small" icon={<User aria-hidden="true" className="h-4 w-4" />} />}
+        aria-label={`打开账户菜单${user?.username ? `，当前账户 ${user.username}` : ""}`}
+      >
         <span className="hidden md:inline">{user?.username}</span>
       </Button>
     </Dropdown>

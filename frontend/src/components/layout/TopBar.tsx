@@ -57,7 +57,7 @@ export function TopBar({ collapsed, onToggle }: TopBarProps) {
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggle}
-          className="lg:hidden"
+          aria-label={collapsed ? "展开导航" : "收起导航"}
         />
         {breadcrumbItems.length > 0 ? (
           <Breadcrumb items={breadcrumbItems} />

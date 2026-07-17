@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
   ClipboardList,
   Download,
   Layers,
   Loader,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   Alert,
   Button,
@@ -43,8 +42,6 @@ import {
   updateDatasetSelection,
 } from "../api/datasets";
 import { PageContainer } from "../components/common/PageContainer";
-import { PageHeader } from "../components/common/PageHeader";
-import { Breadcrumb } from "../components/common/Breadcrumb";
 import { LoadingState } from "../components/common/LoadingState";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { DatasetHeader } from "../components/dataset/DatasetHeader";
@@ -818,22 +815,6 @@ export function DatasetDetailPage() {
 
   return (
     <PageContainer>
-      <PageHeader
-        breadcrumb={
-          <Breadcrumb
-            items={[
-              { label: "数据集", path: "/" },
-              { label: dataset.name },
-            ]}
-          />
-        }
-        actions={
-          <Link to="/">
-            <Button icon={<ArrowLeft className="h-4 w-4" />}>返回列表</Button>
-          </Link>
-        }
-      />
-
       <Card className="shadow-panel">
         <Row gutter={[32, 32]} align="middle">
           <Col xs={24} lg={14}>
