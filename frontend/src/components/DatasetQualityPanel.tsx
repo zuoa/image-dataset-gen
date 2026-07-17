@@ -18,7 +18,7 @@ import {
   updateDatasetQualityIssue,
 } from "../api/datasets";
 import { useQualityRuns } from "../hooks/useQualityRuns";
-import { confirm } from "../hooks/useConfirm";
+import { useConfirm } from "../hooks/useConfirm";
 import { useAuthStore } from "../store/auth";
 import type { QualityIssue, QualityRun } from "../lib/types";
 import { formatDate } from "../lib/utils";
@@ -56,6 +56,7 @@ export function DatasetQualityPanel({
   imageCount,
 }: DatasetQualityPanelProps) {
   const token = useAuthStore((state) => state.token);
+  const confirm = useConfirm();
   const { data: runsData, isLoading: isLoadingRuns, refetch } = useQualityRuns(
     datasetId,
   );

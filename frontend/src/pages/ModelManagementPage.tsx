@@ -20,7 +20,7 @@ import {
 import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
 import { LoadingState } from "../components/common/LoadingState";
-import { confirm } from "../hooks/useConfirm";
+import { useConfirm } from "../hooks/useConfirm";
 import { useModelProfiles } from "../hooks/useModelProfiles";
 import { useProviders } from "../hooks/useProviders";
 import { filterModelProfilesByType, getFallbackModelProfile } from "../lib/modelProfiles";
@@ -61,6 +61,7 @@ function createDraftProfile(
 
 export function ModelManagementPage() {
   const token = useAuthStore((state) => state.token);
+  const confirm = useConfirm();
   const { data: profiles, isLoading: profilesLoading } = useModelProfiles();
   const { data: providers, isLoading: providersLoading } = useProviders();
   const isLoading = useModelProfilesStore((state) => state.isLoading);

@@ -42,7 +42,7 @@ import { AnnotationQueuePanel } from "../components/annotation/AnnotationQueuePa
 import type { AnnotationFilter } from "../components/annotation/types";
 import { EmptyState } from "../components/common/EmptyState";
 import { LoadingState } from "../components/common/LoadingState";
-import { confirm } from "../hooks/useConfirm";
+import { useConfirm } from "../hooks/useConfirm";
 import {
   boxFromCorners,
   DEFAULT_BOX_SIZE,
@@ -122,6 +122,7 @@ export function DatasetAnnotatePage() {
   const navigate = useNavigate();
   const navigation = useContext(UNSAFE_NavigationContext);
   const screens = Grid.useBreakpoint();
+  const confirm = useConfirm();
 
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [loadedImages, setLoadedImages] = useState<DatasetImage[]>([]);
@@ -448,7 +449,7 @@ export function DatasetAnnotatePage() {
       navigator.replace = originalReplace;
       navigator.go = originalGo;
     };
-  }, [hasAnnotationChanges, navigation.navigator]);
+  }, [confirm, hasAnnotationChanges, navigation.navigator]);
 
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {

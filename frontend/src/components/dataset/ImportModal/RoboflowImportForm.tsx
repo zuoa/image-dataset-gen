@@ -1,7 +1,7 @@
 import { Download, Loader } from "lucide-react";
 import { Button, Card, Input, Select, Space } from "antd";
 
-import { confirm } from "../../../hooks/useConfirm";
+import { useConfirm } from "../../../hooks/useConfirm";
 
 interface RoboflowConnection {
   id: string;
@@ -36,6 +36,8 @@ interface RoboflowImportFormProps {
 }
 
 export function RoboflowImportForm(props: RoboflowImportFormProps) {
+  const confirm = useConfirm();
+
   async function handleRemoveConnection() {
     if (
       !(await confirm({

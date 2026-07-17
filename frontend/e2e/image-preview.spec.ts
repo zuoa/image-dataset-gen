@@ -140,6 +140,21 @@ test("dataset detail groups operations and uses structured sample filters", asyn
   await expect(page.getByRole("combobox", { name: "按类别筛选" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "按数据划分筛选" })).toBeVisible();
 
+  await page.getByRole("button", { name: "设置保留状态" }).click();
+  await page.getByText("全部不保留", { exact: true }).click();
+  const confirmDialog = page.locator(".ant-modal-confirm").filter({ hasText: "全部不保留" });
+  const confirmButton = confirmDialog.locator(".ant-btn-primary");
+  await expect(confirmDialog).toBeVisible();
+  const confirmButtonBackground = await confirmButton.evaluate(
+    (element) => window.getComputedStyle(element).backgroundColor,
+  );
+  const confirmButtonChannels = confirmButtonBackground.match(/\d+/g)?.map(Number) ?? [];
+  expect(confirmButtonBackground).not.toBe("rgb(22, 119, 255)");
+  expect(confirmButtonChannels).toHaveLength(3);
+  expect(Math.max(...confirmButtonChannels) - Math.min(...confirmButtonChannels)).toBeLessThan(20);
+  await confirmDialog.locator(".ant-btn-default").click();
+  await expect(confirmDialog).toBeHidden();
+
   await page.getByRole("button", { name: "生成样本" }).click();
   const dialog = page.getByRole("dialog", { name: "进入生成工作台" });
   await expect(dialog).toBeVisible();

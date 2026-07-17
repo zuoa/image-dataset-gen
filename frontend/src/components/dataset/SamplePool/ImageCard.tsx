@@ -36,9 +36,7 @@ export function ImageCard({
       className={`group overflow-hidden rounded-xl border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md ${
         isQueuedForDelete
           ? "border-red-400 bg-red-50 ring-2 ring-red-100 dark:border-red-400/60 dark:bg-red-500/10 dark:ring-red-500/10"
-          : image.selected
-            ? "border-[var(--df-color-primary)] bg-[var(--df-color-bg-container)] ring-1 ring-[var(--df-color-primary-bg-hover)]"
-            : "border-[var(--df-color-border-secondary)] bg-[var(--df-color-bg-container)] opacity-90"
+          : "border-transparent bg-[var(--df-color-bg-container)]"
       } ${isDeleting ? "opacity-50" : ""}`}
     >
       <div className="relative aspect-square overflow-hidden">

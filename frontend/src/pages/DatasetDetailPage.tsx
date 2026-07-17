@@ -52,7 +52,7 @@ import { ExportModal } from "../components/dataset/ExportModal";
 import { ImagePreviewModal } from "../components/dataset/ImagePreviewModal";
 import { TrainingPanel } from "../components/dataset/TrainingPanel";
 import { DatasetQualityPanel } from "../components/DatasetQualityPanel";
-import { confirm } from "../hooks/useConfirm";
+import { useConfirm } from "../hooks/useConfirm";
 import { useDatasetImages } from "../hooks/useDatasetImages";
 import { useDatasetTasks } from "../hooks/useDatasetTasks";
 import { useTrainingJobs } from "../hooks/useTrainingJobs";
@@ -143,6 +143,7 @@ export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   const [samplePoolClassFilter, setSamplePoolClassFilter] = useState("");
   const [samplePoolSplitFilter, setSamplePoolSplitFilter] =

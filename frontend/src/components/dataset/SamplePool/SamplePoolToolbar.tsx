@@ -10,7 +10,7 @@ import {
 import { Button, Dropdown } from "antd";
 import type { MenuProps } from "antd";
 
-import { confirm } from "../../../hooks/useConfirm";
+import { useConfirm } from "../../../hooks/useConfirm";
 import type { Dataset } from "../../../lib/types";
 
 interface SamplePoolToolbarProps {
@@ -44,6 +44,7 @@ export function SamplePoolToolbar({
   onClearDeleteSelection,
   onRemoveDeleteSelection,
 }: SamplePoolToolbarProps) {
+  const confirm = useConfirm();
   const imageCount = dataset.imageCount;
   const retainedImageCount = dataset.selectedCount;
   const unretainedImageCount = Math.max(0, imageCount - retainedImageCount);
