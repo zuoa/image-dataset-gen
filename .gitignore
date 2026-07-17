@@ -14,5 +14,6 @@ frontend/dist/
 *.db
 /backend/storage/
 /backend/tmp-storage/
+/data/
 .startup-maintenance.lock
 .idea

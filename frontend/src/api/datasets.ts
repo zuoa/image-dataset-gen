@@ -1,4 +1,5 @@
 import { apiRequest, apiRequestFormData } from "./client";
+import { generateLocalId } from "../lib/utils";
 import type {
   AugmentationMethod,
   AugmentationSettings,
@@ -26,7 +27,7 @@ function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
 }
 
 function idempotencyHeaders() {
-  return { "Idempotency-Key": crypto.randomUUID() };
+  return { "Idempotency-Key": generateLocalId("request") };
 }
 
 export function listDatasets(token: string) {

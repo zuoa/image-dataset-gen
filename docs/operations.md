@@ -18,7 +18,7 @@
 
 ## 备份策略
 
-- 每日：PostgreSQL custom dump + `backend_storage` tar + SHA-256 清单。
+- 每日：PostgreSQL custom dump + `STORAGE_HOST_PATH` 图片目录 tar + SHA-256 清单。
 - 保留：建议 7 个日备份、4 个周备份、3 个月备份。
 - 异地：备份完成后复制到独立对象存储或另一主机。
 - 演练：每月在隔离环境执行 restore，登录并抽查数据集、图片、标注和导出。
@@ -32,7 +32,7 @@
 - P95 请求延迟 10 分钟超过 2 秒（上传/下载路由单独统计）。
 - Outbox 最老未发布事件超过 2 分钟。
 - Celery 队列长度持续增长 10 分钟。
-- PostgreSQL 磁盘超过 75%，存储 volume 超过 80%。
+- PostgreSQL 磁盘超过 75%，宿主机图片目录所在磁盘超过 80%。
 - 训练任务租约反复过期或单任务 attempt count 超过 3。
 - 最近一次成功备份超过 26 小时。
 
@@ -48,7 +48,7 @@ TaskItem 或训练 assignment 租约到期后允许其他 worker 恢复。检查
 
 ### 存储不足
 
-先暂停导入/生成 worker，扩容或转移 volume；运行 `flask --app manage.py gc-assets --retention-hours 0` 只会清理已写 tombstone 的文件，不会删除活跃 Asset。
+先暂停导入/生成 worker，扩容或转移 `STORAGE_HOST_PATH` 目录；运行 `flask --app manage.py gc-assets --retention-hours 0` 只会清理已写 tombstone 的文件，不会删除活跃 Asset。
 
 ### 数据库连接耗尽
 

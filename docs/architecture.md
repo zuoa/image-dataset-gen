@@ -8,7 +8,7 @@
 flowchart LR
   U[Browser] --> N[Nginx / React]
   N -->|/api| A[Flask API]
-  N -. X-Accel-Redirect .-> S[(backend_storage)]
+  N -. X-Accel-Redirect .-> S[(STORAGE_HOST_PATH)]
   A --> P[(PostgreSQL 16)]
   A --> S
   A --> O[(Outbox)]

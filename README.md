@@ -21,7 +21,7 @@ trainer/    可部署到 GPU 主机的 YOLOv8 worker
 annotator/  旧的 mock 标注服务，仅保留兼容测试，不进入生产 Compose
 ```
 
-生产数据只保存在 PostgreSQL 和 `backend_storage` 中。Redis 开启 AOF，承载 Celery broker；数据库事务通过 Outbox 投递任务，因此 Redis 暂时不可用时不会丢失已提交的业务任务。
+生产数据只保存在 PostgreSQL 和宿主机的图片目录中。图片目录默认是 Compose 文件旁的 `./data/storage`，可通过 `STORAGE_HOST_PATH` 指定其他宿主机路径。Redis 开启 AOF，承载 Celery broker；数据库事务通过 Outbox 投递任务，因此 Redis 暂时不可用时不会丢失已提交的业务任务。
 
 ## 启动
 
@@ -29,6 +29,7 @@ annotator/  旧的 mock 标注服务，仅保留兼容测试，不进入生产 C
 
 ```bash
 cp .env.example .env
+mkdir -p data/storage
 openssl rand -hex 32       # 分别填写 SECRET_KEY、JWT_SECRET_KEY、TRAINING_WORKER_TOKEN
 openssl rand -base64 32    # 填写 ENCRYPTION_KEY
 ```
