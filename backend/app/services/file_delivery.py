@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 from flask import Response, current_app, send_file
 
+from app.services.storage_backend import ensure_shared_file_access
+
 
 _UNSAFE_ASCII_FILENAME = re.compile(r"[^A-Za-z0-9._ -]+")
 
@@ -48,6 +50,7 @@ def deliver_local_file(
     resolved = path.resolve()
     if not resolved.is_file() or not resolved.is_relative_to(root):
         return Response(status=404)
+    ensure_shared_file_access(resolved, root)
     relative = resolved.relative_to(root).as_posix()
     response = Response(status=200, mimetype=mimetype)
     response.headers["X-Accel-Redirect"] = f"/_protected_assets/{quote(relative)}"

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import stat
 import tempfile
 from typing import BinaryIO
 
@@ -13,6 +14,9 @@ from app.models import Asset
 
 class StorageError(RuntimeError):
     pass
+
+
+SHARED_FILE_MODE = 0o644
 
 
 @dataclass(frozen=True)
@@ -40,9 +44,11 @@ class LocalStorageBackend:
     def put_bytes(self, key: str, payload: bytes) -> StoredObject:
         path = self.resolve(key)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_shared_directory_access(self.root, path.parent)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         try:
             with os.fdopen(descriptor, "wb") as handle:
+                os.fchmod(handle.fileno(), SHARED_FILE_MODE)
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -59,11 +65,13 @@ class LocalStorageBackend:
     def put_stream(self, key: str, stream: BinaryIO, *, chunk_size: int = 1024 * 1024) -> StoredObject:
         path = self.resolve(key)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_shared_directory_access(self.root, path.parent)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         digest = hashlib.sha256()
         size_bytes = 0
         try:
             with os.fdopen(descriptor, "wb") as handle:
+                os.fchmod(handle.fileno(), SHARED_FILE_MODE)
                 while True:
                     chunk = stream.read(chunk_size)
                     if not chunk:
@@ -94,6 +102,17 @@ class LocalStorageBackend:
 
 def local_backend(storage_root: str) -> LocalStorageBackend:
     return LocalStorageBackend(storage_root)
+
+
+def ensure_shared_file_access(path: Path, storage_root: str | os.PathLike[str]) -> Path:
+    """Make a stored file readable by the separate file-serving container."""
+    root = Path(storage_root).expanduser().resolve()
+    resolved = path.resolve()
+    if not resolved.is_file() or not resolved.is_relative_to(root):
+        raise StorageError("asset path is outside configured storage root")
+    _ensure_shared_directory_access(root, resolved.parent)
+    _ensure_mode_bits(resolved, stat.S_IRGRP | stat.S_IROTH)
+    return resolved
 
 
 def register_local_asset(
@@ -177,6 +196,24 @@ def _normalize_key(key: str) -> str:
 
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _ensure_shared_directory_access(root: Path, directory: Path) -> None:
+    root = root.resolve()
+    current = directory.resolve()
+    if not current.is_relative_to(root):
+        raise StorageError("storage directory escapes configured root")
+    while True:
+        _ensure_mode_bits(current, stat.S_IXGRP | stat.S_IXOTH)
+        if current == root:
+            return
+        current = current.parent
+
+
+def _ensure_mode_bits(path: Path, required_bits: int) -> None:
+    current_mode = stat.S_IMODE(path.stat().st_mode)
+    if current_mode & required_bits != required_bits:
+        path.chmod(current_mode | required_bits)
 
 
 def _fsync_directory(path: Path) -> None:
