@@ -1,23 +1,27 @@
-import type { SelectHTMLAttributes } from "react";
+import { Select as AntSelect } from "antd";
+import type { SelectProps as AntSelectProps } from "antd";
+import { Children, isValidElement, useMemo } from "react";
 
-import { ChevronDown } from "lucide-react";
+interface OptionLike {
+  value?: string | number;
+  children?: React.ReactNode;
+}
 
-import { cn } from "../../lib/utils";
-import { fieldBaseClasses } from "./fieldStyles";
+interface SelectProps extends Omit<AntSelectProps, "children" > {
+  children?: React.ReactNode;
+}
 
-export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <div className="relative">
-      <select
-        className={cn(
-          `${fieldBaseClasses} appearance-none pr-11`,
-          className,
-        )}
-        {...props}
-      >
-        {children}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400 dark:text-neutral-500" />
-    </div>
-  );
+export function Select({ children, options, ...props }: SelectProps) {
+  const derivedOptions = useMemo(() => {
+    if (options) return options;
+    if (!children) return [];
+    return Children.toArray(children)
+      .filter(isValidElement<OptionLike>)
+      .map((child) => ({
+        value: child.props.value,
+        label: child.props.children,
+      }));
+  }, [children, options]);
+
+  return <AntSelect {...props} options={derivedOptions} />;
 }

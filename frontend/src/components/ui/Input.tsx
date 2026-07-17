@@ -1,16 +1,6 @@
-import type { InputHTMLAttributes } from "react";
+import { Input as AntInput } from "antd";
+import type { InputProps as AntInputProps } from "antd";
 
-import { cn } from "../../lib/utils";
-import { fieldBaseClasses } from "./fieldStyles";
-
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      className={cn(
-        fieldBaseClasses,
-        className,
-      )}
-      {...props}
-    />
-  );
+export function Input(props: AntInputProps) {
+  return <AntInput {...props} />;
 }

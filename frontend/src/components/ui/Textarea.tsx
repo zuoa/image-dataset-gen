@@ -1,16 +1,6 @@
-import type { TextareaHTMLAttributes } from "react";
+import { Input as AntInput } from "antd";
+import type { TextAreaProps as AntTextAreaProps } from "antd/es/input";
 
-import { cn } from "../../lib/utils";
-import { fieldBaseClasses } from "./fieldStyles";
-
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={cn(
-        `${fieldBaseClasses} min-h-28 rounded-3xl`,
-        className,
-      )}
-      {...props}
-    />
-  );
+export function Textarea(props: AntTextAreaProps) {
+  return <AntInput.TextArea {...props} />;
 }

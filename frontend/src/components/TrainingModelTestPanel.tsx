@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { Download, ImageUp, Maximize2, ScanSearch, SlidersHorizontal, Target, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Button, Card, Checkbox, Input, Select, Slider } from "antd";
 
 import { createTrainingInferenceTest, getTrainingInferenceTest } from "../api/datasets";
 import { detectionStyle } from "../lib/annotation";
+import { useAuthStore } from "../store/auth";
 import type { TrainingArtifact, TrainingInferenceResult, TrainingInferenceTest, TrainingJob } from "../lib/types";
 import { cn } from "../lib/utils";
-import { Button } from "./ui/Button";
-import { Input } from "./ui/Input";
 
 type TrainingModelTestPanelProps = {
   job: TrainingJob;
-  token: string | null;
 };
 
 type TrainingInferenceDetection = TrainingInferenceResult["detections"][number];
@@ -29,7 +28,8 @@ const IMAGE_VIEWER_MAX_SCALE = 3;
 const IMAGE_VIEWER_SCALE_STEP = 0.25;
 const IMAGE_VIEWER_INITIAL_SCALE = 1.5;
 
-export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelProps) {
+export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
+  const token = useAuthStore((state) => state.token);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const modelArtifacts = useMemo(() => job.artifacts.filter(isModelArtifact), [job.artifacts]);
   const [artifactId, setArtifactId] = useState("");
@@ -207,34 +207,28 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
           </p>
         </div>
         {result ? (
-          <Button variant="secondary" onClick={() => void downloadAnnotatedImage()}>
-            <Download className="mr-2 h-4 w-4" />
+          <Button onClick={() => void downloadAnnotatedImage()} icon={<Download className="h-4 w-4" />}>
             下载结果图
           </Button>
         ) : null}
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="rounded-[20px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+        <Card className="rounded-[20px] border-neutral-200 bg-neutral-50 dark:border-white/10 dark:bg-white/[0.03]" styles={{ body: { padding: 16 } }}>
           <div className="space-y-4">
             <label className="block space-y-2">
               <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">模型产物</span>
-              <select
+              <Select
                 value={artifactId}
-                onChange={(event) => setArtifactId(event.target.value)}
+                onChange={(value) => setArtifactId(value as string)}
                 disabled={modelArtifacts.length === 0 || isTesting}
-                className="w-full rounded-[18px] border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 outline-none transition focus:border-neutral-400 dark:border-white/10 dark:bg-neutral-950 dark:text-white"
-              >
-                {modelArtifacts.length > 0 ? (
-                  modelArtifacts.map((artifact) => (
-                    <option key={artifact.id} value={artifact.id}>
-                      {artifact.filename}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">没有可用模型</option>
-                )}
-              </select>
+                options={
+                  modelArtifacts.length > 0
+                    ? modelArtifacts.map((artifact) => ({ value: artifact.id, label: artifact.filename }))
+                    : [{ value: "", label: "没有可用模型" }]
+                }
+                className="w-full"
+              />
             </label>
 
             <div>
@@ -246,12 +240,11 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                 onChange={handleImageChange}
               />
               <Button
-                variant="secondary"
                 className="w-full justify-center"
                 onClick={() => imageInputRef.current?.click()}
                 disabled={isTesting}
+                icon={<ImageUp className="h-4 w-4" />}
               >
-                <ImageUp className="mr-2 h-4 w-4" />
                 <span className="min-w-0 truncate">{imageFile ? imageFile.name : "选择测试图片"}</span>
               </Button>
             </div>
@@ -261,15 +254,13 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                 <span>推理阈值</span>
                 <span>{confidenceThreshold.toFixed(2)}</span>
               </span>
-              <input
-                type="range"
+              <Slider
                 min={0.01}
                 max={1}
                 step={0.01}
                 value={confidenceThreshold}
-                onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+                onChange={setConfidenceThreshold}
                 disabled={isTesting}
-                className="h-2 w-full accent-neutral-900 dark:accent-white"
               />
             </label>
 
@@ -278,15 +269,10 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 Image size
               </span>
-              <Input
-                type="number"
-                value={imageSize}
-                readOnly
-                disabled
-              />
+              <Input type="number" value={imageSize} readOnly disabled />
             </label>
 
-            <Button className="w-full justify-center" onClick={() => void runModelTest()} disabled={!canRun}>
+            <Button className="w-full justify-center" onClick={() => void runModelTest()} disabled={!canRun} loading={isTesting}>
               <ScanSearch className="mr-2 h-4 w-4" />
               {isTesting ? "测试中..." : "开始测试"}
             </Button>
@@ -312,22 +298,22 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
               </div>
             ) : null}
           </div>
-        </div>
+        </Card>
 
-        <div className="min-h-[320px] rounded-[20px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+        <Card className="min-h-[320px] rounded-[20px] border-neutral-200 bg-neutral-50 dark:border-white/10 dark:bg-white/[0.03]" styles={{ body: { padding: 16 } }}>
           {result ? (
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-              <div className="overflow-hidden rounded-[16px] border border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950">
-                <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-3 py-2 dark:border-white/10">
-                  <div className="text-xs text-neutral-500">
-                    {filteredDetections.length} 个可见检测框
-                  </div>
-                  <Button variant="secondary" className="px-3 py-1.5 text-xs" onClick={openImageViewer}>
-                    <Maximize2 className="mr-1.5 h-3.5 w-3.5" />
+              <Card
+                className="overflow-hidden rounded-[16px] border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950"
+                styles={{ body: { padding: 12 } }}
+                title={<div className="text-xs text-neutral-500">{filteredDetections.length} 个可见检测框</div>}
+                extra={
+                  <Button size="small" onClick={openImageViewer} icon={<Maximize2 className="h-3.5 w-3.5" />}>
                     放大查看
                   </Button>
-                </div>
-                <div className="flex min-h-[320px] items-center justify-center p-3">
+                }
+              >
+                <div className="flex min-h-[320px] items-center justify-center">
                   <AnnotatedResultImage
                     result={result}
                     detections={filteredDetections}
@@ -337,34 +323,30 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                     imageClassName="max-h-[560px] max-w-full object-contain"
                   />
                 </div>
-              </div>
+              </Card>
               <div className="space-y-4">
-                <div className="rounded-[16px] border border-neutral-200 bg-white px-3 py-3 dark:border-white/10 dark:bg-neutral-950">
+                <Card className="rounded-[16px] border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950" styles={{ body: { padding: 12 } }}>
                   <label className="block space-y-2">
                     <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-neutral-500">
                       <span>显示阈值</span>
                       <span>{displayThreshold.toFixed(2)}</span>
                     </span>
-                    <input
-                      type="range"
+                    <Slider
                       min={0}
                       max={1}
                       step={0.01}
                       value={displayThreshold}
-                      onChange={(event) => setDisplayThreshold(Number(event.target.value))}
-                      className="h-2 w-full accent-neutral-900 dark:accent-white"
+                      onChange={setDisplayThreshold}
                     />
                   </label>
-                  <label className="mt-3 flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
-                    <input
-                      type="checkbox"
-                      checked={showDownloadConfidence}
-                      onChange={(event) => setShowDownloadConfidence(event.target.checked)}
-                      className="h-4 w-4 rounded border-neutral-300 accent-neutral-900 dark:border-white/20 dark:accent-white"
-                    />
+                  <Checkbox
+                    className="mt-3 text-xs text-neutral-600 dark:text-neutral-300"
+                    checked={showDownloadConfidence}
+                    onChange={(event) => setShowDownloadConfidence(event.target.checked)}
+                  >
                     下载图显示置信度
-                  </label>
-                </div>
+                  </Checkbox>
+                </Card>
 
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm text-neutral-900 dark:text-white">检测结果</div>
@@ -377,11 +359,12 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                     filteredDetections.map(({ detection, index }) => {
                       const selected = selectedDetectionIndex === index;
                       return (
-                        <button
+                        <Button
                           key={`${detection.category}-${index}`}
-                          type="button"
+                          type="default"
+                          block
                           className={cn(
-                            "w-full rounded-[16px] border bg-white px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-lime-300 dark:bg-neutral-950",
+                            "h-auto rounded-[16px] border bg-white px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-lime-300 dark:bg-neutral-950",
                             selected
                               ? "border-lime-300 shadow-[0_0_0_1px_rgba(190,242,100,0.45)] dark:border-lime-300"
                               : "border-neutral-200 hover:border-neutral-300 dark:border-white/10 dark:hover:border-white/20",
@@ -399,7 +382,7 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
                           </div>
                           <div className="mt-1 text-xs text-neutral-500">class {detection.classId}</div>
                           {selected ? <div className="mt-2 break-all text-[11px] text-neutral-500">bbox {formatBbox(detection.bbox)}</div> : null}
-                        </button>
+                        </Button>
                       );
                     })
                   ) : (
@@ -424,7 +407,7 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
               </div>
             </div>
           )}
-        </div>
+        </Card>
       </div>
 
       {result && isImageViewerOpen ? (
@@ -440,35 +423,32 @@ export function TrainingModelTestPanel({ job, token }: TrainingModelTestPanelPro
               <div className="mt-1 text-sm font-medium">模型测试结果</div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20 disabled:opacity-40"
+              <Button
+                shape="circle"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border-white/10 bg-white/10 text-white hover:bg-white/20 hover:text-white"
                 onClick={() => adjustImageViewerScale(-IMAGE_VIEWER_SCALE_STEP)}
                 disabled={imageViewerScale <= IMAGE_VIEWER_MIN_SCALE}
                 aria-label="缩小结果图"
-              >
-                <ZoomOut className="h-4 w-4" />
-              </button>
+                icon={<ZoomOut className="h-4 w-4" />}
+              />
               <div className="min-w-16 text-center text-xs tabular-nums text-neutral-300">
                 {Math.round(imageViewerScale * 100)}%
               </div>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20 disabled:opacity-40"
+              <Button
+                shape="circle"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border-white/10 bg-white/10 text-white hover:bg-white/20 hover:text-white"
                 onClick={() => adjustImageViewerScale(IMAGE_VIEWER_SCALE_STEP)}
                 disabled={imageViewerScale >= IMAGE_VIEWER_MAX_SCALE}
                 aria-label="放大结果图"
-              >
-                <ZoomIn className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 transition hover:bg-white/20"
+                icon={<ZoomIn className="h-4 w-4" />}
+              />
+              <Button
+                shape="circle"
+                className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-full border-white/10 bg-white/10 text-white hover:bg-white/20 hover:text-white"
                 onClick={() => setIsImageViewerOpen(false)}
                 aria-label="关闭放大查看"
-              >
-                <X className="h-4 w-4" />
-              </button>
+                icon={<X className="h-4 w-4" />}
+              />
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-4 py-5">

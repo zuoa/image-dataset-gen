@@ -1,21 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Switch,
+  Typography,
+} from "antd";
 
-import { getProviders } from "../api/system";
-import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
-import { Select } from "../components/ui/Select";
-import { SectionCard } from "../components/ui/SectionCard";
-import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
-import { Textarea } from "../components/ui/Textarea";
+import { PageContainer } from "../components/common/PageContainer";
+import { PageHeader } from "../components/common/PageHeader";
+import { LoadingState } from "../components/common/LoadingState";
+import { confirm } from "../hooks/useConfirm";
+import { useModelProfiles } from "../hooks/useModelProfiles";
+import { useProviders } from "../hooks/useProviders";
 import { filterModelProfilesByType, getFallbackModelProfile } from "../lib/modelProfiles";
-import type { ModelProfile, ModelProfileType, ProviderInfo } from "../lib/types";
+import type { ModelProfile, ModelProfileType } from "../lib/types";
 import { generateLocalId } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { useModelProfilesStore } from "../store/modelProfiles";
 
+const { Text, Paragraph } = Typography;
+const { TextArea } = Input;
+
 const llmProviders = [
-  { id: "openai_compatible", name: "DeepSeek / OpenAI-Compatible" },
+  { value: "openai_compatible", label: "DeepSeek / OpenAI-Compatible" },
 ];
 
 function createDraftProfile(
@@ -43,31 +61,19 @@ function createDraftProfile(
 
 export function ModelManagementPage() {
   const token = useAuthStore((state) => state.token);
-  const profiles = useModelProfilesStore((state) => state.profiles);
+  const { data: profiles, isLoading: profilesLoading } = useModelProfiles();
+  const { data: providers, isLoading: providersLoading } = useProviders();
   const isLoading = useModelProfilesStore((state) => state.isLoading);
   const error = useModelProfilesStore((state) => state.error);
-  const fetchProfiles = useModelProfilesStore((state) => state.fetchProfiles);
   const saveProfile = useModelProfilesStore((state) => state.saveProfile);
   const removeProfile = useModelProfilesStore((state) => state.removeProfile);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [activeTab, setActiveTab] = useState<ModelProfileType>("image");
   const [selectedId, setSelectedId] = useState<string>("");
   const [draftProfile, setDraftProfile] = useState<ModelProfile>(() => createDraftProfile("image"));
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!token) return;
-    void fetchProfiles(token);
-  }, [fetchProfiles, token]);
-
-  useEffect(() => {
-    void getProviders()
-      .then((data) => setProviders(data.providers))
-      .catch(() => setProviders([]));
-  }, []);
-
   const filteredProfiles = useMemo(
-    () => filterModelProfilesByType(profiles, activeTab),
+    () => filterModelProfilesByType(profiles ?? [], activeTab),
     [activeTab, profiles],
   );
 
@@ -94,7 +100,7 @@ export function ModelManagementPage() {
   const activeProvider = useMemo(
     () =>
       draftProfile.profileType === "image"
-        ? providers.find((provider) => provider.id === draftProfile.providerId) ?? null
+        ? providers?.find((provider) => provider.id === draftProfile.providerId) ?? null
         : null,
     [draftProfile.profileType, draftProfile.providerId, providers],
   );
@@ -114,7 +120,7 @@ export function ModelManagementPage() {
       return;
     }
 
-    const provider = providers.find((item) => item.id === providerId);
+    const provider = providers?.find((item) => item.id === providerId);
     setDraftProfile((current) => ({
       ...current,
       providerId,
@@ -167,6 +173,16 @@ export function ModelManagementPage() {
   async function handleDelete() {
     if (!token) return;
     if (!filteredProfiles.some((profile) => profile.id === draftProfile.id)) return;
+
+    const ok = await confirm({
+      title: "删除模型配置",
+      content: `确定要删除 "${draftProfile.name}" 吗？此操作不可撤销。`,
+      okDanger: true,
+      okText: "删除",
+      cancelText: "取消",
+    });
+    if (!ok) return;
+
     setSaveError(null);
     try {
       await removeProfile(draftProfile.id, token);
@@ -175,250 +191,299 @@ export function ModelManagementPage() {
     }
   }
 
+  const tabOptions = [
+    { value: "image", label: "图像生成" },
+    { value: "llm", label: "大语言模型" },
+  ];
+
+  const providerOptions = useMemo(() => {
+    if (draftProfile.profileType === "image") {
+      return (providers ?? []).map((provider) => ({ value: provider.id, label: provider.name }));
+    }
+    return llmProviders;
+  }, [draftProfile.profileType, providers]);
+
+  const modelOptions = useMemo(
+    () =>
+      activeProvider?.models.map((model) => ({ value: model, label: model })) ?? [],
+    [activeProvider],
+  );
+
+  if (profilesLoading || providersLoading) {
+    return (
+      <PageContainer>
+        <LoadingState rows={8} />
+      </PageContainer>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      <SectionCard>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Model Registry</div>
-            <h2 className="mt-2 text-3xl text-neutral-900 dark:text-white">模型管理</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              统一维护图像生成模型和大语言模型。数据集内的生成批次只做选择，不再手填底层接口参数。
-            </p>
-          </div>
-          <div className={segmentedGroupClasses}>
-            <button
-              type="button"
-              className={segmentedButtonClasses(activeTab === "image")}
-              onClick={() => handleTabChange("image")}
-            >
-              图像生成
-            </button>
-            <button
-              type="button"
-              className={segmentedButtonClasses(activeTab === "llm")}
-              onClick={() => handleTabChange("llm")}
-            >
-              大语言模型
-            </button>
-          </div>
-        </div>
-      </SectionCard>
+    <PageContainer>
+      <PageHeader
+        eyebrow="Model Registry"
+        title="模型管理"
+        description="统一维护图像生成模型和大语言模型。数据集内的生成批次只做选择，不再手填底层接口参数。"
+        actions={
+          <Segmented
+            value={activeTab}
+            onChange={(value) => handleTabChange(value as ModelProfileType)}
+            options={tabOptions}
+          />
+        }
+      />
 
-      <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <SectionCard>
-          <div className="mb-4 flex items-center justify-between">
-            <div className="text-sm text-neutral-900 dark:text-white">
-              {activeTab === "image" ? "图像模型配置" : "LLM 配置"}
+      <Row gutter={[24, 24]} align="stretch">
+        <Col xs={24} xl={8}>
+          <Card className="h-full shadow-panel">
+            <div className="mb-4 flex items-center justify-between">
+              <Text className="font-medium">
+                {activeTab === "image" ? "图像模型配置" : "LLM 配置"}
+              </Text>
+              <Text className="text-xs text-neutral-500">{filteredProfiles.length} 个</Text>
             </div>
-            <div className="text-xs text-neutral-500">{filteredProfiles.length} 个</div>
-          </div>
-          <div className="space-y-3">
-            {filteredProfiles.map((profile) => {
-              const isActive = profile.id === selectedId;
-              return (
-                <button
-                  key={profile.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedId(profile.id);
-                    setDraftProfile(createDraftProfile(activeTab, profile));
-                  }}
-                  className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
-                    isActive
-                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white/12 dark:bg-neutral-100 dark:text-neutral-950"
-                      : "border-neutral-200 bg-neutral-100 text-neutral-700 hover:border-neutral-300 hover:bg-white dark:border-white/10 dark:bg-black/20 dark:text-neutral-200 dark:hover:border-white/20 dark:hover:bg-black/30"
-                  }`}
-                >
-                  <div className="text-sm">{profile.name}</div>
-                  <div className={`mt-2 text-xs ${isActive ? "text-white/75 dark:text-neutral-700" : "text-neutral-500 dark:text-neutral-400"}`}>
-                    {profile.providerId} · {profile.model}
+            <List
+              dataSource={filteredProfiles}
+              locale={{
+                emptyText: (
+                  <div className="rounded-xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-white/10 dark:text-neutral-400">
+                    当前没有可用配置，先新建一个。
                   </div>
-                </button>
-              );
-            })}
-            {filteredProfiles.length === 0 ? (
-              <div className="rounded-[24px] border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-white/10 dark:text-neutral-400">
-                当前没有可用配置，先新建一个。
-              </div>
-            ) : null}
-          </div>
-        </SectionCard>
+                ),
+              }}
+              renderItem={(profile) => {
+                const isActive = profile.id === selectedId;
+                return (
+                  <List.Item className="!px-0 !py-2">
+                    <Button
+                      type={isActive ? "primary" : "default"}
+                      onClick={() => {
+                        setSelectedId(profile.id);
+                        setDraftProfile(createDraftProfile(activeTab, profile));
+                      }}
+                      className="h-auto w-full justify-start !px-4 !py-4 text-left"
+                    >
+                      <div className="w-full">
+                        <div className="text-sm">{profile.name}</div>
+                        <Text
+                          className={`mt-1 block text-xs ${
+                            isActive ? "text-white/75 dark:text-neutral-800" : "text-neutral-500"
+                          }`}
+                        >
+                          {profile.providerId} · {profile.model}
+                        </Text>
+                      </div>
+                    </Button>
+                  </List.Item>
+                );
+              }}
+            />
+          </Card>
+        </Col>
 
-        <SectionCard>
-          <div className="mb-4 flex items-center justify-between">
-            <div className="text-sm text-neutral-900 dark:text-white">
-              {draftProfile.profileType === "image" ? "编辑图像模型配置" : "编辑 LLM 配置"}
+        <Col xs={24} xl={16}>
+          <Card className="shadow-panel">
+            <div className="mb-4 flex items-center justify-between">
+              <Text className="font-medium">
+                {draftProfile.profileType === "image" ? "编辑图像模型配置" : "编辑 LLM 配置"}
+              </Text>
+              <Button onClick={handleCreate} disabled={isLoading}>新建配置</Button>
             </div>
-            <Button variant="secondary" onClick={handleCreate} type="button" disabled={isLoading}>
-              新建配置
-            </Button>
-          </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <span className="text-neutral-900 dark:text-white">配置名称</span>
-              <Input
-                value={draftProfile.name}
-                placeholder={draftProfile.profileType === "image" ? "例如：Nano Banana 2 · 通用写实" : "例如：DeepSeek · 自动补全"}
-                onChange={(event) => setDraftProfile((current) => ({ ...current, name: event.target.value }))}
-              />
-            </label>
-
-            <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <span className="text-neutral-900 dark:text-white">Provider</span>
-              <Select
-                value={draftProfile.providerId}
-                onChange={(event) => handleProviderChange(event.target.value)}
-              >
-                {(draftProfile.profileType === "image" ? providers : llmProviders).map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-
-            {draftProfile.profileType === "llm" ? (
-              <label className="md:col-span-2 space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-                <span className="text-neutral-900 dark:text-white">Base URL</span>
-                <Input
-                  value={draftProfile.baseUrl ?? ""}
-                  placeholder="例如：https://api.deepseek.com/v1"
-                  onChange={(event) => setDraftProfile((current) => ({ ...current, baseUrl: event.target.value }))}
-                />
-              </label>
-            ) : null}
-
-            <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <span className="text-neutral-900 dark:text-white">模型版本</span>
-              {draftProfile.profileType === "image" && activeProvider?.models.length ? (
-                <Select
-                  value={draftProfile.model}
-                  onChange={(event) => setDraftProfile((current) => ({ ...current, model: event.target.value }))}
-                >
-                  {activeProvider.models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                <Input
-                  value={draftProfile.model}
-                  placeholder={draftProfile.profileType === "image" ? "输入模型版本" : "输入 OpenAI-compatible 模型 ID"}
-                  onChange={(event) => setDraftProfile((current) => ({ ...current, model: event.target.value }))}
-                />
-              )}
-            </label>
-
-            <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <span className="text-neutral-900 dark:text-white">API Key</span>
-              <Input
-                type="password"
-                value={draftProfile.apiKey}
-                placeholder={draftProfile.hasApiKey ? "已安全保存；留空保持不变" : "输入该配置对应的 API Key"}
-                onChange={(event) => setDraftProfile((current) => ({ ...current, apiKey: event.target.value }))}
-              />
-            </label>
-
-            {draftProfile.profileType === "image" ? (
-              <>
-                <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-                  <span className="text-neutral-900 dark:text-white">并发数</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={draftProfile.concurrency}
-                    onChange={(event) =>
-                      setDraftProfile((current) => ({ ...current, concurrency: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-
-                <label className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-                  <span className="text-neutral-900 dark:text-white">批次大小</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={draftProfile.batchSize}
-                    onChange={(event) =>
-                      setDraftProfile((current) => ({ ...current, batchSize: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-
-                {draftProfile.providerId === "jimeng" ? (
-                  <label className="md:col-span-2 flex items-center justify-between rounded-[20px] border border-neutral-200 bg-neutral-100 px-4 py-4 text-sm text-neutral-600 dark:border-white/10 dark:bg-black/20 dark:text-neutral-300">
-                    <span>默认添加 AI 水印</span>
-                    <input
-                      type="checkbox"
-                      checked={draftProfile.jimengWatermark}
+            <Form layout="vertical" className="space-y-4">
+              <Row gutter={[16, 0]}>
+                <Col xs={24} md={12}>
+                  <Form.Item label="配置名称" className="!mb-2">
+                    <Input
+                      value={draftProfile.name}
+                      placeholder={
+                        draftProfile.profileType === "image"
+                          ? "例如：Nano Banana 2 · 通用写实"
+                          : "例如：DeepSeek · 自动补全"
+                      }
                       onChange={(event) =>
-                        setDraftProfile((current) => ({ ...current, jimengWatermark: event.target.checked }))
+                        setDraftProfile((current) => ({ ...current, name: event.target.value }))
                       }
                     />
-                  </label>
-                ) : null}
-              </>
-            ) : (
-              <div className="md:col-span-2 rounded-[20px] border border-neutral-200 bg-neutral-100 px-4 py-4 text-sm text-neutral-600 dark:border-white/10 dark:bg-black/20 dark:text-neutral-300">
-                使用 OpenAI-compatible `/chat/completions` 接口，根据目标对象自动生成类别标签和补充描述。
-              </div>
-            )}
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item label="Provider" className="!mb-2">
+                    <Select
+                      value={draftProfile.providerId}
+                      onChange={(value) => handleProviderChange(value)}
+                      options={providerOptions}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
 
-            <label className="md:col-span-2 space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <span className="text-neutral-900 dark:text-white">备注</span>
-              <Textarea
-                value={draftProfile.notes ?? ""}
-                placeholder={draftProfile.profileType === "image" ? "记录适用场景，例如中文写实、电商白底、快速试跑等。" : "记录用途，例如目标对象补全、标题建议、标签清洗等。"}
-                onChange={(event) => setDraftProfile((current) => ({ ...current, notes: event.target.value }))}
+              {draftProfile.profileType === "llm" ? (
+                <Form.Item label="Base URL" className="!mb-2">
+                  <Input
+                    value={draftProfile.baseUrl ?? ""}
+                    placeholder="例如：https://api.deepseek.com/v1"
+                    onChange={(event) =>
+                      setDraftProfile((current) => ({ ...current, baseUrl: event.target.value }))
+                    }
+                  />
+                </Form.Item>
+              ) : null}
+
+              <Row gutter={[16, 0]}>
+                <Col xs={24} md={12}>
+                  <Form.Item label="模型版本" className="!mb-2">
+                    {draftProfile.profileType === "image" && modelOptions.length > 0 ? (
+                      <Select
+                        value={draftProfile.model}
+                        onChange={(value) =>
+                          setDraftProfile((current) => ({ ...current, model: value }))
+                        }
+                        options={modelOptions}
+                      />
+                    ) : (
+                      <Input
+                        value={draftProfile.model}
+                        placeholder={
+                          draftProfile.profileType === "image"
+                            ? "输入模型版本"
+                            : "输入 OpenAI-compatible 模型 ID"
+                        }
+                        onChange={(event) =>
+                          setDraftProfile((current) => ({ ...current, model: event.target.value }))
+                        }
+                      />
+                    )}
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item label="API Key" className="!mb-2">
+                    <Input.Password
+                      value={draftProfile.apiKey}
+                      placeholder={
+                        draftProfile.hasApiKey
+                          ? "已安全保存；留空保持不变"
+                          : "输入该配置对应的 API Key"
+                      }
+                      onChange={(event) =>
+                        setDraftProfile((current) => ({ ...current, apiKey: event.target.value }))
+                      }
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              {draftProfile.profileType === "image" ? (
+                <Row gutter={[16, 0]}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="并发数" className="!mb-2">
+                      <InputNumber
+                        min={1}
+                        max={10}
+                        value={draftProfile.concurrency}
+                        onChange={(value) =>
+                          setDraftProfile((current) => ({ ...current, concurrency: Number(value) }))
+                        }
+                        className="w-full"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="批次大小" className="!mb-2">
+                      <InputNumber
+                        min={1}
+                        max={50}
+                        value={draftProfile.batchSize}
+                        onChange={(value) =>
+                          setDraftProfile((current) => ({ ...current, batchSize: Number(value) }))
+                        }
+                        className="w-full"
+                      />
+                    </Form.Item>
+                  </Col>
+                  {draftProfile.providerId === "jimeng" ? (
+                    <Col xs={24}>
+                      <Form.Item className="!mb-2">
+                        <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-neutral-100 px-4 py-3 dark:border-white/10 dark:bg-black/20">
+                          <span className="text-sm">默认添加 AI 水印</span>
+                          <Switch
+                            checked={draftProfile.jimengWatermark}
+                            onChange={(checked) =>
+                              setDraftProfile((current) => ({ ...current, jimengWatermark: checked }))
+                            }
+                          />
+                        </div>
+                      </Form.Item>
+                    </Col>
+                  ) : null}
+                </Row>
+              ) : (
+                <div className="rounded-xl border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm text-neutral-600 dark:border-white/10 dark:bg-black/20 dark:text-neutral-300">
+                  使用 OpenAI-compatible `/chat/completions` 接口，根据目标对象自动生成类别标签和补充描述。
+                </div>
+              )}
+
+              <Form.Item label="备注" className="!mb-0">
+                <TextArea
+                  value={draftProfile.notes ?? ""}
+                  placeholder={
+                    draftProfile.profileType === "image"
+                      ? "记录适用场景，例如中文写实、电商白底、快速试跑等。"
+                      : "记录用途，例如目标对象补全、标题建议、标签清洗等。"
+                  }
+                  onChange={(event) =>
+                    setDraftProfile((current) => ({ ...current, notes: event.target.value }))
+                  }
+                />
+              </Form.Item>
+            </Form>
+
+            {draftProfile.profileType === "image" && activeProvider ? (
+              <Alert
+                className="mt-4"
+                message={activeProvider.name}
+                description={`推荐并发 ${activeProvider.recommendConcurrency}，${activeProvider.sizeHint}`}
+                type="info"
+                showIcon
               />
-            </label>
-          </div>
+            ) : null}
 
-          {draftProfile.profileType === "image" && activeProvider ? (
-            <div className="mt-6 rounded-[24px] border border-neutral-200 bg-neutral-100 p-4 text-sm text-neutral-600 dark:border-white/10 dark:bg-black/20 dark:text-neutral-300">
-              <div className="text-neutral-900 dark:text-white">{activeProvider.name}</div>
-              <div className="mt-2 leading-7">
-                推荐并发 {activeProvider.recommendConcurrency}，{activeProvider.sizeHint}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-6 dark:border-white/10">
-            <Link to="/datasets/new" className="text-sm text-neutral-500 transition hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white">
-              返回数据集 flow
-            </Link>
-            <div className="flex gap-3">
-              <Button
-                variant="ghost"
-                onClick={() => void handleDelete()}
-                type="button"
-                disabled={isLoading || !filteredProfiles.some((profile) => profile.id === draftProfile.id)}
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-6 dark:border-white/10">
+              <Link
+                to="/datasets/new"
+                className="text-sm text-neutral-500 transition hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white"
               >
-                删除
-              </Button>
-              <Button
-                onClick={() => void handleSave()}
-                type="button"
-                disabled={
-                  isLoading ||
-                  !draftProfile.name.trim() ||
-                  !draftProfile.model.trim() ||
-                  (!draftProfile.apiKey.trim() && !draftProfile.hasApiKey) ||
-                  (draftProfile.profileType === "llm" && !(draftProfile.baseUrl ?? "").trim())
-                }
-              >
-                {isLoading ? "保存中..." : "保存配置"}
-              </Button>
+                返回数据集 flow
+              </Link>
+              <Space>
+                <Button
+                  danger
+                  onClick={() => void handleDelete()}
+                  disabled={isLoading || !filteredProfiles.some((profile) => profile.id === draftProfile.id)}
+                >
+                  删除
+                </Button>
+                <Button
+                  type="primary"
+                  loading={isLoading}
+                  onClick={() => void handleSave()}
+                  disabled={
+                    isLoading ||
+                    !draftProfile.name.trim() ||
+                    !draftProfile.model.trim() ||
+                    (!draftProfile.apiKey.trim() && !draftProfile.hasApiKey) ||
+                    (draftProfile.profileType === "llm" && !(draftProfile.baseUrl ?? "").trim())
+                  }
+                >
+                  保存配置
+                </Button>
+              </Space>
             </div>
-          </div>
-          {saveError || error ? <div className="mt-4 text-sm text-red-600 dark:text-red-300">{saveError || error}</div> : null}
-        </SectionCard>
-      </div>
-    </div>
+            {saveError || error ? (
+              <Alert className="mt-4" message={saveError || error} type="error" showIcon />
+            ) : null}
+          </Card>
+        </Col>
+      </Row>
+    </PageContainer>
   );
 }

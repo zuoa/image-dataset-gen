@@ -2,11 +2,14 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: "class",
+  corePlugins: {
+    preflight: false,
+  },
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       fontFamily: {
-        sans: ["'IBM Plex Sans'", "sans-serif"],
+        sans: ["'IBM Plex Sans'", "-apple-system", "BlinkMacSystemFont", "'Segoe UI'", "sans-serif"],
         mono: ["'IBM Plex Mono'", "monospace"],
       },
       boxShadow: {

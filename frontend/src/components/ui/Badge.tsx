@@ -1,19 +1,12 @@
-import type { PropsWithChildren } from "react";
+import { Tag as AntTag } from "antd";
+import type { TagProps as AntTagProps } from "antd";
 
-import { cn } from "../../lib/utils";
+interface BadgeProps extends AntTagProps {}
 
-export function Badge({
-  children,
-  className,
-}: PropsWithChildren<{ className?: string }>) {
+export function Badge({ children, ...props }: BadgeProps) {
   return (
-    <span
-      className={cn(
-        "inline-flex rounded-full border border-neutral-200 bg-neutral-100 px-3 py-1 text-xs uppercase tracking-[0.24em] text-neutral-600 dark:border-white/12 dark:bg-neutral-900 dark:text-neutral-300",
-        className,
-      )}
-    >
+    <AntTag bordered {...props}>
       {children}
-    </span>
+    </AntTag>
   );
 }

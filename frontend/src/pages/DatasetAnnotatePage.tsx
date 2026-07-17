@@ -5,22 +5,40 @@ import {
   ChevronLeft,
   ChevronRight,
   ImageOff,
+  Keyboard,
   ListFilter,
   Loader2,
+  Menu,
   MousePointer2,
   PencilRuler,
   Save,
   Trash2,
 } from "lucide-react";
-import { Link, UNSAFE_NavigationContext, useParams } from "react-router-dom";
+import { Link, UNSAFE_NavigationContext, useNavigate, useParams } from "react-router-dom";
+import {
+  Alert,
+  Button,
+  Card,
+  Drawer,
+  Grid,
+  Input,
+  Layout,
+  Modal,
+  Segmented,
+  Select,
+  Slider,
+  Space,
+  Switch,
+  Tag,
+  Typography,
+} from "antd";
 
 import { deleteDatasetImage, getDataset, updateDatasetImageAnnotations } from "../api/datasets";
 import { AuthImage } from "../components/AuthImage";
-import { Badge } from "../components/ui/Badge";
-import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
-import { Select } from "../components/ui/Select";
-import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
+import { EmptyState } from "../components/common/EmptyState";
+import { LoadingState } from "../components/common/LoadingState";
+import { StatusBadge } from "../components/common/StatusBadge";
+import { confirm } from "../hooks/useConfirm";
 import {
   boxFromCorners,
   DEFAULT_BOX_SIZE,
@@ -85,7 +103,10 @@ function isEditableTarget(target: EventTarget | null) {
 export function DatasetAnnotatePage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
+  const navigate = useNavigate();
   const navigation = useContext(UNSAFE_NavigationContext);
+  const screens = Grid.useBreakpoint();
+
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [loadedImages, setLoadedImages] = useState<DatasetImage[]>([]);
   const [imagesTotal, setImagesTotal] = useState(0);
@@ -104,6 +125,10 @@ export function DatasetAnnotatePage() {
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>("");
   const [previewImageNaturalSize, setPreviewImageNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageViewport, setImageViewport] = useState<ImageViewport | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState<boolean | undefined>(undefined);
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const queueScrollRef = useRef<HTMLDivElement | null>(null);
@@ -128,24 +153,31 @@ export function DatasetAnnotatePage() {
   const annotationImageFilter = useMemo(() => buildAnnotationImageFilter(annotationFilter), [annotationFilter]);
   const activeIndex = activeImageId ? images.findIndex((image) => image.id === activeImageId) : images.length > 0 ? 0 : -1;
   const activeImage = activeIndex >= 0 ? images[activeIndex] : null;
-  const processedCount = useMemo(
-    () => images.filter((image) => isProcessed(image.annotationStatus)).length,
-    [images],
-  );
+  const processedCount = useMemo(() => images.filter((image) => isProcessed(image.annotationStatus)).length, [images]);
   const annotationCounts = dataset?.imageAnnotationCounts;
   const totalImageCount = dataset?.imageCount ?? imagesTotal;
   const annotatedTotal = annotationCounts?.annotated ?? processedCount;
   const unannotatedTotal = annotationCounts?.unannotated ?? Math.max(totalImageCount - annotatedTotal, 0);
-  const queueLabel =
-    annotationFilter === "unannotated"
-      ? `${imagesTotal} 张未标注`
-      : annotationFilter === "annotated"
-        ? `${imagesTotal} 张已处理`
-        : `${imagesTotal} 张样本`;
   const activeCategory = currentCategory || categories[0] || "object";
   const hasAnnotationChanges = activeImage !== null && !detectionsEqual(activeImage.detections, draftDetections);
   const canSave = activeImage !== null && !deletingImageId && (hasAnnotationChanges || !isProcessed(activeImage.annotationStatus));
   const isDeletingActiveImage = Boolean(activeImage && deletingImageId === activeImage.id);
+  const isDesktop = Boolean(screens.xl);
+  const showInspector = inspectorOpen ?? isDesktop;
+  const queueInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (inspectorOpen === undefined && screens.xl !== undefined) {
+      setInspectorOpen(screens.xl);
+    }
+  }, [screens.xl]);
+
+  useEffect(() => {
+    if (!queueInitializedRef.current && screens.xl !== undefined) {
+      queueInitializedRef.current = true;
+      setQueueCollapsed(!screens.xl);
+    }
+  }, [screens.xl]);
 
   function applyDatasetPage(nextDataset: Dataset, preferredImageId?: string | null) {
     const pageImages = nextDataset.images ?? [];
@@ -211,7 +243,11 @@ export function DatasetAnnotatePage() {
       const offset = cursorRef.current;
       setIsLoadingMore(true);
       try {
-        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE, filter: buildAnnotationImageFilter(annotationFilterRef.current) });
+        const response = await getDataset(datasetId, token, {
+          offset,
+          limit: PAGE_SIZE,
+          filter: buildAnnotationImageFilter(annotationFilterRef.current),
+        });
         const pageImages = response.dataset.images ?? [];
         setDataset(response.dataset);
         setImagesTotal(response.dataset.imagesTotal ?? imagesTotal);
@@ -285,12 +321,7 @@ export function DatasetAnnotatePage() {
     const syncViewport = () => {
       const rect = stage.getBoundingClientRect();
       setImageViewport(
-        fitImageViewport(
-          rect.width,
-          rect.height,
-          previewImageNaturalSize.width,
-          previewImageNaturalSize.height,
-        ),
+        fitImageViewport(rect.width, rect.height, previewImageNaturalSize.width, previewImageNaturalSize.height),
       );
     };
 
@@ -319,22 +350,29 @@ export function DatasetAnnotatePage() {
     const originalPush = navigator.push;
     const originalReplace = navigator.replace;
     const originalGo = navigator.go;
-    const confirmNavigation = () => window.confirm(unsavedAnnotationMessage);
+    const confirmNavigation = () =>
+      confirm({
+        title: "未保存的改动",
+        content: unsavedAnnotationMessage,
+        okText: "放弃",
+        cancelText: "取消",
+        okDanger: true,
+      });
 
     navigator.push = (...args) => {
-      if (confirmNavigation()) {
-        originalPush.apply(navigator, args);
-      }
+      void confirmNavigation().then((ok) => {
+        if (ok) originalPush.apply(navigator, args);
+      });
     };
     navigator.replace = (...args) => {
-      if (confirmNavigation()) {
-        originalReplace.apply(navigator, args);
-      }
+      void confirmNavigation().then((ok) => {
+        if (ok) originalReplace.apply(navigator, args);
+      });
     };
     navigator.go = (...args) => {
-      if (confirmNavigation()) {
-        originalGo.apply(navigator, args);
-      }
+      void confirmNavigation().then((ok) => {
+        if (ok) originalGo.apply(navigator, args);
+      });
     };
 
     return () => {
@@ -361,6 +399,11 @@ export function DatasetAnnotatePage() {
       if (isEditableTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
+      if (key === "?") {
+        event.preventDefault();
+        setHelpOpen((current) => !current);
+        return;
+      }
       if (key === "a" || key === "b") {
         event.preventDefault();
         if (!activeImage) return;
@@ -417,20 +460,26 @@ export function DatasetAnnotatePage() {
     return () => window.removeEventListener("keydown", handleKeydown);
   }, [activeImage, annotationFilter, canSave, categories, draftDetections, isSaving, selectedDetectionIndex]);
 
-  function confirmDiscardChanges() {
+  async function confirmDiscardChanges(): Promise<boolean> {
     if (!hasAnnotationChanges) return true;
-    return window.confirm(unsavedAnnotationMessage);
+    return confirm({
+      title: "未保存的改动",
+      content: unsavedAnnotationMessage,
+      okText: "放弃",
+      cancelText: "取消",
+      okDanger: true,
+    });
   }
 
-  function selectImage(imageId: string) {
-    if (!confirmDiscardChanges()) return;
+  async function selectImage(imageId: string) {
+    if (!(await confirmDiscardChanges())) return;
     setActiveImageId(imageId);
     setActionError(null);
   }
 
-  function changeAnnotationFilter(nextFilter: AnnotationFilter) {
+  async function changeAnnotationFilter(nextFilter: AnnotationFilter) {
     if (nextFilter === annotationFilter) return;
-    if (!confirmDiscardChanges()) return;
+    if (!(await confirmDiscardChanges())) return;
     setAnnotationFilter(nextFilter);
     setActiveImageId(null);
     setActionError(null);
@@ -511,9 +560,7 @@ export function DatasetAnnotatePage() {
       const updatedImage = response.image;
       setDataset((current) => (current ? { ...current, ...response.dataset } : response.dataset));
       if (imageMatchesAnnotationFilter(updatedImage, annotationFilterRef.current)) {
-        setLoadedImages((current) =>
-          current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)),
-        );
+        setLoadedImages((current) => current.map((image) => (image.id === updatedImage.id ? { ...image, ...updatedImage } : image)));
         setActiveImageId(updatedImage.id);
       } else {
         await advanceAfterImageLeavesQueue(updatedImage.id);
@@ -529,10 +576,14 @@ export function DatasetAnnotatePage() {
   async function removeDatasetImage(image: DatasetImage) {
     if (!token || !datasetId || deletingImageId) return;
     const discardsActiveDraft = image.id === activeImage?.id && hasAnnotationChanges;
-    const confirmed = window.confirm(
-      `删除样本 #${image.ordinal}？图片文件和标注也会一起移除。${discardsActiveDraft ? " 当前未保存的标注改动也会放弃。" : ""}`,
-    );
-    if (!confirmed) return;
+    const ok = await confirm({
+      title: "删除样本",
+      content: `删除样本 #${image.ordinal}？图片文件和标注也会一起移除。${discardsActiveDraft ? " 当前未保存的标注改动也会放弃。" : ""}`,
+      okText: "删除",
+      cancelText: "取消",
+      okDanger: true,
+    });
+    if (!ok) return;
 
     setDeletingImageId(image.id);
     try {
@@ -700,203 +751,281 @@ export function DatasetAnnotatePage() {
     setIsAddingDetection(true);
   }
 
+  const queueLabel =
+    annotationFilter === "unannotated"
+      ? `${imagesTotal} 张未标注`
+      : annotationFilter === "annotated"
+        ? `${imagesTotal} 张已处理`
+        : `${imagesTotal} 张样本`;
+
+  const annotationFilterSegmentedOptions = annotationFilterOptions.map((option) => {
+    const count =
+      option.value === "unannotated"
+        ? unannotatedTotal
+        : option.value === "annotated"
+          ? annotatedTotal
+          : totalImageCount;
+    return {
+      value: option.value,
+      label: (
+        <div className="flex items-center justify-center gap-1 px-1">
+          <span>{option.label}</span>
+          <span className="text-[11px] tabular-nums opacity-70">{count}</span>
+        </div>
+      ),
+    };
+  });
+
+  const saveStatus = hasAnnotationChanges
+    ? "unsaved"
+    : activeImage && !isProcessed(activeImage.annotationStatus)
+      ? "pending"
+      : "synced";
+
+  const shortcuts = [
+    { keys: "← / →", action: "上一张 / 下一张" },
+    { keys: "N", action: "新建检测框" },
+    { keys: "Enter / Ctrl + S", action: "保存当前图片标注" },
+    { keys: "Delete / Backspace", action: "删除选中的检测框" },
+    { keys: "Esc", action: "取消画框 / 取消选择" },
+    { keys: "1-9", action: "选择对应编号的类别" },
+    { keys: "A / B", action: "切换画框模式" },
+    { keys: "U", action: "切换未标注筛选" },
+    { keys: "?", action: "显示 / 隐藏快捷键帮助" },
+  ];
+
   if (!dataset) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white dark:bg-neutral-950">
-        <div className="flex items-center gap-3 text-sm text-neutral-500 dark:text-neutral-400">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          加载标注工作台...
-        </div>
+        <LoadingState rows={2} className="w-64" />
       </div>
     );
   }
 
   if (totalImageCount === 0 && !isLoadingFirstPage) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white p-8 text-center dark:bg-neutral-950">
-        <div>
-          <ImageOff className="mx-auto h-10 w-10 text-neutral-400" />
-          <h2 className="mt-4 text-2xl text-neutral-900 dark:text-white">暂无可标注图片</h2>
-          <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">导入或生成样本后再进入标注模式。</p>
-          <Link to={`/datasets/${dataset.id}`} className="mt-6 inline-flex">
-            <Button variant="secondary">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回数据集
-            </Button>
-          </Link>
+      <div className="flex min-h-screen items-center justify-center bg-white p-8 dark:bg-neutral-950">
+        <div className="text-center">
+          <ImageOff className="mx-auto h-12 w-12 text-neutral-400" />
+          <EmptyState
+            title="暂无可标注图片"
+            description="导入或生成样本后再进入标注模式。"
+            action={{
+              label: (
+                <span className="flex items-center gap-2">
+                  <ArrowLeft className="h-4 w-4" />
+                  返回数据集
+                </span>
+              ),
+              onClick: () => navigate(`/datasets/${dataset.id}`),
+            }}
+          />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-neutral-100 text-neutral-900 dark:bg-neutral-950 dark:text-white">
-      <div className="shrink-0 border-b border-neutral-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-neutral-950">
+    <Layout className="h-screen min-h-0 w-full overflow-hidden bg-neutral-100 dark:bg-neutral-950">
+      <Layout.Header className="!h-auto !bg-white !px-4 !py-3 dark:!bg-neutral-950 border-b border-neutral-200 dark:border-white/10">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <Space wrap className="items-center">
             <Link to={`/datasets/${dataset.id}`}>
-              <Button variant="ghost" className="h-9 px-3" title="返回数据集">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
+              <Button type="text" icon={<ArrowLeft className="h-4 w-4" />} title="返回数据集" />
             </Link>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                <PencilRuler className="h-4 w-4" />
+              <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                <PencilRuler className="mr-1 inline h-3.5 w-3.5" />
                 Annotation Mode
-              </div>
-              <h2 className="truncate text-lg font-medium text-neutral-900 dark:text-white">{dataset.name}</h2>
+              </Typography.Text>
+              <Typography.Title level={4} className="!mb-0 truncate !text-lg !font-medium">
+                {dataset.name}
+              </Typography.Title>
             </div>
-            <Badge>{annotatedTotal} / {totalImageCount}</Badge>
-            {hasAnnotationChanges ? (
-              <Badge>未保存</Badge>
-            ) : activeImage && !isProcessed(activeImage.annotationStatus) ? (
-              <Badge>待确认</Badge>
+            <Tag>{annotatedTotal} / {totalImageCount}</Tag>
+            {saveStatus === "unsaved" ? (
+              <Tag color="warning">未保存</Tag>
+            ) : saveStatus === "pending" ? (
+              <Tag color="processing">待确认</Tag>
             ) : (
-              <Badge>已同步</Badge>
+              <Tag color="success">已同步</Tag>
             )}
-          </div>
+          </Space>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {actionError ? <span className="max-w-[280px] truncate text-sm text-red-600 dark:text-red-300">{actionError}</span> : null}
-            <Button variant="secondary" className="h-9 px-3" onClick={() => void moveActiveImage(-1)} disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
-              <ChevronLeft className="mr-1.5 h-4 w-4" />
+          <Space wrap className="items-center">
+            {actionError ? (
+              <Alert
+                message={actionError}
+                type="error"
+                showIcon
+                closable
+                onClose={() => setActionError(null)}
+                className="max-w-xs py-1 text-xs"
+              />
+            ) : null}
+            <Button
+              icon={<Keyboard className="h-4 w-4" />}
+              onClick={() => setHelpOpen(true)}
+              title="快捷键帮助 (?)">
+              快捷键
+            </Button>
+            <Button
+              icon={<ChevronLeft className="h-4 w-4" />}
+              onClick={() => void moveActiveImage(-1)}
+              disabled={activeIndex <= 0 || Boolean(deletingImageId)}>
               上一张
             </Button>
             <Button
-              variant="secondary"
-              className="h-9 px-3"
+              icon={<ChevronRight className="h-4 w-4" />}
+              iconPosition="end"
               onClick={() => void moveActiveImage(1)}
-              disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}
-            >
+              disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}>
               下一张
-              <ChevronRight className="ml-1.5 h-4 w-4" />
             </Button>
             <Button
-              variant="secondary"
-              className="h-9 border-red-200 px-3 text-red-700 hover:border-red-300 hover:bg-red-50 dark:border-red-400/30 dark:text-red-200 dark:hover:border-red-300/40 dark:hover:bg-red-500/10"
+              danger
+              icon={isDeletingActiveImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
               onClick={() => activeImage && void removeDatasetImage(activeImage)}
-              disabled={!activeImage || isSaving || Boolean(deletingImageId)}
-            >
-              {isDeletingActiveImage ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              disabled={!activeImage || isSaving || Boolean(deletingImageId)}>
               删除图片
             </Button>
-            <Button onClick={() => void saveAnnotations()} disabled={isSaving || !canSave}>
-              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            <Button
+              type="primary"
+              icon={isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              onClick={() => void saveAnnotations()}
+              disabled={isSaving || !canSave}>
               保存
             </Button>
-          </div>
+          </Space>
         </div>
-      </div>
+      </Layout.Header>
 
-      <div className="grid min-h-0 flex-1 overflow-hidden xl:grid-cols-[300px_minmax(0,1fr)_390px]">
-        <aside className="flex min-h-0 flex-col border-b border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-b-0 xl:border-r">
-          <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</div>
-                <div className="text-sm text-neutral-900 dark:text-white">{queueLabel}</div>
+      <Layout className="min-h-0 flex-1 overflow-hidden">
+        <Layout.Sider
+          width={280}
+          collapsedWidth={0}
+          collapsible
+          trigger={null}
+          collapsed={queueCollapsed}
+          className="!bg-white dark:!bg-neutral-950 border-r border-neutral-200 dark:border-white/10"
+        >
+          <div className="flex h-full flex-col">
+            <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Queue</Typography.Text>
+                  <Typography.Text className="text-sm font-medium">{queueLabel}</Typography.Text>
+                </div>
+                <CheckCircle2 className="h-5 w-5 text-neutral-400" />
               </div>
-              <CheckCircle2 className="h-5 w-5 text-neutral-400" />
-            </div>
-            <div className="mt-3 flex min-w-0 items-center gap-2">
-              <ListFilter className="h-4 w-4 shrink-0 text-neutral-400" />
-              <div className={cn(segmentedGroupClasses, "min-w-0 flex-1 justify-between")}>
-                {annotationFilterOptions.map((option) => {
-                  const active = annotationFilter === option.value;
-                  const count =
-                    option.value === "unannotated"
-                      ? unannotatedTotal
-                      : option.value === "annotated"
-                        ? annotatedTotal
-                        : totalImageCount;
-                  return (
-                    <button
-                      key={option.value || "all"}
-                      type="button"
-                      className={segmentedButtonClasses(active, "min-w-0 flex-1 basis-0 px-2 py-1.5 text-xs")}
-                      onClick={() => changeAnnotationFilter(option.value)}
-                      title={option.value === "unannotated" ? "快捷键 U" : undefined}
-                    >
-                      <span className="min-w-0 truncate whitespace-nowrap">{option.label}</span>
-                      <span className={cn("shrink-0 text-[11px] tabular-nums", active ? "text-current" : "text-neutral-400")}>{count}</span>
-                    </button>
-                  );
-                })}
+              <div className="mt-3 flex min-w-0 items-center gap-2">
+                <ListFilter className="h-4 w-4 shrink-0 text-neutral-400" />
+                <Segmented
+                  className="min-w-0 flex-1"
+                  size="small"
+                  value={annotationFilter}
+                  onChange={(value) => changeAnnotationFilter(value as AnnotationFilter)}
+                  options={annotationFilterSegmentedOptions}
+                />
               </div>
             </div>
-          </div>
-          <div ref={queueScrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-            {images.map((image, index) => {
-              const active = image.id === activeImage?.id;
-              return (
-                <button
-                  key={image.id}
-                  type="button"
-                  className={cn(
-                    "grid w-full grid-cols-[56px_minmax(0,1fr)] gap-3 rounded-2xl border p-2 text-left transition",
-                    active
-                      ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.06]"
-                      : "border-transparent hover:border-neutral-200 hover:bg-neutral-100 dark:hover:border-white/10 dark:hover:bg-white/[0.04]",
-                  )}
-                  onClick={() => selectImage(image.id)}
-                >
-                  <div className="relative aspect-square overflow-hidden rounded-xl bg-neutral-200 dark:bg-neutral-800">
-                    <AuthImage src={image.previewSvg} alt={image.promptText} className="h-full w-full object-cover" />
-                    <div className="absolute left-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
-                      {index + 1}
+            <div ref={queueScrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+              {images.map((image, index) => {
+                const active = image.id === activeImage?.id;
+                return (
+                  <Card
+                    key={image.id}
+                    size="small"
+                    hoverable
+                    onClick={() => selectImage(image.id)}
+                    className={cn(
+                      "cursor-pointer transition",
+                      active
+                        ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.06]"
+                        : "border-transparent hover:border-neutral-200 hover:bg-neutral-100 dark:hover:border-white/10 dark:hover:bg-white/[0.04]",
+                    )}
+                    bodyStyle={{ padding: 12 }}
+                  >
+                    <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-3">
+                      <div className="relative aspect-square overflow-hidden rounded-lg bg-neutral-200 dark:bg-neutral-800">
+                        <AuthImage src={image.previewSvg} alt={image.promptText} className="h-full w-full object-cover" />
+                        <div className="absolute left-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
+                          {index + 1}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <Typography.Text className="truncate text-sm font-medium">#{image.ordinal}</Typography.Text>
+                          <Typography.Text className="text-xs text-neutral-500">{image.detections.length}</Typography.Text>
+                        </div>
+                        <Typography.Text className="mt-1 block truncate text-xs text-neutral-500">
+                          {annotationStatusLabel(image.annotationStatus)}
+                        </Typography.Text>
+                        <Typography.Text className="mt-1 block truncate text-[11px] text-neutral-400">
+                          {image.selected ? "已保留" : image.sourceType}
+                        </Typography.Text>
+                      </div>
                     </div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm text-neutral-900 dark:text-white">#{image.ordinal}</span>
-                      <span className="text-xs text-neutral-500">{image.detections.length}</span>
-                    </div>
-                    <div className="mt-1 truncate text-xs text-neutral-500">{annotationStatusLabel(image.annotationStatus)}</div>
-                    <div className="mt-1 truncate text-[11px] text-neutral-400">{image.selected ? "已保留" : image.sourceType}</div>
-                  </div>
-                </button>
-              );
-            })}
-            {images.length === 0 && !isLoadingFirstPage ? (
-              <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm leading-6 text-neutral-500 dark:border-white/10 dark:text-neutral-400">
-                当前筛选没有图片。
-              </div>
-            ) : hasMoreImages ? (
-              <div ref={sentinelRef} className="flex items-center justify-center gap-2 py-3 text-xs text-neutral-500">
-                {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
-              </div>
-            ) : images.length > 0 ? (
-              <div className="py-3 text-center text-xs text-neutral-400">已加载全部 {imagesTotal} 张</div>
-            ) : null}
+                  </Card>
+                );
+              })}
+              {images.length === 0 && !isLoadingFirstPage ? (
+                <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm leading-6 text-neutral-500 dark:border-white/10 dark:text-neutral-400">
+                  当前筛选没有图片。
+                </div>
+              ) : hasMoreImages ? (
+                <div ref={sentinelRef} className="flex items-center justify-center gap-2 py-3 text-xs text-neutral-500">
+                  {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
+                </div>
+              ) : images.length > 0 ? (
+                <div className="py-3 text-center text-xs text-neutral-400">已加载全部 {imagesTotal} 张</div>
+              ) : null}
+            </div>
           </div>
-        </aside>
+        </Layout.Sider>
 
-        <main className="flex min-h-0 flex-col bg-neutral-950">
+        <Layout.Content className="relative flex min-h-0 flex-col bg-neutral-950">
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
-            <div className="flex min-w-0 items-center gap-3">
+            <Space className="items-center">
+              {!isDesktop && (
+                <Button
+                  type="text"
+                  icon={<Menu className="h-4 w-4" />}
+                  onClick={() => setQueueCollapsed((current) => !current)}
+                  className="text-white"
+                />
+              )}
               <MousePointer2 className="h-4 w-4 text-neutral-400" />
               <div className="min-w-0">
-                <div className="truncate text-sm">样本 #{activeImage?.ordinal}</div>
-                <div className="truncate text-xs text-neutral-400">{activeImage?.sourceType}</div>
+                <Typography.Text className="block truncate text-sm text-white">样本 #{activeImage?.ordinal}</Typography.Text>
+                <Typography.Text className="block truncate text-xs text-neutral-400">{activeImage?.sourceType}</Typography.Text>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant={isAddingDetection ? "primary" : "secondary"}
-                className={cn(
-                  "h-9",
-                  isAddingDetection ? "dark:bg-lime-300 dark:text-neutral-950" : "dark:border-white/15 dark:bg-white/10 dark:text-white dark:hover:bg-white/15",
-                )}
-                onClick={() => setIsAddingDetection((current) => !current)}
-                title="快捷键 A / B"
+            </Space>
+            <Space wrap className="items-center">
+              <Switch
+                checked={isAddingDetection}
+                onChange={(checked) => setIsAddingDetection(checked)}
+                checkedChildren="画框中"
+                unCheckedChildren="画框"
                 disabled={!activeImage}
+              />
+              <Button
+                type={isAddingDetection ? "primary" : "default"}
+                icon={<PencilRuler className="h-4 w-4" />}
+                onClick={() => setIsAddingDetection((current) => !current)}
+                disabled={!activeImage}
+                title="快捷键 A / B / N"
               >
-                <PencilRuler className="mr-2 h-4 w-4" />
                 {isAddingDetection ? "正在画框" : "新增框"}
               </Button>
-              <Badge>{draftDetections.length} boxes</Badge>
-            </div>
+              <Tag color="processing">{draftDetections.length} boxes</Tag>
+              {!showInspector && (
+                <Button type="default" onClick={() => setInspectorOpen(true)}>
+                  详情
+                </Button>
+              )}
+            </Space>
           </div>
 
           <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-5">
@@ -986,113 +1115,119 @@ export function DatasetAnnotatePage() {
               </div>
             )}
           </div>
-        </main>
+        </Layout.Content>
+      </Layout>
 
-        <aside className="flex min-h-0 flex-col border-t border-neutral-200 bg-white dark:border-white/10 dark:bg-neutral-950 xl:border-l xl:border-t-0">
+      <Drawer
+        title="检测框详情"
+        placement={isDesktop ? "right" : "bottom"}
+        width={isDesktop ? 380 : "100%"}
+        height={isDesktop ? "100%" : "60%"}
+        open={showInspector}
+        onClose={() => setInspectorOpen(false)}
+        mask={!isDesktop}
+        zIndex={100}
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="flex h-full flex-col">
           <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
-            <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Categories</div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Categories</Typography.Text>
+            <Space wrap className="mt-3">
               {(categories.length > 0 ? categories : ["object"]).map((category, index) => {
                 const active = category === activeCategory;
                 return (
-                  <button
+                  <Button
                     key={category}
-                    type="button"
-                    className={cn(
-                      "flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition",
-                      active
-                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                        : "border-neutral-200 text-neutral-600 hover:bg-neutral-100 dark:border-white/10 dark:text-neutral-300 dark:hover:bg-white/[0.05]",
-                    )}
+                    type={active ? "primary" : "default"}
                     onClick={() => {
                       setCurrentCategory(category);
                       if (selectedDetectionIndex !== null) {
                         updateDetectionCategory(selectedDetectionIndex, category);
                       }
                     }}
+                    className="flex items-center gap-2"
                   >
                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(category, categories) }} />
                     <span className="truncate">{index + 1}. {category}</span>
-                  </button>
+                  </Button>
                 );
               })}
-            </div>
+            </Space>
           </div>
 
           <div className="shrink-0 border-b border-neutral-200 px-4 py-4 dark:border-white/10">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Current Image</div>
-                <div className="mt-1 text-lg text-neutral-900 dark:text-white">
+                <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Current Image</Typography.Text>
+                <Typography.Text className="mt-1 block text-lg font-medium">
                   {activeImage ? `#${activeImage.ordinal}` : "—"}
-                </div>
+                </Typography.Text>
               </div>
-              <Badge>{activeImage ? annotationStatusLabel(activeImage.annotationStatus) : "无图片"}</Badge>
+              {activeImage ? (
+                <StatusBadge status={activeImage.annotationStatus}>{annotationStatusLabel(activeImage.annotationStatus)}</StatusBadge>
+              ) : (
+                <Tag>无图片</Tag>
+              )}
             </div>
-            <p className="mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+            <Typography.Paragraph className="!mb-0 mt-3 line-clamp-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
               {activeImage?.promptText ?? "当前筛选没有图片。"}
-            </p>
+            </Typography.Paragraph>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Annotations</div>
-                <div className="text-sm text-neutral-900 dark:text-white">{draftDetections.length} 个检测框</div>
+                <Typography.Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">Annotations</Typography.Text>
+                <Typography.Text className="text-sm font-medium">{draftDetections.length} 个检测框</Typography.Text>
               </div>
               <Button
-                variant="secondary"
-                className="h-9 px-3"
+                icon={<PencilRuler className="h-4 w-4" />}
                 onClick={enterAddingDetectionMode}
                 disabled={!activeImage}
                 title="进入画框状态，快捷键 N"
-              >
-                <PencilRuler className="h-4 w-4" />
-              </Button>
+              />
             </div>
 
             <div className="space-y-3">
               {draftDetections.map((detection, index) => {
                 const selected = selectedDetectionIndex === index;
                 return (
-                  <div
+                  <Card
                     key={`${detection.category}-${index}`}
+                    size="small"
+                    onClick={() => setSelectedDetectionIndex(index)}
                     className={cn(
-                      "rounded-2xl border p-3 transition",
+                      "cursor-pointer transition",
                       selected
                         ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.06]"
                         : "border-neutral-200 bg-white dark:border-white/10 dark:bg-black/20",
                     )}
-                    onClick={() => setSelectedDetectionIndex(index)}
-                  >
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(detection.category, categories) }} />
-                        <span className="truncate text-sm text-neutral-900 dark:text-white">Box {index + 1}</span>
-                      </div>
-                      <button
-                        type="button"
-                        title="删除检测框"
-                        className="rounded-full p-1.5 text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-900 dark:hover:bg-white/10 dark:hover:text-white"
+                    extra={
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        icon={<Trash2 className="h-4 w-4" />}
                         onClick={(event) => {
                           event.stopPropagation();
                           removeDetection(index);
                         }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                        title="删除检测框"
+                      />
+                    }
+                  >
+                    <div className="mb-3 flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(detection.category, categories) }} />
+                      <Typography.Text className="truncate text-sm font-medium">Box {index + 1}</Typography.Text>
                     </div>
                     <div className="grid gap-3">
                       {categories.length > 0 ? (
                         <Select
                           value={detection.category}
-                          onChange={(event) => updateDetectionCategory(index, event.target.value)}
+                          options={categories.map((category) => ({ value: category, label: category }))}
+                          onChange={(value) => updateDetectionCategory(index, value as string)}
                           onClick={(event) => event.stopPropagation()}
-                        >
-                          {categories.map((category) => (
-                            <option key={category} value={category}>{category}</option>
-                          ))}
-                        </Select>
+                        />
                       ) : (
                         <Input
                           value={detection.category}
@@ -1100,22 +1235,21 @@ export function DatasetAnnotatePage() {
                           onClick={(event) => event.stopPropagation()}
                         />
                       )}
-                      <label className="grid gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.18em] text-neutral-500">
+                      <div>
+                        <Typography.Text className="block text-[11px] uppercase tracking-[0.18em] text-neutral-500">
                           Confidence {(detection.confidence * 100).toFixed(0)}%
-                        </span>
-                        <Input
-                          type="number"
+                        </Typography.Text>
+                        <Slider
                           min={0}
                           max={1}
                           step={0.01}
                           value={detection.confidence}
-                          onChange={(event) => updateDetectionConfidence(index, Number(event.target.value))}
-                          onClick={(event) => event.stopPropagation()}
+                          onChange={(value) => updateDetectionConfidence(index, value as number)}
+                          tooltip={{ formatter: (value) => `${((value as number) * 100).toFixed(0)}%` }}
                         />
-                      </label>
+                      </div>
                     </div>
-                  </div>
+                  </Card>
                 );
               })}
               {draftDetections.length === 0 ? (
@@ -1125,8 +1259,28 @@ export function DatasetAnnotatePage() {
               ) : null}
             </div>
           </div>
-        </aside>
-      </div>
-    </div>
+        </div>
+      </Drawer>
+
+      <Modal
+        title="键盘快捷键"
+        open={helpOpen}
+        onCancel={() => setHelpOpen(false)}
+        footer={
+          <Button type="primary" onClick={() => setHelpOpen(false)}>
+            知道了
+          </Button>
+        }
+      >
+        <div className="grid gap-2 py-2">
+          {shortcuts.map((item) => (
+            <div key={item.keys} className="flex items-center justify-between rounded-lg bg-neutral-50 px-3 py-2 dark:bg-white/5">
+              <Typography.Text className="font-mono text-sm">{item.keys}</Typography.Text>
+              <Typography.Text className="text-sm text-neutral-600 dark:text-neutral-300">{item.action}</Typography.Text>
+            </div>
+          ))}
+        </div>
+      </Modal>
+    </Layout>
   );
 }

@@ -7,7 +7,7 @@
     <script>
       (function () {
         try {
-          var mode = JSON.parse(localStorage.getItem('dataset-gen-theme') || '{}').state?.mode || 'system';
+          var mode = localStorage.getItem('dataset-forge-theme') || 'system';
           var isDark = mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (isDark) document.documentElement.classList.add('dark');
         } catch (e) {}

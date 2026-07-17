@@ -1,15 +1,27 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, WandSparkles } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Input,
+  InputNumber,
+  Row,
+  Select,
+  Space,
+  Tag,
+  Typography,
+} from "antd";
 
-import { assistDatasetSubject, createGenerationTask, getDataset, previewGenerationPrompt, startDatasetTask } from "../api/datasets";
-import { getProviders } from "../api/system";
 import { PromptPreviewCard } from "../components/PromptPreviewCard";
-import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
-import { Select } from "../components/ui/Select";
-import { SectionCard } from "../components/ui/SectionCard";
-import { Textarea } from "../components/ui/Textarea";
+import { PageContainer } from "../components/common/PageContainer";
+import { PageHeader } from "../components/common/PageHeader";
+import { LoadingState } from "../components/common/LoadingState";
+import { useDataset } from "../hooks/useDataset";
+import { useModelProfiles } from "../hooks/useModelProfiles";
+import { useProviders } from "../hooks/useProviders";
 import { defaultTaskConfig } from "../lib/constants";
 import {
   buildTaskConfigFromProfile,
@@ -17,10 +29,18 @@ import {
   resolveLlmProfile,
   resolveModelProfile,
 } from "../lib/modelProfiles";
-import type { Dataset, PromptPreview, ProviderInfo, TaskConfig } from "../lib/types";
+import type { PromptPreview, TaskConfig } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
-import { useModelProfilesStore } from "../store/modelProfiles";
+import {
+  assistDatasetSubject,
+  createGenerationTask,
+  previewGenerationPrompt,
+  startDatasetTask,
+} from "../api/datasets";
+
+const { Title, Text } = Typography;
+const { TextArea } = Input;
 
 const lightingOptions = [
   { value: "natural", label: "自然光" },
@@ -42,22 +62,55 @@ const cvTaskOptions = [
   { value: "segmentation", label: "语义分割" },
   { value: "classification", label: "图像分类" },
   { value: "instance_segmentation", label: "实例分割" },
-] as const;
+];
+
+const styleOptions = [
+  { value: "surveillance", label: "监控画面" },
+  { value: "realistic", label: "写实" },
+  { value: "illustration", label: "插画" },
+  { value: "sketch", label: "素描" },
+  { value: "3d", label: "3D" },
+  { value: "cartoon", label: "卡通" },
+];
+
+const distanceOptions = [
+  { value: "close", label: "近景" },
+  { value: "mid", label: "中景" },
+  { value: "far", label: "远景" },
+];
+
+const angleOptions = [
+  { value: "front", label: "正面" },
+  { value: "side", label: "侧面" },
+  { value: "top", label: "俯视" },
+  { value: "bottom", label: "仰视" },
+  { value: "random", label: "随机" },
+];
+
+const aspectRatioOptions = [
+  { value: "1:1", label: "1:1" },
+  { value: "4:3", label: "4:3" },
+  { value: "3:4", label: "3:4" },
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+];
+
 const PROMPT_PREVIEW_DEBOUNCE_MS = 800;
 
 function toggleValue(current: string[], value: string) {
-  return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+  return current.includes(value)
+    ? current.filter((item) => item !== value)
+    : [...current, value];
 }
 
 export function GenerationTaskPage() {
   const { datasetId } = useParams();
   const navigate = useNavigate();
   const token = useAuthStore((state) => state.token);
-  const profiles = useModelProfilesStore((state) => state.profiles);
-  const profilesLoaded = useModelProfilesStore((state) => state.isLoaded);
-  const fetchProfiles = useModelProfilesStore((state) => state.fetchProfiles);
-  const [dataset, setDataset] = useState<Dataset | null>(null);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const { data: datasetResponse, isLoading: datasetLoading } = useDataset(datasetId!);
+  const dataset = datasetResponse?.dataset ?? null;
+  const { data: profiles, isLoading: profilesLoading } = useModelProfiles();
+  const { data: providers, isLoading: providersLoading } = useProviders();
   const [draft, setDraft] = useState<TaskConfig>(defaultTaskConfig);
   const [preview, setPreview] = useState<PromptPreview | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,40 +119,27 @@ export function GenerationTaskPage() {
   const deferredDraft = useDeferredValue(draft);
 
   useEffect(() => {
-    if (!token || !datasetId) return;
-    void getDataset(datasetId, token, { offset: 0, limit: 0 })
-      .then((response) => {
-        setDataset(response.dataset);
-        setDraft((current) => ({
-          ...current,
-          subject: current.subject === defaultTaskConfig.subject ? response.dataset.name : current.subject,
-          categories: response.dataset.categories,
-        }));
-      })
-      .catch((nextError) => setError((nextError as Error).message));
-  }, [datasetId, token]);
+    if (!dataset) return;
+    setDraft((current) => ({
+      ...current,
+      subject: current.subject === defaultTaskConfig.subject ? dataset.name : current.subject,
+      categories: dataset.categories,
+    }));
+  }, [dataset]);
 
-  useEffect(() => {
-    if (!token || profilesLoaded) return;
-    void fetchProfiles(token);
-  }, [fetchProfiles, profilesLoaded, token]);
-
-  useEffect(() => {
-    void getProviders()
-      .then((data) => setProviders(data.providers))
-      .catch(() => setProviders([]));
-  }, []);
-
-  const imageProfiles = useMemo(() => filterModelProfilesByType(profiles, "image"), [profiles]);
-  const llmProfiles = useMemo(() => filterModelProfilesByType(profiles, "llm"), [profiles]);
-  const activeProfile = useMemo(() => resolveModelProfile(profiles, draft), [draft, profiles]);
-  const activeLlmProfile = useMemo(() => resolveLlmProfile(profiles, draft.llm_profile_id), [draft.llm_profile_id, profiles]);
+  const imageProfiles = useMemo(() => filterModelProfilesByType(profiles ?? [], "image"), [profiles]);
+  const llmProfiles = useMemo(() => filterModelProfilesByType(profiles ?? [], "llm"), [profiles]);
+  const activeProfile = useMemo(() => resolveModelProfile(profiles ?? [], draft), [draft, profiles]);
+  const activeLlmProfile = useMemo(
+    () => resolveLlmProfile(profiles ?? [], draft.llm_profile_id),
+    [draft.llm_profile_id, profiles],
+  );
 
   useEffect(() => {
     if (imageProfiles.length === 0) return;
     const fallbackProfile = activeProfile ?? imageProfiles[0];
     const nextConfig = buildTaskConfigFromProfile(fallbackProfile, draft);
-    if (
+    const needsUpdate =
       nextConfig.model_profile_id !== draft.model_profile_id ||
       nextConfig.api_provider !== draft.api_provider ||
       nextConfig.provider_model !== draft.provider_model ||
@@ -107,9 +147,13 @@ export function GenerationTaskPage() {
       nextConfig.concurrency !== draft.concurrency ||
       nextConfig.batch_size !== draft.batch_size ||
       nextConfig.jimeng_watermark !== draft.jimeng_watermark ||
-      nextConfig.format !== draft.format
-    ) {
-      setDraft((current) => ({ ...current, ...nextConfig, categories: dataset?.categories ?? current.categories }));
+      nextConfig.format !== draft.format;
+    if (needsUpdate) {
+      setDraft((current) => ({
+        ...current,
+        ...nextConfig,
+        categories: dataset?.categories ?? current.categories,
+      }));
     }
   }, [activeProfile, dataset?.categories, draft, imageProfiles]);
 
@@ -145,7 +189,11 @@ export function GenerationTaskPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      const created = await createGenerationTask(datasetId, { ...draft, categories: dataset.categories }, token);
+      const created = await createGenerationTask(
+        datasetId,
+        { ...draft, categories: dataset.categories },
+        token,
+      );
       const createdTaskId = (created.task as { id: string }).id;
       await startDatasetTask(datasetId, createdTaskId, token);
       navigate(`/datasets/${datasetId}`);
@@ -156,258 +204,319 @@ export function GenerationTaskPage() {
     }
   }
 
-  if (!dataset) {
+  if (datasetLoading || profilesLoading || providersLoading) {
     return (
-      <SectionCard>
-        <div className="text-sm text-neutral-500 dark:text-neutral-400">加载数据集中...</div>
-      </SectionCard>
+      <PageContainer>
+        <LoadingState rows={8} />
+      </PageContainer>
     );
   }
 
+  if (!dataset) {
+    return (
+      <PageContainer>
+        <Alert message="数据集加载失败" type="error" showIcon />
+      </PageContainer>
+    );
+  }
+
+  const providerName =
+    providers?.find((provider) => provider.id === draft.api_provider)?.name ?? draft.api_provider;
+
   return (
-    <div className="space-y-6">
-      <SectionCard>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Generation Batch</div>
-            <h2 className="mt-2 text-3xl text-neutral-900 dark:text-white">在 `{dataset.name}` 中创建生成批次</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              类别已绑定到当前数据集，批次只负责定义这一次生成要覆盖的主体、镜头、场景和模型配置。
-            </p>
-          </div>
+    <PageContainer>
+      <PageHeader
+        eyebrow="Generation Batch"
+        title={`在 "${dataset.name}" 中创建生成批次`}
+        description="类别已绑定到当前数据集，批次只负责定义这一次生成要覆盖的主体、镜头、场景和模型配置。"
+        actions={
           <Link to={`/datasets/${dataset.id}`}>
-            <Button variant="secondary">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回数据集
-            </Button>
+            <Button icon={<ArrowLeft className="h-4 w-4" />}>返回数据集</Button>
           </Link>
-        </div>
-      </SectionCard>
+        }
+      />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="space-y-6">
-          <SectionCard>
-            <div className="grid gap-5 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">批次主体</div>
-                <Input value={draft.subject} onChange={(event) => setDraft((current) => ({ ...current, subject: event.target.value }))} />
-              </div>
+      <Row gutter={[24, 24]}>
+        <Col xs={24} xl={16}>
+          <Card className="shadow-panel">
+            <Row gutter={[16, 16]}>
+              <Col xs={24}>
+                <FormItem label="批次主体">
+                  <Input
+                    value={draft.subject}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, subject: event.target.value }))
+                    }
+                  />
+                </FormItem>
+              </Col>
 
-              <div className="md:col-span-2">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">数据集类别</div>
-                <div className="rounded-[20px] border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-200">
-                  {dataset.categories.join(", ")}
-                </div>
-              </div>
+              <Col xs={24}>
+                <FormItem label="数据集类别">
+                  <div className="rounded-lg border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm dark:border-white/10 dark:bg-white/[0.03]">
+                    {dataset.categories.join(", ")}
+                  </div>
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">图片数量</div>
-                <Input
-                  type="number"
-                  min={5}
-                  max={500}
-                  value={draft.image_count}
-                  onChange={(event) => setDraft((current) => ({ ...current, image_count: Number(event.target.value) }))}
-                />
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="图片数量">
+                  <InputNumber
+                    min={5}
+                    max={500}
+                    value={draft.image_count}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, image_count: Number(value) }))
+                    }
+                    className="w-full"
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">CV 任务类型</div>
-                <Select value={draft.cv_task ?? "detection"} onChange={(event) => setDraft((current) => ({ ...current, cv_task: event.target.value as TaskConfig["cv_task"] }))}>
-                  {cvTaskOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="CV 任务类型">
+                  <Select
+                    value={draft.cv_task ?? "detection"}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, cv_task: value as TaskConfig["cv_task"] }))
+                    }
+                    options={cvTaskOptions}
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">风格</div>
-                <Select value={draft.style} onChange={(event) => setDraft((current) => ({ ...current, style: event.target.value as TaskConfig["style"] }))}>
-                  <option value="surveillance">监控画面</option>
-                  <option value="realistic">写实</option>
-                  <option value="illustration">插画</option>
-                  <option value="sketch">素描</option>
-                  <option value="3d">3D</option>
-                  <option value="cartoon">卡通</option>
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="风格">
+                  <Select
+                    value={draft.style}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, style: value as TaskConfig["style"] }))
+                    }
+                    options={styleOptions}
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">镜头距离</div>
-                <Select value={draft.distance} onChange={(event) => setDraft((current) => ({ ...current, distance: event.target.value as TaskConfig["distance"] }))}>
-                  <option value="close">近景</option>
-                  <option value="mid">中景</option>
-                  <option value="far">远景</option>
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="镜头距离">
+                  <Select
+                    value={draft.distance}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, distance: value as TaskConfig["distance"] }))
+                    }
+                    options={distanceOptions}
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">拍摄角度</div>
-                <Select value={draft.angle} onChange={(event) => setDraft((current) => ({ ...current, angle: event.target.value as TaskConfig["angle"] }))}>
-                  <option value="front">正面</option>
-                  <option value="side">侧面</option>
-                  <option value="top">俯视</option>
-                  <option value="bottom">仰视</option>
-                  <option value="random">随机</option>
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="拍摄角度">
+                  <Select
+                    value={draft.angle}
+                    onChange={(value) =>
+                      setDraft((current) => ({ ...current, angle: value as TaskConfig["angle"] }))
+                    }
+                    options={angleOptions}
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">宽高比</div>
-                <Select value={draft.aspect_ratio} onChange={(event) => setDraft((current) => ({ ...current, aspect_ratio: event.target.value as TaskConfig["aspect_ratio"] }))}>
-                  <option value="1:1">1:1</option>
-                  <option value="4:3">4:3</option>
-                  <option value="3:4">3:4</option>
-                  <option value="16:9">16:9</option>
-                  <option value="9:16">9:16</option>
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="宽高比">
+                  <Select
+                    value={draft.aspect_ratio}
+                    onChange={(value) =>
+                      setDraft((current) => ({
+                        ...current,
+                        aspect_ratio: value as TaskConfig["aspect_ratio"],
+                      }))
+                    }
+                    options={aspectRatioOptions}
+                  />
+                </FormItem>
+              </Col>
 
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">图像模型</div>
-                <Select
-                  value={draft.model_profile_id}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      ...buildTaskConfigFromProfile(
-                        imageProfiles.find((profile) => profile.id === event.target.value) ?? imageProfiles[0],
-                        current,
-                      ),
-                    }))
-                  }
-                >
-                  {imageProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
+              <Col xs={24} md={12}>
+                <FormItem label="图像模型">
+                  <Select
+                    value={draft.model_profile_id}
+                    onChange={(value) =>
+                      setDraft((current) => ({
+                        ...current,
+                        ...buildTaskConfigFromProfile(
+                          imageProfiles.find((profile) => profile.id === value) ?? imageProfiles[0],
+                          current,
+                        ),
+                      }))
+                    }
+                    options={imageProfiles.map((profile) => ({
+                      value: profile.id,
+                      label: profile.name,
+                    }))}
+                  />
+                </FormItem>
+              </Col>
 
-              <div className="md:col-span-2">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">光照</div>
-                <div className="flex flex-wrap gap-2">
-                  {lightingOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setDraft((current) => ({ ...current, lighting: toggleValue(current.lighting, option.value) }))}
-                      className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                        draft.lighting.includes(option.value)
-                          ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                          : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">背景</div>
-                <div className="flex flex-wrap gap-2">
-                  {backgroundOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setDraft((current) => ({ ...current, background: toggleValue(current.background, option.value) }))}
-                      className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                        draft.background.includes(option.value)
-                          ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                          : "border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-neutral-500">
-                  <span>补充描述</span>
-                  <Button
-                    variant="secondary"
-                    disabled={!token || !draft.subject.trim() || !activeLlmProfile || isAssisting}
-                    onClick={() => {
-                      if (!token || !activeLlmProfile) return;
-                      setIsAssisting(true);
-                      setError(null);
-                      void assistDatasetSubject(token, { subject: draft.subject, llmProfileId: activeLlmProfile.id })
-                        .then((suggestion) => {
+              <Col xs={24}>
+                <FormItem label="光照">
+                  <Space wrap>
+                    {lightingOptions.map((option) => (
+                      <Tag.CheckableTag
+                        key={option.value}
+                        checked={draft.lighting.includes(option.value)}
+                        onChange={() =>
                           setDraft((current) => ({
                             ...current,
-                            extra_desc: suggestion.extra_desc || current.extra_desc,
-                          }));
+                            lighting: toggleValue(current.lighting, option.value),
+                          }))
+                        }
+                      >
+                        {option.label}
+                      </Tag.CheckableTag>
+                    ))}
+                  </Space>
+                </FormItem>
+              </Col>
+
+              <Col xs={24}>
+                <FormItem label="背景">
+                  <Space wrap>
+                    {backgroundOptions.map((option) => (
+                      <Tag.CheckableTag
+                        key={option.value}
+                        checked={draft.background.includes(option.value)}
+                        onChange={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            background: toggleValue(current.background, option.value),
+                          }))
+                        }
+                      >
+                        {option.label}
+                      </Tag.CheckableTag>
+                    ))}
+                  </Space>
+                </FormItem>
+              </Col>
+
+              <Col xs={24}>
+                <FormItem
+                  label="补充描述"
+                  extra={
+                    <Button
+                      size="small"
+                      icon={<WandSparkles className="h-3.5 w-3.5" />}
+                      loading={isAssisting}
+                      disabled={!token || !draft.subject.trim() || !activeLlmProfile}
+                      onClick={() => {
+                        if (!token || !activeLlmProfile) return;
+                        setIsAssisting(true);
+                        setError(null);
+                        void assistDatasetSubject(token, {
+                          subject: draft.subject,
+                          llmProfileId: activeLlmProfile.id,
                         })
-                        .catch((nextError) => setError((nextError as Error).message))
-                        .finally(() => setIsAssisting(false));
-                    }}
-                  >
-                    <WandSparkles className="mr-2 h-4 w-4" />
-                    AI 补全
-                  </Button>
-                </div>
-                <Textarea
-                  rows={5}
-                  value={draft.extra_desc ?? ""}
-                  onChange={(event) => setDraft((current) => ({ ...current, extra_desc: event.target.value }))}
+                          .then((suggestion) => {
+                            setDraft((current) => ({
+                              ...current,
+                              extra_desc: suggestion.extra_desc || current.extra_desc,
+                            }));
+                          })
+                          .catch((nextError) => setError((nextError as Error).message))
+                          .finally(() => setIsAssisting(false));
+                      }}
+                      className="mt-2"
+                    >
+                      AI 补全
+                    </Button>
+                  }
+                >
+                  <TextArea
+                    rows={5}
+                    value={draft.extra_desc ?? ""}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, extra_desc: event.target.value }))
+                    }
+                  />
+                </FormItem>
+              </Col>
+            </Row>
+          </Card>
+
+          {error ? <Alert message={error} type="error" showIcon className="mt-6" /> : null}
+        </Col>
+
+        <Col xs={24} xl={8}>
+          <Space direction="vertical" className="w-full" size="large">
+            <Card className="shadow-panel">
+              <Text className="block text-xs uppercase tracking-[0.2em] text-neutral-500">
+                批次上下文
+              </Text>
+              <Title level={4} className="mt-3 !mb-2 !text-lg">{dataset.name}</Title>
+              <Text className="block text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+                当前样本池 {dataset.imageCount}，已选样本 {dataset.selectedCount}，累计批次{" "}
+                {dataset.taskCount}。
+              </Text>
+              <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <Text className="block text-xs uppercase tracking-[0.2em] text-neutral-500">模型</Text>
+                <Text className="mt-2 block font-medium">{activeProfile?.name ?? "未选择"}</Text>
+                <Text className="text-sm text-neutral-500">{providerName}</Text>
+              </div>
+            </Card>
+
+            <Card className="shadow-panel">
+              <Text className="block text-xs uppercase tracking-[0.2em] text-neutral-500">
+                Prompt Preview
+              </Text>
+              <div className="mt-4">
+                <PromptPreviewCard
+                  preview={preview}
+                  compact
+                  onCopy={() => {
+                    if (!preview?.positive_prompt) return;
+                    void navigator.clipboard.writeText(preview.positive_prompt);
+                  }}
                 />
               </div>
-            </div>
-          </SectionCard>
+              <Text className="mt-4 block text-sm text-neutral-500 dark:text-neutral-400">
+                当前预估成本：{formatCurrency(preview?.estimated_cost ?? 0)}
+              </Text>
+              <Space className="mt-5">
+                <Button
+                  type="primary"
+                  loading={isSubmitting}
+                  onClick={() => void handleGenerate()}
+                >
+                  创建并开始生成
+                </Button>
+                <Link to={`/datasets/${dataset.id}`}>
+                  <Button>稍后再说</Button>
+                </Link>
+              </Space>
+            </Card>
+          </Space>
+        </Col>
+      </Row>
+    </PageContainer>
+  );
+}
 
-          {error ? (
-            <SectionCard className="border-red-300/40 bg-red-50 dark:border-red-400/20 dark:bg-red-950/20">
-              <div className="text-sm text-red-700 dark:text-red-100">{error}</div>
-            </SectionCard>
-          ) : null}
-        </div>
-
-        <div className="space-y-6">
-          <SectionCard>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">批次上下文</div>
-            <div className="mt-4 text-lg text-neutral-900 dark:text-white">{dataset.name}</div>
-            <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              当前样本池 {dataset.imageCount}，已选样本 {dataset.selectedCount}，累计批次 {dataset.taskCount}。
-            </div>
-            <div className="mt-4 rounded-[20px] border border-neutral-200 bg-neutral-100 p-4 text-sm dark:border-white/10 dark:bg-white/[0.03]">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">模型</div>
-              <div className="mt-2 text-neutral-900 dark:text-white">{activeProfile?.name ?? "未选择"}</div>
-              <div className="mt-1 text-neutral-500">{providers.find((provider) => provider.id === draft.api_provider)?.name ?? draft.api_provider}</div>
-            </div>
-          </SectionCard>
-
-          <SectionCard>
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Prompt Preview</div>
-            <div className="mt-4">
-              <PromptPreviewCard
-                preview={preview}
-                compact
-                onCopy={() => {
-                  if (!preview?.positive_prompt) return;
-                  void navigator.clipboard.writeText(preview.positive_prompt);
-                }}
-              />
-            </div>
-            <div className="mt-4 text-sm text-neutral-500 dark:text-neutral-400">
-              当前预估成本：{formatCurrency(preview?.estimated_cost ?? 0)}
-            </div>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <Button disabled={isSubmitting} onClick={() => void handleGenerate()}>
-                创建并开始生成
-              </Button>
-              <Link to={`/datasets/${dataset.id}`}>
-                <Button variant="secondary">稍后再说</Button>
-              </Link>
-            </div>
-          </SectionCard>
-        </div>
+function FormItem({
+  label,
+  extra,
+  children,
+}: {
+  label: React.ReactNode;
+  extra?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Text className="text-xs uppercase tracking-[0.2em] text-neutral-500">{label}</Text>
+        {extra}
       </div>
+      {children}
     </div>
   );
 }

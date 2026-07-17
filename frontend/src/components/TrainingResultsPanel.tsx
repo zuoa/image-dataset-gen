@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { LineChart, RefreshCw } from "lucide-react";
+import { Alert, Button, Card, Col, Row } from "antd";
 
 import { fetchTextWithToken } from "../api/client";
+import { useAuthStore } from "../store/auth";
 import type { TrainingArtifact, TrainingJob } from "../lib/types";
-import { Button } from "./ui/Button";
 
 type ChartGroup = "quality" | "loss";
 
@@ -117,10 +118,10 @@ const seriesDefinitions: SeriesDefinition[] = [
 
 type TrainingResultsPanelProps = {
   job: TrainingJob;
-  token: string | null;
 };
 
-export function TrainingResultsPanel({ job, token }: TrainingResultsPanelProps) {
+export function TrainingResultsPanel({ job }: TrainingResultsPanelProps) {
+  const token = useAuthStore((state) => state.token);
   const resultArtifact = useMemo(() => findResultsArtifact(job.artifacts), [job.artifacts]);
   const artifactUrl = resultArtifact?.downloadUrl ?? "";
   const artifactId = resultArtifact?.id ?? "";
@@ -189,11 +190,10 @@ export function TrainingResultsPanel({ job, token }: TrainingResultsPanelProps) 
 
         {resultArtifact ? (
           <Button
-            variant="secondary"
             onClick={() => setReloadKey((current) => current + 1)}
             disabled={isLoading}
+            icon={<RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />}
           >
-            <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             刷新
           </Button>
         ) : null}
@@ -212,19 +212,23 @@ export function TrainingResultsPanel({ job, token }: TrainingResultsPanelProps) 
           文件已读取，但没有找到可绘制的 Ultralytics 指标列。
         </TrainingResultsMessage>
       ) : parsedResults ? (
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          <TrainingLineChart
-            title="精度指标"
-            subtitle={formatEpochRange(parsedResults)}
-            series={parsedResults.qualitySeries}
-            expectedMax={1}
-          />
-          <TrainingLineChart
-            title="Loss"
-            subtitle={formatEpochRange(parsedResults)}
-            series={parsedResults.lossSeries}
-          />
-        </div>
+        <Row gutter={[16, 16]} className="mt-5">
+          <Col xs={24} xl={12}>
+            <TrainingLineChart
+              title="精度指标"
+              subtitle={formatEpochRange(parsedResults)}
+              series={parsedResults.qualitySeries}
+              expectedMax={1}
+            />
+          </Col>
+          <Col xs={24} xl={12}>
+            <TrainingLineChart
+              title="Loss"
+              subtitle={formatEpochRange(parsedResults)}
+              series={parsedResults.lossSeries}
+            />
+          </Col>
+        </Row>
       ) : null}
     </div>
   );
@@ -235,17 +239,17 @@ type TrainingResultsMessageProps = {
   tone?: "default" | "error";
 };
 
-function TrainingResultsMessage({ children, tone = "default" }: TrainingResultsMessageProps) {
+function TrainingResultsMessage({
+  children,
+  tone = "default",
+}: TrainingResultsMessageProps) {
   return (
-    <div
-      className={`mt-5 rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-        tone === "error"
-          ? "border-red-300/50 bg-red-50 text-red-700 dark:border-red-400/20 dark:bg-red-950/20 dark:text-red-100"
-          : "border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-400"
-      }`}
-    >
-      {children}
-    </div>
+    <Alert
+      className="mt-5"
+      message={children}
+      type={tone === "error" ? "error" : "info"}
+      showIcon
+    />
   );
 }
 
@@ -260,10 +264,10 @@ function TrainingLineChart({ title, subtitle, series, expectedMax }: TrainingLin
   const chartModel = useMemo(() => buildChartModel(series, expectedMax), [expectedMax, series]);
 
   return (
-    <div className="rounded-[20px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+    <Card className="rounded-[20px] border border-neutral-200 bg-neutral-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-base text-neutral-900 dark:text-white">{title}</div>
+          <div className="text-base">{title}</div>
           <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{subtitle}</div>
         </div>
         <div className="flex max-w-full flex-wrap justify-end gap-x-4 gap-y-2 text-xs text-neutral-500 dark:text-neutral-400">
@@ -386,7 +390,7 @@ function TrainingLineChart({ title, subtitle, series, expectedMax }: TrainingLin
           没有找到该图表需要的列。
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
