@@ -30,6 +30,37 @@ def _worker_headers() -> dict[str, str]:
     return {"X-Training-Worker-Token": "worker-token"}
 
 
+def test_registered_worker_receives_scoped_runtime_token(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        TESTING = False
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    registered = client.post(
+        "/api/v1/training/workers/register",
+        headers=_worker_headers(),
+        json={"worker_id": "gpu-scoped", "name": "GPU scoped", "capabilities": {}},
+    )
+    assert registered.status_code == 200
+    runtime_token = registered.get_json()["workerToken"]
+    assert runtime_token != "worker-token"
+
+    rejected = client.post(
+        "/api/v1/training/workers/gpu-scoped/heartbeat",
+        headers=_worker_headers(),
+        json={"status": "idle"},
+    )
+    assert rejected.status_code == 401
+    accepted = client.post(
+        "/api/v1/training/workers/gpu-scoped/heartbeat",
+        headers={"X-Training-Worker-Token": runtime_token},
+        json={"status": "idle"},
+    )
+    assert accepted.status_code == 200
+
+
 def _create_dataset_with_image(app, client, headers: dict[str, str]) -> str:
     response = client.post(
         "/api/v1/datasets",
@@ -172,6 +203,8 @@ def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Pat
     assert poll.status_code == 200
     assigned = poll.get_json()["job"]
     assert assigned["id"] == job["id"]
+    assert assigned["assignmentToken"]
+    assert assigned["leaseExpiresAt"]
     assert assigned["datasetDownloadUrl"].endswith(f"/api/v1/training/jobs/{job['id']}/dataset.zip")
 
     dataset_download = client.get(f"/api/v1/training/jobs/{job['id']}/dataset.zip", headers=_worker_headers())

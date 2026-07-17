@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime, timedelta
+import hashlib
+from pathlib import Path
+import secrets
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from flask import current_app
-from sqlalchemy import func
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.clients.gemini_client import (
     GeminiGenerationError,
@@ -14,7 +19,7 @@ from app.clients.gemini_client import (
 )
 from app.clients.jimeng_client import JimengGenerationError, generate_image as generate_jimeng_image
 from app.extensions import celery, db
-from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
+from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, TaskItem, generate_uuid
 from app.services.annotation_storage import (
     extract_detection_categories,
     infer_default_bbox_semantics,
@@ -31,6 +36,8 @@ from app.services.dataset_service import (
     sync_dataset_task_inplace,
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
+from app.services.storage_backend import register_local_asset
+from app.services.outbox_service import enqueue_background_task
 from app.services.video_import_service import (
     DEFAULT_VIDEO_FRAME_INTERVAL,
     DEFAULT_VIDEO_FRAME_INTERVAL_MODE,
@@ -54,7 +61,127 @@ def _maybe_remove_session(is_eager: bool) -> None:
         db.session.remove()
 
 
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _task_item_deadline() -> datetime:
+    return now_utc() + timedelta(seconds=int(current_app.config["TASK_ITEM_LEASE_SECONDS"]))
+
+
+def _claim_task_execution(task_id: str, item_type: str) -> str | None:
+    item = TaskItem.query.filter_by(task_id=task_id, item_index=1).first()
+    if item is None:
+        try:
+            with db.session.begin_nested():
+                item = TaskItem(task_id=task_id, item_index=1, item_type=item_type)
+                db.session.add(item)
+                db.session.flush()
+        except IntegrityError:
+            item = None
+
+    item = db.session.execute(
+        select(TaskItem)
+        .where(TaskItem.task_id == task_id, TaskItem.item_index == 1)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if item is None or item.status == "completed":
+        db.session.rollback()
+        return None
+    if (
+        item.status == "running"
+        and item.lease_expires_at is not None
+        and _aware(item.lease_expires_at) > now_utc()
+    ):
+        db.session.rollback()
+        return None
+
+    raw_token = secrets.token_urlsafe(24)
+    item.item_type = item_type
+    item.status = "running"
+    item.attempt_count = int(item.attempt_count or 0) + 1
+    item.lease_token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    item.lease_expires_at = _task_item_deadline()
+    item.last_error = ""
+    db.session.commit()
+    return item.id
+
+
+def _renew_task_execution(item_id: str) -> None:
+    item = db.session.get(TaskItem, item_id)
+    if item is not None and item.status == "running":
+        item.lease_expires_at = _task_item_deadline()
+
+
+def _finish_task_execution(item_id: str, status: str, error: str = "") -> None:
+    item = db.session.get(TaskItem, item_id)
+    if item is None:
+        return
+    item.status = status
+    item.last_error = error[:2000]
+    item.lease_token_hash = ""
+    item.lease_expires_at = None
+    item.completed_at = now_utc() if status == "completed" else None
+
+
+def _mark_dataset_task_execution_failed(task_id: str, error: str) -> None:
+    db.session.rollback()
+    task = db.session.get(DatasetTask, task_id)
+    if task is None or task.status in {"completed", "paused"}:
+        return
+    task.status = "failed"
+    task.completed_at = now_utc()
+    config = {**(task.config_json or {})}
+    runtime = {**(config.get("runtime") or {})}
+    runtime["workerError"] = error[:2000]
+    runtime["failedAt"] = now_utc().isoformat()
+    config["runtime"] = runtime
+    if task.task_type == "augmentation":
+        augmentation = {**(config.get("augmentation") or {})}
+        augmentation["status"] = "failed"
+        augmentation["error"] = error[:2000]
+        augmentation["updatedAt"] = now_utc().isoformat()
+        config["augmentation"] = augmentation
+    task.config_json = config
+    item = TaskItem.query.filter_by(task_id=task_id, item_index=1).first()
+    if item is not None:
+        _finish_task_execution(item.id, "failed", error)
+    if task.dataset is not None:
+        sync_dataset_task_stats_from_db(task)
+        sync_dataset_stats_from_db(task.dataset, commit=False)
+    db.session.commit()
+
+
+def _release_dataset_task_execution_for_retry(task_id: str, error: str) -> None:
+    """Release the lease without converting a resumable interruption into failure."""
+    db.session.rollback()
+    task = db.session.get(DatasetTask, task_id)
+    if task is None or task.status in {"completed", "paused", "failed"}:
+        return
+    config = {**(task.config_json or {})}
+    runtime = {**(config.get("runtime") or {})}
+    runtime["lastRetryReason"] = error[:2000]
+    runtime["retryScheduledAt"] = now_utc().isoformat()
+    config["runtime"] = runtime
+    task.config_json = config
+    task.completed_at = None
+    item = TaskItem.query.filter_by(task_id=task_id, item_index=1).first()
+    if item is not None and item.status != "completed":
+        item.status = "queued"
+        item.available_at = now_utc()
+        item.last_error = error[:2000]
+        item.lease_token_hash = ""
+        item.lease_expires_at = None
+        item.completed_at = None
+    db.session.commit()
+
+
 def _dispatch_followup_task(task_callable, *args: object) -> None:
+    if not current_app.testing:
+        enqueue_background_task(task_callable, *args)
+        db.session.commit()
+        return
+    db.session.commit()
     try:
         task_callable.delay(*args)
     except Exception:
@@ -159,7 +286,9 @@ def _inherit_augmented_annotation(
     augmentation_ops: list[dict[str, object]],
 ) -> None:
     if source_image.annotation_status == "empty":
-        save_annotation_result(storage_root, dataset.id, target_image.id, [])
+        save_annotation_result(
+            storage_root, dataset.id, target_image.id, [], source="augmentation"
+        )
         target_image.annotation_status = "empty"
         target_image.detection_categories = []
         target_image.confidence_score = None
@@ -184,16 +313,25 @@ def _inherit_augmented_annotation(
         source_detections,
         augmentation_ops,
     )
-    save_annotation_result(storage_root, dataset.id, target_image.id, transformed_detections)
+    save_annotation_result(
+        storage_root,
+        dataset.id,
+        target_image.id,
+        transformed_detections,
+        source="augmentation",
+    )
     target_image.annotation_status = "annotated" if transformed_detections else "empty"
     target_image.confidence_score = _max_detection_confidence(transformed_detections)
     target_image.detection_categories = extract_detection_categories(storage_root, dataset.id, target_image.id)
 
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=None)
 def generate_dataset_task_images(self, task_id: str) -> None:
     task = db.session.get(DatasetTask, task_id)
     if task is None or task.status != "running":
+        return
+    execution_item_id = _claim_task_execution(task_id, "generation")
+    if execution_item_id is None:
         return
 
     try:
@@ -209,6 +347,7 @@ def generate_dataset_task_images(self, task_id: str) -> None:
             if len(task.images) >= task.image_count:
                 sync_dataset_task_inplace(task)
                 sync_dataset_stats_inplace(dataset)
+                _finish_task_execution(execution_item_id, "completed")
                 db.session.commit()
                 break
 
@@ -217,11 +356,14 @@ def generate_dataset_task_images(self, task_id: str) -> None:
             variant = _dataset_variant_for_ordinal(task, source_ordinal)
 
             try:
-                preview, latency_ms = _generate_dataset_asset(task, dataset, variant, dataset_ordinal)
+                preview, latency_ms, generated_path, mime_type = _generate_dataset_asset(
+                    task, dataset, variant, dataset_ordinal
+                )
             except RuntimeError as exc:
                 _pause_dataset_task_generation(task, str(exc))
                 sync_dataset_task_inplace(task)
                 sync_dataset_stats_inplace(dataset)
+                _finish_task_execution(execution_item_id, "failed", str(exc))
                 db.session.commit()
                 return
 
@@ -240,14 +382,31 @@ def generate_dataset_task_images(self, task_id: str) -> None:
                 selected=True,
                 annotation_status="pending",
                 confidence_score=round(0.66 + ((source_ordinal % 8) * 0.03), 2),
+                asset=register_local_asset(
+                    current_app.config["STORAGE_ROOT"],
+                    generated_path,
+                    user_id=task.user_id,
+                    dataset_id=dataset.id,
+                    kind="dataset_image",
+                    mime_type=mime_type,
+                ),
             )
             db.session.add(image)
             dataset.images.append(image)
             task.images.append(image)
             sync_dataset_task_inplace(task)
             sync_dataset_stats_inplace(dataset)
+            _renew_task_execution(execution_item_id)
             db.session.commit()
             _maybe_remove_session(self.request.is_eager)
+    except SoftTimeLimitExceeded as exc:
+        current_app.logger.warning("Dataset generation reached its soft limit; rescheduling task %s", task_id)
+        _release_dataset_task_execution_for_retry(task_id, "soft time limit reached")
+        raise self.retry(exc=exc, countdown=5)
+    except Exception as exc:
+        current_app.logger.exception("Dataset generation failed for task %s", task_id)
+        _mark_dataset_task_execution_failed(task_id, str(exc))
+        raise
     finally:
         task = db.session.get(DatasetTask, task_id)
         if task is not None and task.status == "completed":
@@ -257,8 +416,21 @@ def generate_dataset_task_images(self, task_id: str) -> None:
         _maybe_remove_session(self.request.is_eager)
 
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=None)
 def augment_dataset_task_images(self, task_id: str) -> None:
+    try:
+        _run_augmentation_task(self, task_id)
+    except SoftTimeLimitExceeded as exc:
+        current_app.logger.warning("Dataset augmentation reached its soft limit; rescheduling task %s", task_id)
+        _release_dataset_task_execution_for_retry(task_id, "soft time limit reached")
+        raise self.retry(exc=exc, countdown=5)
+    except Exception as exc:
+        current_app.logger.exception("Dataset augmentation failed for task %s", task_id)
+        _mark_dataset_task_execution_failed(task_id, str(exc))
+        raise
+
+
+def _run_augmentation_task(self, task_id: str) -> None:
     task = db.session.get(DatasetTask, task_id)
     if task is None or task.task_type != "augmentation":
         return
@@ -269,6 +441,9 @@ def augment_dataset_task_images(self, task_id: str) -> None:
 
     augmentation = {**((task.config_json or {}).get("augmentation") or {})}
     if augmentation.get("status") != "running":
+        return
+    execution_item_id = _claim_task_execution(task_id, "augmentation")
+    if execution_item_id is None:
         return
 
     total_to_create = max(0, int(augmentation.get("totalImagesToCreate", 0)))
@@ -296,6 +471,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             augmentation["updatedAt"] = now_utc().isoformat()
             task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
             task.status = "failed"
+            _finish_task_execution(execution_item_id, "failed", "source_images_not_found")
             db.session.commit()
             return
 
@@ -311,6 +487,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             task.completed_at = now_utc()
             sync_dataset_task_stats_from_db(task)
             sync_dataset_stats_from_db(dataset, commit=False)
+            _finish_task_execution(execution_item_id, "completed")
             db.session.commit()
             break
 
@@ -321,6 +498,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             augmentation["updatedAt"] = now_utc().isoformat()
             task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
             task.status = "failed"
+            _finish_task_execution(execution_item_id, "failed", "source_images_not_found")
             db.session.commit()
             return
 
@@ -341,6 +519,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             augmentation["updatedAt"] = now_utc().isoformat()
             task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
             task.status = "failed"
+            _finish_task_execution(execution_item_id, "failed", "source_image_missing")
             db.session.commit()
             return
 
@@ -360,6 +539,14 @@ def augment_dataset_task_images(self, task_id: str) -> None:
             selected=True,
             annotation_status="pending",
             confidence_score=source_image.confidence_score,
+            asset=register_local_asset(
+                storage_root,
+                Path(augmented["path"]),
+                user_id=task.user_id,
+                dataset_id=dataset.id,
+                kind="dataset_image",
+                mime_type=str(augmented["mime_type"]),
+            ),
         )
         db.session.add(image)
         db.session.flush()
@@ -377,6 +564,7 @@ def augment_dataset_task_images(self, task_id: str) -> None:
         task.config_json = {**(task.config_json or {}), "augmentation": augmentation}
         sync_dataset_task_stats_from_db(task)
         sync_dataset_stats_from_db(dataset, commit=False)
+        _renew_task_execution(execution_item_id)
         db.session.commit()
         _maybe_remove_session(self.request.is_eager)
 
@@ -385,12 +573,15 @@ def augment_dataset_task_images(self, task_id: str) -> None:
         _enqueue_auto_annotation_dataset(dataset, skip_annotated=True)
 
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=None)
 def extract_dataset_video_frames(self, task_id: str) -> None:
     task = db.session.get(DatasetTask, task_id)
     if task is None or task.task_type != "import" or (task.config_json or {}).get("source") != "video":
         return
     if task.status != "running":
+        return
+    execution_item_id = _claim_task_execution(task_id, "video_import")
+    if execution_item_id is None:
         return
 
     dataset = db.session.get(Dataset, task.dataset_id)
@@ -449,6 +640,7 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
             }
             task.image_count = expected_count
             task.config_json = {**config, "video": video_config}
+            _renew_task_execution(execution_item_id)
             with db.session.no_autoflush:
                 sync_dataset_task_inplace(task)
                 sync_dataset_stats_inplace(dataset)
@@ -474,7 +666,7 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
 
                 dataset_ordinal = next_dataset_ordinal(dataset)
                 image_key = f"image-{dataset_ordinal:06d}"
-                save_generated_image(
+                saved_path = save_generated_image(
                     storage_root,
                     dataset.id,
                     image_key,
@@ -500,6 +692,15 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
                     selected=True,
                     annotation_status="pending",
                     confidence_score=None,
+                    asset=register_local_asset(
+                        storage_root,
+                        saved_path,
+                        user_id=task.user_id,
+                        dataset_id=dataset.id,
+                        kind="dataset_image",
+                        mime_type=extracted.mime_type,
+                        original_filename=extracted.output_filename,
+                    ),
                 )
                 db.session.add(image)
                 dataset.images.append(image)
@@ -509,6 +710,7 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
                 video_config["extractedFrames"] = len(task.images)
                 video_config["updatedAt"] = now_utc().isoformat()
                 task.config_json = {**(task.config_json or {}), "video": video_config}
+                _renew_task_execution(execution_item_id)
                 with db.session.no_autoflush:
                     sync_dataset_task_inplace(task)
                     sync_dataset_stats_inplace(dataset)
@@ -536,35 +738,71 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         task.status = "completed"
         task.progress_percent = 100
         task.completed_at = now_utc()
+        _finish_task_execution(execution_item_id, "completed")
         with db.session.no_autoflush:
             sync_dataset_task_inplace(task)
             sync_dataset_stats_inplace(dataset)
+        if task.source_asset is not None:
+            task.source_asset.status = "deleted"
+            task.source_asset.deleted_at = now_utc()
         db.session.commit()
         cleanup_video_import_source(storage_root, source_path_value)
+    except SoftTimeLimitExceeded as exc:
+        current_app.logger.warning("Video import reached its soft limit; rescheduling task %s", task_id)
+        _release_dataset_task_execution_for_retry(task_id, "soft time limit reached")
+        raise self.retry(exc=exc, countdown=5)
     except Exception as exc:
         current_app.logger.exception("Video frame extraction failed for task %s", task_id)
         _mark_video_import_failed(task_id, str(exc))
+        _finish_task_execution(execution_item_id, "failed", str(exc))
+        db.session.commit()
     finally:
         _maybe_remove_session(self.request.is_eager)
 
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=None)
 def annotate_dataset_images_task(
     self,
     dataset_id: str,
     confidence_threshold: float,
     vl_config: dict[str, str] | None = None,
     skip_annotated: bool = False,
+    execution_id: str | None = None,
 ) -> None:
     from app.clients.annotator_client import annotate_dataset_images
 
-    dataset = db.session.get(Dataset, dataset_id)
+    dataset = db.session.execute(
+        select(Dataset).where(Dataset.id == dataset_id).with_for_update()
+    ).scalar_one_or_none()
     if dataset is None:
         return
 
-    annotation = dataset.annotation_json or {}
+    annotation = {**(dataset.annotation_json or {})}
+    if execution_id:
+        if annotation.get("executionId") != execution_id:
+            db.session.rollback()
+            return
+        if annotation.get("executionState") in {"completed", "failed"}:
+            db.session.rollback()
+            return
+    lease_raw = annotation.get("executionLeaseExpiresAt")
+    if annotation.get("executionState") == "running" and lease_raw:
+        try:
+            if _aware(datetime.fromisoformat(str(lease_raw))) > now_utc():
+                db.session.rollback()
+                return
+        except ValueError:
+            pass
+    annotation["executionState"] = "running"
+    annotation["executionLeaseExpiresAt"] = _task_item_deadline().isoformat()
+    annotation["updatedAt"] = now_utc().isoformat()
+    dataset.annotation_json = annotation
+    db.session.commit()
     storage_root = current_app.config["STORAGE_ROOT"]
-    vl_config = vl_config or {}
+    vl_config = {
+        **(vl_config or {}),
+        "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
+    }
 
     images_to_process = dataset.images
     if skip_annotated:
@@ -574,6 +812,8 @@ def annotate_dataset_images_task(
         dataset.annotation_json = {
             **annotation,
             "status": "completed",
+            "executionState": "completed",
+            "executionLeaseExpiresAt": None,
             "updatedAt": now_utc().isoformat(),
             "skipped": True,
         }
@@ -589,11 +829,23 @@ def annotate_dataset_images_task(
             vl_config=vl_config,
             images=images_to_process,
         )
+    except SoftTimeLimitExceeded as exc:
+        current_app.logger.warning("Annotation reached its soft limit; rescheduling dataset %s", dataset.id)
+        dataset.annotation_json = {
+            **annotation,
+            "executionState": "queued",
+            "executionLeaseExpiresAt": None,
+            "updatedAt": now_utc().isoformat(),
+        }
+        db.session.commit()
+        raise self.retry(exc=exc, countdown=5)
     except Exception:
         current_app.logger.exception("Annotation API failed for dataset %s", dataset.id)
         dataset.annotation_json = {
             **annotation,
             "status": "failed",
+            "executionState": "failed",
+            "executionLeaseExpiresAt": None,
             "updatedAt": now_utc().isoformat(),
         }
         db.session.commit()
@@ -608,7 +860,15 @@ def annotate_dataset_images_task(
         if not image:
             continue
         detections = result.get("detections", [])
-        save_annotation_result(storage_root, dataset.id, image.id, detections)
+        save_annotation_result(
+            storage_root,
+            dataset.id,
+            image.id,
+            detections,
+            source="automatic",
+            provider=str(vl_config.get("provider") or "local"),
+            model=str(vl_config.get("model") or ""),
+        )
         image.annotation_status = "annotated" if detections else "empty"
         image.confidence_score = max([float(detection["confidence"]) for detection in detections], default=None)
         image.detection_categories = extract_detection_categories(storage_root, dataset.id, image.id)
@@ -626,19 +886,38 @@ def annotate_dataset_images_task(
         "emptyLabels": empty_labels,
         "format": "yolo",
         "status": "completed",
+        "executionState": "completed",
+        "executionLeaseExpiresAt": None,
         "updatedAt": now_utc().isoformat(),
     }
     db.session.commit()
 
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=None)
 def export_dataset_archive(self, export_job_id: str) -> None:
-    export_job = db.session.get(DatasetExport, export_job_id)
+    export_job = db.session.execute(
+        select(DatasetExport).where(DatasetExport.id == export_job_id).with_for_update()
+    ).scalar_one_or_none()
     if export_job is None:
+        return
+
+    if export_job.status == "ready":
+        db.session.rollback()
+        return
+    if (
+        export_job.status == "running"
+        and export_job.lease_expires_at is not None
+        and _aware(export_job.lease_expires_at) > now_utc()
+    ):
+        db.session.rollback()
         return
 
     dataset = export_job.dataset
     export_job.status = "running"
+    export_job.attempt_count = int(export_job.attempt_count or 0) + 1
+    export_job.lease_expires_at = now_utc() + timedelta(
+        seconds=int(current_app.config.get("CELERY_TASK_TIME_LIMIT", 3600)) + 60
+    )
     db.session.commit()
 
     try:
@@ -653,12 +932,36 @@ def export_dataset_archive(self, export_job_id: str) -> None:
             include_readme=summary_json.get("includeReadme", True),
             storage_root=current_app.config["STORAGE_ROOT"],
         )
+        archive_path = Path(str(archive_summary["archivePath"]))
+        export_job.asset = register_local_asset(
+            current_app.config["STORAGE_ROOT"],
+            archive_path,
+            user_id=dataset.user_id,
+            dataset_id=dataset.id,
+            kind="dataset_export",
+            mime_type="application/zip",
+            original_filename=f"{dataset.name}-v{export_job.version}.zip",
+        )
         export_job.summary_json = archive_summary
         export_job.status = "ready"
+        export_job.lease_expires_at = None
         db.session.commit()
+    except SoftTimeLimitExceeded as exc:
+        db.session.rollback()
+        export_job = db.session.get(DatasetExport, export_job_id)
+        if export_job is not None and export_job.status != "ready":
+            export_job.status = "pending"
+            export_job.lease_expires_at = None
+            export_job.summary_json = {
+                **(export_job.summary_json or {}),
+                "retryScheduledAt": now_utc().isoformat(),
+            }
+            db.session.commit()
+        raise self.retry(exc=exc, countdown=5)
     except Exception:
         current_app.logger.exception("Dataset export failed for job %s", export_job_id)
         export_job.status = "failed"
+        export_job.lease_expires_at = None
         export_job.summary_json = {**(export_job.summary_json or {}), "errorAt": now_utc().isoformat()}
         db.session.commit()
         raise
@@ -698,7 +1001,7 @@ def _generate_dataset_asset(
     dataset: Dataset,
     variant: dict[str, object],
     dataset_ordinal: int,
-) -> tuple[str, int]:
+) -> tuple[str, int, Path, str]:
     if task.api_provider == "jimeng":
         api_key = _resolve_dataset_task_api_key(task)
         if not api_key:
@@ -732,14 +1035,19 @@ def _generate_dataset_asset(
     else:
         raise RuntimeError(f"provider_not_supported:{task.api_provider}")
 
-    save_generated_image(
+    generated_path = save_generated_image(
         current_app.config["STORAGE_ROOT"],
         dataset.id,
         f"image-{dataset_ordinal:06d}",
         generated["image_bytes"],
         generated["mime_type"],
     )
-    return preview_data_url(generated["image_bytes"], generated["mime_type"]), 6500 + dataset_ordinal * 110
+    return (
+        preview_data_url(generated["image_bytes"], generated["mime_type"]),
+        6500 + dataset_ordinal * 110,
+        generated_path,
+        str(generated["mime_type"]),
+    )
 
 
 def _pause_dataset_task_generation(task: DatasetTask, error_message: str) -> None:
@@ -755,7 +1063,21 @@ def _enqueue_auto_annotation_dataset(dataset: Dataset, *, skip_annotated: bool =
     vl_config = {
         "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
         "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
-        "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
         "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
     }
-    _dispatch_followup_task(annotate_dataset_images_task, str(dataset.id), 0.5, vl_config, skip_annotated)
+    execution_id = generate_uuid()
+    dataset.annotation_json = {
+        **(dataset.annotation_json or {}),
+        "status": "running",
+        "executionState": "queued",
+        "executionId": execution_id,
+        "updatedAt": now_utc().isoformat(),
+    }
+    _dispatch_followup_task(
+        annotate_dataset_images_task,
+        str(dataset.id),
+        0.5,
+        vl_config,
+        skip_annotated,
+        execution_id,
+    )

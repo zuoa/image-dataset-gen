@@ -23,6 +23,10 @@ function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
   return payload;
 }
 
+function idempotencyHeaders() {
+  return { "Idempotency-Key": crypto.randomUUID() };
+}
+
 export function listDatasets(token: string) {
   return apiRequest<{ datasets: DatasetListItem[]; summary: DatasetSummary }>("/datasets", { token });
 }
@@ -38,6 +42,7 @@ export function createDataset(
   return apiRequest<{ dataset: Dataset }>("/datasets", {
     method: "POST",
     token,
+    headers: idempotencyHeaders(),
     body: JSON.stringify(payload),
   });
 }
@@ -45,11 +50,12 @@ export function createDataset(
 export function getDataset(
   datasetId: string,
   token: string,
-  options?: { offset?: number; limit?: number; filter?: ImageFilter },
+  options?: { offset?: number; cursor?: string; limit?: number; filter?: ImageFilter },
 ) {
   const params = new URLSearchParams();
   if (options?.offset !== undefined) params.set("images_offset", String(options.offset));
   if (options?.limit !== undefined) params.set("images_limit", String(options.limit));
+  if (options?.cursor) params.set("images_cursor", options.cursor);
   if (options?.filter?.class) params.set("filter_class", options.filter.class);
   if (options?.filter?.split) params.set("filter_split", options.filter.split);
   if (options?.filter?.annotation) params.set("filter_annotation", options.filter.annotation);
@@ -108,6 +114,7 @@ export function createGenerationTask(datasetId: string, config: TaskConfig, toke
   return apiRequest<{ task: unknown; dataset: Dataset }>(`/datasets/${datasetId}/tasks/generation`, {
     method: "POST",
     token,
+    headers: idempotencyHeaders(),
     body: JSON.stringify(serializeTaskConfig(config)),
   });
 }
@@ -199,6 +206,7 @@ export function augmentDataset(
   return apiRequest<{ task: unknown; dataset: Dataset }>(`/datasets/${datasetId}/tasks/augmentation`, {
     method: "POST",
     token,
+    headers: idempotencyHeaders(),
     body: JSON.stringify({ multiplier, augmentation_methods: methods, augmentation_settings: settings }),
   });
 }
@@ -220,6 +228,7 @@ export function exportDataset(
   return apiRequest<{ export: Record<string, unknown>; dataset: Dataset }>(`/datasets/${datasetId}/export`, {
     method: "POST",
     token,
+    headers: idempotencyHeaders(),
     body: JSON.stringify({ export_format: exportFormat, image_format: imageFormat }),
   });
 }
@@ -247,6 +256,7 @@ export function createTrainingJob(
   return apiRequest<{ job: TrainingJob; dataset: Dataset }>(`/datasets/${datasetId}/training-jobs`, {
     method: "POST",
     token,
+    headers: idempotencyHeaders(),
     body: JSON.stringify(payload),
   });
 }

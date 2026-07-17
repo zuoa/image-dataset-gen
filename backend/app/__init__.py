@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-import contextlib
+import base64
 import os
 from pathlib import Path
-import threading
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - non-Unix fallback
-    fcntl = None
-
-from flask import Flask, current_app, jsonify
+import click
+from flask import Flask, jsonify
 from marshmallow import ValidationError
 from sqlalchemy import inspect, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -24,6 +18,7 @@ from app.api.training import training_bp
 from app.config import Config, normalize_database_uri
 from app.extensions import celery, cors, db, jwt
 from app.models import DatasetImage, User
+from app.observability import configure_observability
 from app.services.model_profile_service import ensure_default_model_profiles
 
 
@@ -32,6 +27,7 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__, instance_path=str(instance_path) if instance_path is not None else None)
     app.config.from_object(config_object or Config)
+    _validate_production_config(app)
     _prepare_runtime_paths(app)
     _configure_database_engine(app)
 
@@ -50,9 +46,35 @@ def create_app(
     app.register_blueprint(datasets_bp, url_prefix=f"{api_prefix}/datasets")
     app.register_blueprint(training_bp, url_prefix=api_prefix)
 
+    configure_observability(app)
+
+    @app.get(f"{api_prefix}/health/live")
     @app.get(f"{api_prefix}/health")
-    def healthcheck():
-        return jsonify({"status": "ok"})
+    def liveness():
+        return jsonify({"status": "ok", "check": "liveness"})
+
+    @app.get(f"{api_prefix}/health/ready")
+    def readiness():
+        checks: dict[str, str] = {}
+        try:
+            db.session.execute(text("SELECT 1"))
+            checks["database"] = "ok"
+        except Exception:
+            db.session.rollback()
+            checks["database"] = "failed"
+
+        storage_root = Path(app.config["STORAGE_ROOT"])
+        checks["storage"] = "ok" if storage_root.is_dir() and os.access(storage_root, os.W_OK) else "failed"
+        try:
+            from redis import Redis
+
+            Redis.from_url(app.config["CELERY_BROKER_URL"], socket_connect_timeout=1).ping()
+            checks["redis"] = "ok"
+        except Exception:
+            checks["redis"] = "failed"
+
+        ready = all(value == "ok" for value in checks.values())
+        return jsonify({"status": "ok" if ready else "not_ready", "checks": checks}), 200 if ready else 503
 
     @app.errorhandler(ValidationError)
     def handle_validation_error(error: ValidationError):
@@ -70,12 +92,10 @@ def create_app(
             except OperationalError:
                 app.logger.exception("Database schema initialization failed")
             else:
-                _ensure_schema_columns()
-                _ensure_demo_user(app)
-                if app.config.get("STARTUP_MAINTENANCE_ASYNC", True):
-                    _schedule_startup_maintenance(app)
-                else:
-                    _run_startup_maintenance(app)
+                if app.config.get("BOOTSTRAP_DEMO_USER", False):
+                    _ensure_demo_user(app)
+
+    _register_cli(app)
 
     return app
 
@@ -97,6 +117,35 @@ def _prepare_runtime_paths(app: Flask) -> None:
     if not storage_root.is_absolute():
         storage_root = Path(app.root_path).parent / storage_root
     app.config["STORAGE_ROOT"] = str(storage_root.resolve())
+
+
+def _validate_production_config(app: Flask) -> None:
+    if str(app.config.get("APP_ENV", "development")).lower() != "production":
+        return
+    errors: list[str] = []
+    for key in ("SECRET_KEY", "JWT_SECRET_KEY"):
+        value = str(app.config.get(key, ""))
+        if len(value) < 32 or "change-me" in value or value.startswith("dev-"):
+            errors.append(f"{key} must be a unique value of at least 32 characters")
+    worker_token = str(app.config.get("TRAINING_WORKER_TOKEN", ""))
+    if len(worker_token) < 32 or "change-me" in worker_token:
+        errors.append("TRAINING_WORKER_TOKEN must be a unique value of at least 32 characters")
+    if str(app.config.get("ENCRYPTION_KEY", "")) == "ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=":
+        errors.append("ENCRYPTION_KEY must not use the repository demo value")
+    try:
+        encryption_key = base64.urlsafe_b64decode(str(app.config.get("ENCRYPTION_KEY", "")))
+        if len(encryption_key) != 32:
+            raise ValueError
+    except Exception:
+        errors.append("ENCRYPTION_KEY must be a base64-encoded 32-byte key")
+    if not str(app.config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("postgresql"):
+        errors.append("production DATABASE_URL must use PostgreSQL")
+    if app.config.get("AUTO_CREATE_SCHEMA"):
+        errors.append("AUTO_CREATE_SCHEMA must be false in production; run Alembic migrations")
+    if str(app.config.get("REGISTRATION_MODE", "disabled")) not in {"disabled", "open"}:
+        errors.append("REGISTRATION_MODE must be disabled or open")
+    if errors:
+        raise RuntimeError("Invalid production configuration: " + "; ".join(errors))
 
 
 def _normalize_sqlite_uri(database_uri: str, instance_path: str) -> str:
@@ -157,133 +206,20 @@ def _configure_database_engine(app: Flask) -> None:
         options["connect_args"] = connect_args
     elif uri.startswith("postgresql"):
         options.setdefault("pool_pre_ping", True)
+        options.setdefault("pool_size", int(app.config["DATABASE_POOL_SIZE"]))
+        options.setdefault("max_overflow", int(app.config["DATABASE_MAX_OVERFLOW"]))
+        options.setdefault("pool_timeout", int(app.config["DATABASE_POOL_TIMEOUT"]))
+        options.setdefault("pool_recycle", 1800)
+        connect_args = dict(options.get("connect_args") or {})
+        timeout = int(app.config["DATABASE_STATEMENT_TIMEOUT_MS"])
+        connect_args.setdefault(
+            "options",
+            f"-c statement_timeout={timeout} -c idle_in_transaction_session_timeout={timeout}",
+        )
+        options["connect_args"] = connect_args
 
     if options:
         app.config["SQLALCHEMY_ENGINE_OPTIONS"] = options
-
-
-def _ensure_schema_columns() -> None:
-    inspector = inspect(db.engine)
-    if "model_profiles" not in inspector.get_table_names():
-        return
-
-    existing_columns = {column["name"] for column in inspector.get_columns("model_profiles")}
-    statements: list[str] = []
-    if "profile_type" not in existing_columns:
-        statements.append("ALTER TABLE model_profiles ADD COLUMN profile_type VARCHAR(16) NOT NULL DEFAULT 'image'")
-    if "base_url" not in existing_columns:
-        statements.append("ALTER TABLE model_profiles ADD COLUMN base_url VARCHAR(255)")
-
-    for statement in statements:
-        db.session.execute(text(statement))
-    if statements:
-        db.session.commit()
-
-    if "dataset_images" in inspector.get_table_names():
-        image_columns = {column["name"] for column in inspector.get_columns("dataset_images")}
-        if "detection_categories" not in image_columns:
-            db.session.execute(
-                text(
-                    "ALTER TABLE dataset_images "
-                    f"ADD COLUMN detection_categories {_json_column_type_sql()} "
-                    f"NOT NULL DEFAULT {_empty_json_array_default_sql()}"
-                )
-            )
-            db.session.commit()
-
-
-def _json_column_type_sql() -> str:
-    if db.engine.dialect.name == "postgresql":
-        return "JSONB"
-    return "JSON"
-
-
-def _empty_json_array_default_sql() -> str:
-    if db.engine.dialect.name == "postgresql":
-        return "'[]'::jsonb"
-    return "'[]'"
-
-
-def _ensure_schema_indexes() -> None:
-    inspector = inspect(db.engine)
-    table_names = set(inspector.get_table_names())
-    index_statements = {
-        "dataset_tasks": [
-            "CREATE INDEX IF NOT EXISTS ix_dataset_tasks_dataset_created_at "
-            "ON dataset_tasks (dataset_id, created_at)"
-        ],
-        "dataset_images": [
-            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_ordinal "
-            "ON dataset_images (dataset_id, ordinal)",
-            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_selected_ordinal "
-            "ON dataset_images (dataset_id, selected, ordinal)",
-            "CREATE INDEX IF NOT EXISTS ix_dataset_images_dataset_annotation_status "
-            "ON dataset_images (dataset_id, annotation_status)",
-        ],
-        "dataset_exports": [
-            "CREATE INDEX IF NOT EXISTS ix_dataset_exports_dataset_version "
-            "ON dataset_exports (dataset_id, version)"
-        ],
-    }
-    if db.engine.dialect.name == "postgresql":
-        index_statements["dataset_images"].append(
-            "CREATE INDEX IF NOT EXISTS ix_dataset_images_detection_categories_gin "
-            "ON dataset_images USING GIN (detection_categories)"
-        )
-
-    for table_name, statements in index_statements.items():
-        if table_name not in table_names:
-            continue
-        for statement in statements:
-            try:
-                db.session.execute(text(statement))
-            except OperationalError:
-                db.session.rollback()
-                current_app.logger.warning("Skipping startup index maintenance because the database is locked")
-                return
-    db.session.commit()
-
-
-def _run_startup_maintenance(app: Flask) -> None:
-    def maintain() -> None:
-        _ensure_schema_indexes()
-        _backfill_detection_categories(app)
-
-    _run_with_startup_maintenance_lock(app, maintain)
-
-
-def _schedule_startup_maintenance(app: Flask) -> None:
-    def run() -> None:
-        with app.app_context():
-            try:
-                _run_startup_maintenance(app)
-            except Exception:
-                app.logger.exception("Startup maintenance failed")
-            finally:
-                db.session.remove()
-
-    thread = threading.Thread(target=run, name="startup-maintenance", daemon=True)
-    thread.start()
-
-
-def _run_with_startup_maintenance_lock(app: Flask, callback: Callable[[], None]) -> None:
-    lock_path = Path(app.config["STORAGE_ROOT"]) / ".startup-maintenance.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        acquired = False
-        if fcntl is not None:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-            except BlockingIOError:
-                app.logger.info("Startup maintenance is already running; skipping in this process")
-                return
-        try:
-            callback()
-        finally:
-            if acquired:
-                with contextlib.suppress(OSError):
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _backfill_detection_categories(app: Flask, *, batch_size: int = 500) -> None:
@@ -318,6 +254,45 @@ def _backfill_detection_categories(app: Flask, *, batch_size: int = 500) -> None
         )
         image.detection_categories = categories
     db.session.commit()
+
+
+def _register_cli(app: Flask) -> None:
+    @app.cli.command("create-admin")
+    @click.option("--username", prompt=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+    def create_admin(username: str, password: str) -> None:
+        """Create the first production user without startup side effects."""
+        normalized = username.strip()
+        if User.query.filter_by(email=normalized).first() is not None:
+            raise click.ClickException("username already exists")
+        user = User(email=normalized, password_hash=generate_password_hash(password), plan="pro")
+        db.session.add(user)
+        db.session.commit()
+        ensure_default_model_profiles(user)
+        click.echo(f"created admin user {normalized}")
+
+    @app.cli.command("backfill-detection-categories")
+    @click.option("--batch-size", default=500, type=click.IntRange(min=1))
+    def backfill_detection_categories(batch_size: int) -> None:
+        """Run the legacy annotation category backfill explicitly."""
+        _backfill_detection_categories(app, batch_size=batch_size)
+        click.echo("backfill batch complete")
+
+    @app.cli.command("gc-assets")
+    @click.option("--retention-hours", type=int, default=None)
+    def garbage_collect_assets(retention_hours: int | None) -> None:
+        """Purge files whose asset tombstones passed the retention window."""
+        from app.services.asset_gc_service import garbage_collect_deleted_assets
+
+        count = garbage_collect_deleted_assets(
+            app.config["STORAGE_ROOT"],
+            retention_hours=(
+                int(retention_hours)
+                if retention_hours is not None
+                else int(app.config["ASSET_GC_RETENTION_HOURS"])
+            ),
+        )
+        click.echo(f"purged {count} deleted assets")
 
 
 def _make_celery(app: Flask) -> None:

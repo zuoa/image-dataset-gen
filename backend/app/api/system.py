@@ -47,6 +47,8 @@ def list_model_profiles():
 def create_model_profile_endpoint():
     user_id = get_jwt_identity()
     payload = ModelProfileSchema().load(request.get_json() or {})
+    if len(payload["apiKey"].strip()) < 8:
+        return jsonify({"message": "apiKey must contain at least 8 characters"}), 422
     profile = create_model_profile(
         user_id,
         {
@@ -72,15 +74,21 @@ def update_model_profile_endpoint(profile_id: str):
     user_id = get_jwt_identity()
     payload = ModelProfileSchema().load(request.get_json() or {})
     profile = ModelProfile.query.filter_by(id=profile_id, user_id=user_id).first_or_404()
+    replacement_api_key = payload["apiKey"].strip()
+    if payload["providerId"] != profile.provider_id and not replacement_api_key:
+        return jsonify({"message": "apiKey is required when changing providers"}), 422
 
     profile.profile_type = payload["profileType"]
     profile.name = payload["name"]
     profile.provider_id = payload["providerId"]
     profile.base_url = (payload.get("baseUrl") or "").strip() or None
     profile.model = payload["model"]
-    profile.api_key_encrypted = encrypt_secret(
-        payload["apiKey"], current_app.config["ENCRYPTION_KEY"]
-    )
+    if replacement_api_key:
+        if len(replacement_api_key) < 8:
+            return jsonify({"message": "apiKey must contain at least 8 characters"}), 422
+        profile.api_key_encrypted = encrypt_secret(
+            replacement_api_key, current_app.config["ENCRYPTION_KEY"]
+        )
     profile.concurrency = payload["concurrency"]
     profile.batch_size = payload["batchSize"]
     profile.jimeng_watermark = payload["jimengWatermark"]

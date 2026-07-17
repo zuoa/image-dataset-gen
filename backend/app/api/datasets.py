@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 import zipfile
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import raiseload
 
 from app.extensions import db
@@ -32,14 +32,18 @@ from app.services.annotation_storage import (
     save_annotation_result,
 )
 from app.services.dataset_export_service import get_dataset_archive_path
+from app.services.file_delivery import deliver_local_file
 from app.services.dataset_service import (
     build_dataset_export_payload,
     build_dataset_detail_payload,
     build_dataset_image_payload,
     build_dataset_list_payload,
     build_dataset_payload,
-    build_dataset_summary,
+    build_dataset_summary_for_user,
     build_dataset_task_summary_payload,
+    decode_dataset_cursor,
+    decode_image_cursor,
+    encode_dataset_cursor,
     dataset_has_selected_images,
     next_dataset_export_version,
     next_dataset_ordinal,
@@ -47,6 +51,7 @@ from app.services.dataset_service import (
     sample_pool_split_map_for_images,
     selected_original_image_ids,
     sync_dataset,
+    sync_dataset_category_rows,
     sync_dataset_stats_from_db,
     sync_dataset_task_stats_from_db,
 )
@@ -57,7 +62,14 @@ from app.services.image_storage import (
     remove_generated_image_variants,
     save_generated_image,
 )
+from app.services.idempotency_service import (
+    IdempotencyError,
+    begin_idempotent_request,
+    complete_idempotent_request,
+)
+from app.services.storage_backend import register_local_asset
 from app.services.model_profile_service import _resolved_profile_api_key
+from app.services.outbox_service import enqueue_background_task
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.services.roboflow_import_service import RoboflowImportError, import_roboflow_dataset
 from app.services.subject_assist_service import suggest_subject_fields
@@ -96,10 +108,28 @@ def _sync_and_payload(dataset: Dataset) -> dict:
     return build_dataset_detail_payload(dataset, include_images=False)
 
 
+def _begin_idempotency(user_id: str, scope: str, payload: dict[str, Any]):
+    try:
+        record, replay = begin_idempotent_request(user_id, scope, payload)
+    except IdempotencyError as exc:
+        return None, (jsonify({"message": str(exc)}), exc.status_code)
+    if replay is not None:
+        return None, (jsonify(replay.body), replay.status_code)
+    return record, None
+
+
 def _delete_dataset_image_assets(dataset: Dataset, image: DatasetImage) -> None:
-    remove_generated_image_variants(
-        current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
-    )
+    if image.asset is not None:
+        image.asset.status = "deleted"
+        image.asset.deleted_at = now_utc()
+        if current_app.testing:
+            remove_generated_image_variants(
+                current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
+            )
+    else:
+        remove_generated_image_variants(
+            current_app.config["STORAGE_ROOT"], dataset.id, f"image-{image.ordinal:06d}"
+        )
 
     annotation_file = annotation_path(current_app.config["STORAGE_ROOT"], dataset.id, image.id)
     annotation_file.unlink(missing_ok=True)
@@ -133,6 +163,13 @@ def _max_imported_images() -> int:
 
 
 def _dispatch_background_task(task_callable, *args: object) -> None:
+    if not current_app.testing:
+        enqueue_background_task(task_callable, *args)
+        return
+    # Eager Celery executes in this process. Commit first so the worker observes
+    # the same transaction boundary as a real worker and cannot roll back the
+    # request's newly-created task on failure.
+    db.session.commit()
     try:
         task_callable.delay(*args)
     except Exception:
@@ -174,7 +211,7 @@ def assist_subject():
 @jwt_required()
 def list_datasets():
     user_id = get_jwt_identity()
-    datasets = (
+    query = (
         Dataset.query.options(
             raiseload(Dataset.images),
             raiseload(Dataset.tasks),
@@ -182,9 +219,33 @@ def list_datasets():
             raiseload(Dataset.training_jobs),
         )
         .filter_by(user_id=user_id)
-        .order_by(Dataset.created_at.desc())
-        .all()
     )
+    cursor_value = (request.args.get("cursor") or "").strip()
+    if cursor_value:
+        try:
+            cursor_created_at, cursor_id = decode_dataset_cursor(cursor_value)
+        except ValueError:
+            return jsonify({"message": "invalid dataset cursor"}), 400
+        query = query.filter(
+            or_(
+                Dataset.created_at < cursor_created_at,
+                and_(Dataset.created_at == cursor_created_at, Dataset.id < cursor_id),
+            )
+        )
+    query = query.order_by(Dataset.created_at.desc(), Dataset.id.desc())
+    limit_value = request.args.get("limit")
+    next_cursor = None
+    if limit_value is None:
+        datasets = query.all()
+    else:
+        try:
+            limit = max(1, min(100, int(limit_value)))
+        except (TypeError, ValueError):
+            return jsonify({"message": "limit must be an integer"}), 400
+        fetched = query.limit(limit + 1).all()
+        datasets = fetched[:limit]
+        if len(fetched) > limit and datasets:
+            next_cursor = encode_dataset_cursor(datasets[-1])
     dataset_ids = [dataset.id for dataset in datasets]
     latest_tasks_by_dataset_id: dict[str, DatasetTask] = {}
     if dataset_ids:
@@ -215,7 +276,8 @@ def list_datasets():
                 build_dataset_list_payload(dataset, latest_tasks_by_dataset_id.get(dataset.id))
                 for dataset in datasets
             ],
-            "summary": build_dataset_summary(datasets),
+            "summary": build_dataset_summary_for_user(user_id),
+            "nextCursor": next_cursor,
         }
     )
 
@@ -225,6 +287,9 @@ def list_datasets():
 def create_dataset():
     user_id = get_jwt_identity()
     payload = DatasetSchema().load(request.get_json() or {})
+    idempotency, replay_response = _begin_idempotency(user_id, "datasets.create", payload)
+    if replay_response is not None:
+        return replay_response
     dataset = Dataset(
         user_id=user_id,
         name=payload["name"].strip(),
@@ -232,8 +297,12 @@ def create_dataset():
         categories=[str(category).strip() for category in payload["categories"] if str(category).strip()],
     )
     db.session.add(dataset)
+    sync_dataset_category_rows(dataset)
+    db.session.flush()
+    response_body = {"dataset": build_dataset_payload(dataset)}
+    complete_idempotent_request(idempotency, response_body, 201)
     db.session.commit()
-    return jsonify({"dataset": build_dataset_payload(dataset)}), 201
+    return jsonify(response_body), 201
 
 
 def _parse_image_filter() -> dict[str, Any] | None:
@@ -276,13 +345,23 @@ def get_dataset(dataset_id: str):
     try:
         images_limit_raw = request.args.get("images_limit", None)
         images_limit = int(images_limit_raw) if images_limit_raw is not None else None
+        if images_limit is not None:
+            images_limit = 0 if images_limit <= 0 else min(images_limit, 200)
     except (TypeError, ValueError):
         images_limit = None
+    images_cursor = None
+    cursor_value = (request.args.get("images_cursor") or "").strip()
+    if cursor_value:
+        try:
+            images_cursor = decode_image_cursor(cursor_value)
+        except ValueError:
+            return jsonify({"message": "invalid image cursor"}), 400
     payload = build_dataset_detail_payload(
         dataset,
         image_filter=image_filter,
         images_offset=images_offset,
         images_limit=images_limit,
+        images_cursor=images_cursor,
     )
     return jsonify({"dataset": payload})
 
@@ -300,6 +379,7 @@ def update_dataset(dataset_id: str):
         dataset.description = (payload.get("description") or "").strip()
     if "categories" in payload:
         dataset.categories = [str(category).strip() for category in payload["categories"] if str(category).strip()]
+        sync_dataset_category_rows(dataset)
 
     db.session.commit()
     return jsonify({"dataset": _sync_and_payload(dataset)})
@@ -311,7 +391,15 @@ def create_generation_task(dataset_id: str):
     user_id = get_jwt_identity()
     dataset = _dataset_for_user(dataset_id, user_id)
     payload = GenerationTaskSchema().load(request.get_json() or {})
-    generation_payload = {**payload, "categories": dataset.categories}
+    idempotency, replay_response = _begin_idempotency(
+        user_id, f"datasets.{dataset_id}.generation-tasks.create", payload
+    )
+    if replay_response is not None:
+        return replay_response
+    generation_payload = {
+        key: value for key, value in payload.items() if key != "api_key"
+    }
+    generation_payload["categories"] = dataset.categories
     prompt = build_prompt_preview(generation_payload)
     task = DatasetTask(
         dataset_id=dataset.id,
@@ -333,11 +421,15 @@ def create_generation_task(dataset_id: str):
     db.session.add(task)
     db.session.flush()
     sync_dataset_stats_from_db(dataset, commit=False)
-    db.session.commit()
-    return jsonify({
+    response_body = {
         "task": build_dataset_task_summary_payload(task),
-        "dataset": build_dataset_detail_payload(sync_dataset_stats_from_db(dataset), include_images=False),
-    }), 201
+        "dataset": build_dataset_detail_payload(
+            sync_dataset_stats_from_db(dataset, commit=False), include_images=False
+        ),
+    }
+    complete_idempotent_request(idempotency, response_body, 201)
+    db.session.commit()
+    return jsonify(response_body), 201
 
 
 @datasets_bp.get("/<dataset_id>/tasks/<task_id>")
@@ -355,6 +447,8 @@ def start_dataset_task(dataset_id: str, task_id: str):
     user_id = get_jwt_identity()
     dataset = _dataset_for_user(dataset_id, user_id)
     task = _task_for_dataset(dataset, task_id)
+    if task.status != "draft":
+        return jsonify({"message": f"task cannot start from status {task.status}"}), 409
     runtime = {**((task.config_json or {}).get("runtime") or {})}
     runtime.pop("generationError", None)
     runtime["startedAt"] = now_utc().isoformat()
@@ -362,8 +456,6 @@ def start_dataset_task(dataset_id: str, task_id: str):
     task.status = "running"
     task.started_at = now_utc()
     task.completed_at = None
-    db.session.commit()
-
     if task.task_type == "generation":
         from app.worker_tasks import generate_dataset_task_images
 
@@ -377,6 +469,8 @@ def start_dataset_task(dataset_id: str, task_id: str):
 
         _dispatch_background_task(extract_dataset_video_frames, task.id)
 
+    db.session.commit()
+
     return jsonify({"task": build_dataset_task_summary_payload(task), "dataset": _sync_and_payload(dataset)})
 
 
@@ -386,6 +480,8 @@ def retry_dataset_task(dataset_id: str, task_id: str):
     user_id = get_jwt_identity()
     dataset = _dataset_for_user(dataset_id, user_id)
     task = _task_for_dataset(dataset, task_id)
+    if task.status not in {"paused", "failed"}:
+        return jsonify({"message": f"task cannot retry from status {task.status}"}), 409
     runtime = {**((task.config_json or {}).get("runtime") or {})}
     runtime.pop("generationError", None)
     runtime["retriedAt"] = now_utc().isoformat()
@@ -409,8 +505,6 @@ def retry_dataset_task(dataset_id: str, task_id: str):
     task.status = "running"
     task.started_at = now_utc()
     task.completed_at = None
-    db.session.commit()
-
     if task.task_type == "generation":
         from app.worker_tasks import generate_dataset_task_images
 
@@ -423,6 +517,8 @@ def retry_dataset_task(dataset_id: str, task_id: str):
         from app.worker_tasks import extract_dataset_video_frames
 
         _dispatch_background_task(extract_dataset_video_frames, task.id)
+
+    db.session.commit()
 
     return jsonify({"task": build_dataset_task_summary_payload(task), "dataset": _sync_and_payload(dataset)})
 
@@ -486,7 +582,7 @@ def import_dataset_images(dataset_id: str):
                 continue
 
             image_key = f"image-{next_ordinal:06d}"
-            save_generated_image(
+            saved_path = save_generated_image(
                 current_app.config["STORAGE_ROOT"],
                 dataset.id,
                 image_key,
@@ -508,6 +604,17 @@ def import_dataset_images(dataset_id: str):
                 selected=True,
                 annotation_status="pending",
                 confidence_score=None,
+                asset=register_local_asset(
+                    current_app.config["STORAGE_ROOT"],
+                    saved_path,
+                    user_id=user_id,
+                    dataset_id=dataset.id,
+                    kind="dataset_image",
+                    mime_type=str(normalized["mime_type"]),
+                    original_filename=Path(member.filename).name,
+                    width=int(normalized["width"]),
+                    height=int(normalized["height"]),
+                ),
             )
             db.session.add(image)
             imported_count += 1
@@ -592,6 +699,17 @@ def import_dataset_video(dataset_id: str):
         return jsonify({"message": "视频文件保存失败，请重新上传。"}), 400
 
     db.session.add(task)
+    source_absolute_path = Path(current_app.config["STORAGE_ROOT"]) / source_path
+    if source_absolute_path.is_file():
+        task.source_asset = register_local_asset(
+            current_app.config["STORAGE_ROOT"],
+            source_absolute_path,
+            user_id=user_id,
+            dataset_id=dataset.id,
+            kind="video_source",
+            mime_type=upload.mimetype or "application/octet-stream",
+            original_filename=Path(upload.filename).name,
+        )
     task.config_json = {
         "source": "video",
         "sourcePath": source_path,
@@ -612,11 +730,10 @@ def import_dataset_video(dataset_id: str):
     }
     db.session.flush()
     sync_dataset_stats_from_db(dataset, commit=False)
-    db.session.commit()
-
     from app.worker_tasks import extract_dataset_video_frames
 
     _dispatch_background_task(extract_dataset_video_frames, task.id)
+    db.session.commit()
     dataset = _dataset_for_user(dataset.id, user_id)
     task = _task_for_dataset(dataset, task.id)
     return (
@@ -683,6 +800,11 @@ def create_augmentation_task(dataset_id: str):
     user_id = get_jwt_identity()
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
     action = TaskActionSchema().load(request.get_json() or {})
+    idempotency, replay_response = _begin_idempotency(
+        user_id, f"datasets.{dataset_id}.augmentation-tasks.create", action
+    )
+    if replay_response is not None:
+        return replay_response
 
     source_image_ids = selected_original_image_ids(dataset.id)
     source_count = len(source_image_ids)
@@ -730,15 +852,16 @@ def create_augmentation_task(dataset_id: str):
     db.session.add(task)
     db.session.flush()
     sync_dataset_stats_from_db(dataset, commit=False)
-    db.session.commit()
-
     from app.worker_tasks import augment_dataset_task_images
 
     _dispatch_background_task(augment_dataset_task_images, task.id)
-    return jsonify({
+    response_body = {
         "task": build_dataset_task_summary_payload(task),
         "dataset": build_dataset_detail_payload(dataset, include_images=False),
-    }), 201
+    }
+    complete_idempotent_request(idempotency, response_body, 201)
+    db.session.commit()
+    return jsonify(response_body), 201
 
 
 @datasets_bp.post("/<dataset_id>/annotate")
@@ -750,25 +873,42 @@ def annotate_dataset(dataset_id: str):
 
     annotation = dataset.annotation_json or {}
     if annotation.get("status") == "running":
+        stale = False
         updated_at_raw = annotation.get("updatedAt")
         if updated_at_raw:
             try:
                 last = datetime.fromisoformat(str(updated_at_raw))
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=now_utc().tzinfo)
                 if (now_utc() - last).total_seconds() > 600:
+                    stale = True
                     annotation["status"] = "failed"
                     annotation["error"] = "timeout_or_interrupted"
                     dataset.annotation_json = annotation
                     db.session.commit()
             except ValueError:
                 pass
+        if not stale:
+            return jsonify({"message": "annotation is already running"}), 409
 
     vl_config = {
         "provider": current_app.config.get("VL_ANNOTATOR_PROVIDER", "gemini"),
         "model": current_app.config.get("VL_ANNOTATOR_MODEL", "gemini-2.0-flash"),
-        "api_key": current_app.config.get("VL_ANNOTATOR_API_KEY", ""),
         "base_url": current_app.config.get("VL_ANNOTATOR_BASE_URL", ""),
     }
+    has_vl_api_key = bool(current_app.config.get("VL_ANNOTATOR_API_KEY", ""))
+    annotation_execution_id = generate_uuid()
 
+    dataset.annotation_json = {
+        **annotation,
+        "provider": "vl-auto" if has_vl_api_key else "local-fallback",
+        "vlProvider": vl_config.get("provider", "gemini") if has_vl_api_key else "local",
+        "confidenceThreshold": action["confidence_threshold"],
+        "status": "running",
+        "executionState": "queued",
+        "executionId": annotation_execution_id,
+        "updatedAt": now_utc().isoformat(),
+    }
     from app.worker_tasks import annotate_dataset_images_task
 
     _dispatch_background_task(
@@ -777,15 +917,8 @@ def annotate_dataset(dataset_id: str):
         action["confidence_threshold"],
         vl_config,
         action["skip_annotated"],
+        annotation_execution_id,
     )
-    dataset.annotation_json = {
-        **annotation,
-        "provider": "vl-auto" if vl_config.get("api_key") else "local-fallback",
-        "vlProvider": vl_config.get("provider", "gemini") if vl_config.get("api_key") else "local",
-        "confidenceThreshold": action["confidence_threshold"],
-        "status": "running",
-        "updatedAt": now_utc().isoformat(),
-    }
     db.session.commit()
     return jsonify({"summary": dataset.annotation_json, "dataset": build_dataset_detail_payload(dataset, include_images=False)})
 
@@ -803,7 +936,7 @@ def preview_dataset_image(dataset_id: str, image_id: str):
     if path is None:
         return jsonify({"message": "image file not found"}), 404
     mimetype = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-    return send_file(path, mimetype=mimetype)
+    return deliver_local_file(path, mimetype=mimetype)
 
 
 @datasets_bp.delete("/<dataset_id>/images/<image_id>")
@@ -848,7 +981,29 @@ def update_dataset_image_annotations(dataset_id: str, image_id: str):
         return jsonify({"message": "image not found"}), 404
 
     detections = payload["detections"]
-    save_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id, detections)
+    configured_categories = {str(category).strip() for category in dataset.categories or []}
+    unknown_categories = sorted(
+        {
+            str(detection["category"]).strip()
+            for detection in detections
+            if str(detection["category"]).strip() not in configured_categories
+        }
+    )
+    if unknown_categories:
+        return (
+            jsonify(
+                {
+                    "message": "annotation contains categories not configured on the dataset",
+                    "unknownCategories": unknown_categories,
+                }
+            ),
+            422,
+        )
+    try:
+        save_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id, detections)
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({"message": str(exc)}), 422
     image.annotation_status = "annotated" if detections else "empty"
     image.confidence_score = max([float(detection["confidence"]) for detection in detections], default=None)
     image.detection_categories = extract_detection_categories(
@@ -934,6 +1089,11 @@ def export_dataset(dataset_id: str):
     user_id = get_jwt_identity()
     action = DatasetExportSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    idempotency, replay_response = _begin_idempotency(
+        user_id, f"datasets.{dataset_id}.exports.create", action
+    )
+    if replay_response is not None:
+        return replay_response
     if not dataset_has_selected_images(dataset.id):
         return jsonify({"message": "no images selected for export"}), 400
 
@@ -957,11 +1117,13 @@ def export_dataset(dataset_id: str):
     from app.worker_tasks import export_dataset_archive
 
     _dispatch_background_task(export_dataset_archive, export_job.id)
-    db.session.commit()
-    return jsonify({
+    response_body = {
         "export": build_dataset_export_payload(export_job),
         "dataset": build_dataset_detail_payload(dataset, include_images=False),
-    }), 201
+    }
+    complete_idempotent_request(idempotency, response_body, 201)
+    db.session.commit()
+    return jsonify(response_body), 201
 
 
 @datasets_bp.get("/<dataset_id>/exports/<int:version>/download")
@@ -975,7 +1137,7 @@ def download_export(dataset_id: str, version: int):
         .first_or_404()
     )
     archive_path = get_dataset_archive_path(current_app.config["STORAGE_ROOT"], export_job)
-    return send_file(
+    return deliver_local_file(
         archive_path,
         as_attachment=True,
         download_name=f"{dataset.name.replace(' ', '-').lower()}-v{version}.zip",

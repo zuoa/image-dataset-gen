@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+import hashlib
+import hmac
 from pathlib import Path
+import secrets
 import shutil
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy import select
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -18,6 +23,7 @@ from app.schemas import (
     TrainingWorkerRegisterSchema,
 )
 from app.services.dataset_export_service import get_dataset_archive_path
+from app.services.file_delivery import deliver_local_file
 from app.services.dataset_service import (
     build_dataset_export_payload,
     build_dataset_detail_payload,
@@ -33,6 +39,13 @@ from app.services.training_inference_service import (
     create_training_inference_job,
     fail_training_inference_job,
 )
+from app.services.storage_backend import local_backend, register_local_asset
+from app.services.idempotency_service import (
+    IdempotencyError,
+    begin_idempotent_request,
+    complete_idempotent_request,
+)
+from app.services.outbox_service import enqueue_background_task
 
 training_bp = Blueprint("training", __name__)
 
@@ -41,6 +54,10 @@ ACTIVE_INFERENCE_STATUSES = {"assigned", "running"}
 
 
 def _dispatch_background_task(task_callable, *args: object) -> None:
+    if not current_app.testing:
+        enqueue_background_task(task_callable, *args)
+        return
+    db.session.commit()
     try:
         task_callable.delay(*args)
     except Exception:
@@ -56,7 +73,9 @@ def _dataset_for_user(dataset_id: str, user_id: str) -> Dataset:
     return Dataset.query.filter_by(id=dataset_id, user_id=user_id).first_or_404()
 
 
-def _require_worker_token() -> tuple[dict[str, str], int] | None:
+def _require_worker_token(
+    worker: TrainingWorker | None = None, *, allow_bootstrap: bool = False
+) -> tuple[dict[str, str], int] | None:
     expected = str(current_app.config.get("TRAINING_WORKER_TOKEN") or "").strip()
     if not expected:
         return {"message": "training worker token is not configured"}, 503
@@ -65,9 +84,15 @@ def _require_worker_token() -> tuple[dict[str, str], int] | None:
         request.headers.get("X-Training-Worker-Token")
         or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     )
-    if supplied != expected:
-        return {"message": "invalid training worker token"}, 401
-    return None
+    if allow_bootstrap and hmac.compare_digest(supplied, expected):
+        return None
+    if worker is not None and worker.token_hash and hmac.compare_digest(
+        _assignment_hash(supplied), worker.token_hash
+    ):
+        return None
+    if current_app.testing and hmac.compare_digest(supplied, expected):
+        return None
+    return {"message": "invalid training worker token"}, 401
 
 
 def _artifact_root(job_id: str) -> Path:
@@ -81,7 +106,9 @@ def _inference_download_url(test_job: TrainingInferenceJob, kind: str) -> str:
     )
 
 
-def _build_training_inference_assignment(test_job: TrainingInferenceJob) -> dict[str, Any]:
+def _build_training_inference_assignment(
+    test_job: TrainingInferenceJob, *, assignment_token: str | None = None
+) -> dict[str, Any]:
     payload = build_training_inference_payload(test_job)
     payload.update(
         {
@@ -90,6 +117,11 @@ def _build_training_inference_assignment(test_job: TrainingInferenceJob) -> dict
             "categories": test_job.training_job.dataset.categories if test_job.training_job and test_job.training_job.dataset else [],
         }
     )
+    if assignment_token:
+        payload["assignmentToken"] = assignment_token
+        payload["leaseExpiresAt"] = (
+            test_job.lease_expires_at.isoformat() if test_job.lease_expires_at else None
+        )
     return payload
 
 
@@ -114,7 +146,12 @@ def _build_worker_payload(worker: TrainingWorker) -> dict[str, Any]:
     }
 
 
-def _build_training_job_payload(job: TrainingJob, *, include_assignment: bool = False) -> dict[str, Any]:
+def _build_training_job_payload(
+    job: TrainingJob,
+    *,
+    include_assignment: bool = False,
+    assignment_token: str | None = None,
+) -> dict[str, Any]:
     artifacts = [
         {
             "id": artifact.id,
@@ -150,7 +187,83 @@ def _build_training_job_payload(job: TrainingJob, *, include_assignment: bool = 
         )
         payload["datasetName"] = job.dataset.name if job.dataset else ""
         payload["categories"] = job.dataset.categories if job.dataset else []
+        if assignment_token:
+            payload["assignmentToken"] = assignment_token
+            payload["leaseExpiresAt"] = job.lease_expires_at.isoformat() if job.lease_expires_at else None
     return payload
+
+
+def _assignment_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _lease_deadline() -> datetime:
+    return now_utc() + timedelta(seconds=int(current_app.config["TRAINING_JOB_LEASE_SECONDS"]))
+
+
+def _issue_assignment(record: TrainingJob | TrainingInferenceJob) -> str:
+    token = secrets.token_urlsafe(32)
+    record.assignment_token_hash = _assignment_hash(token)
+    record.lease_expires_at = _lease_deadline()
+    record.attempt_count = int(record.attempt_count or 0) + 1
+    return token
+
+
+def _assignment_error(
+    record: TrainingJob | TrainingInferenceJob,
+    *,
+    worker_id: str | None = None,
+) -> tuple[dict[str, str], int] | None:
+    if worker_id is not None and record.worker_id != worker_id:
+        return {"message": "assignment does not belong to this worker"}, 409
+    supplied = request.headers.get("X-Assignment-Token", "")
+    if current_app.testing and not supplied:
+        return None
+    if not supplied or not record.assignment_token_hash or not hmac.compare_digest(
+        _assignment_hash(supplied), record.assignment_token_hash
+    ):
+        return {"message": "invalid assignment token"}, 401
+    if record.lease_expires_at is None or _as_utc(record.lease_expires_at) <= now_utc():
+        return {"message": "assignment lease expired"}, 409
+    return None
+
+
+def _requeue_expired_assignments() -> None:
+    now = now_utc()
+    expired_jobs = db.session.execute(
+        select(TrainingJob)
+        .where(TrainingJob.status.in_(ACTIVE_JOB_STATUSES))
+        .where(TrainingJob.lease_expires_at.is_not(None))
+        .where(TrainingJob.lease_expires_at <= now)
+        .with_for_update(skip_locked=True)
+    ).scalars()
+    for job in expired_jobs:
+        if job.worker is not None and job.worker.current_job_id == job.id:
+            job.worker.current_job_id = None
+            job.worker.status = "idle"
+        job.status = "queued"
+        job.worker_id = None
+        job.assignment_token_hash = ""
+        job.lease_expires_at = None
+
+    expired_tests = db.session.execute(
+        select(TrainingInferenceJob)
+        .where(TrainingInferenceJob.status.in_(ACTIVE_INFERENCE_STATUSES))
+        .where(TrainingInferenceJob.lease_expires_at.is_not(None))
+        .where(TrainingInferenceJob.lease_expires_at <= now)
+        .with_for_update(skip_locked=True)
+    ).scalars()
+    for test_job in expired_tests:
+        if test_job.worker is not None:
+            test_job.worker.status = "idle"
+        test_job.status = "queued"
+        test_job.worker_id = None
+        test_job.assignment_token_hash = ""
+        test_job.lease_expires_at = None
 
 
 def _create_yolo_export(dataset: Dataset) -> DatasetExport:
@@ -169,8 +282,7 @@ def _create_yolo_export(dataset: Dataset) -> DatasetExport:
         },
     )
     db.session.add(export_job)
-    db.session.commit()
-
+    db.session.flush()
     from app.worker_tasks import export_dataset_archive
 
     _dispatch_background_task(export_dataset_archive, export_job.id)
@@ -190,6 +302,14 @@ def create_training_job(dataset_id: str):
     invalid_classes = [index for index in classes if index >= len(dataset.categories)]
     if invalid_classes:
         return jsonify({"message": "training classes contain indexes outside dataset categories"}), 400
+    try:
+        idempotency, replay = begin_idempotent_request(
+            user_id, f"datasets.{dataset_id}.training-jobs.create", payload
+        )
+    except IdempotencyError as exc:
+        return jsonify({"message": str(exc)}), exc.status_code
+    if replay is not None:
+        return jsonify(replay.body), replay.status_code
 
     export_job = _create_yolo_export(dataset)
     config_json = {
@@ -218,11 +338,14 @@ def create_training_job(dataset_id: str):
         config_json=config_json,
     )
     db.session.add(job)
-    db.session.commit()
-    return jsonify({
+    db.session.flush()
+    response_body = {
         "job": _build_training_job_payload(job),
         "dataset": build_dataset_detail_payload(dataset, include_images=False),
-    }), 201
+    }
+    complete_idempotent_request(idempotency, response_body, 201)
+    db.session.commit()
+    return jsonify(response_body), 201
 
 
 @training_bp.get("/datasets/<dataset_id>/training-jobs")
@@ -251,7 +374,7 @@ def download_training_artifact(dataset_id: str, job_id: str, artifact_id: str):
     job = TrainingJob.query.filter_by(id=job_id, dataset_id=dataset_id).first_or_404()
     artifact = TrainingArtifact.query.filter_by(id=artifact_id, job_id=job.id).first_or_404()
     artifact_path = Path(artifact.storage_path)
-    return send_file(
+    return deliver_local_file(
         artifact_path,
         as_attachment=True,
         download_name=artifact.filename,
@@ -342,7 +465,7 @@ def _bounded_form_float(name: str, *, default: float, minimum: float, maximum: f
 
 @training_bp.post("/training/workers/register")
 def register_training_worker():
-    token_error = _require_worker_token()
+    token_error = _require_worker_token(allow_bootstrap=True)
     if token_error is not None:
         body, status = token_error
         return jsonify(body), status
@@ -357,27 +480,38 @@ def register_training_worker():
     worker.name = payload["name"].strip()
     worker.version = (payload.get("version") or "").strip()
     worker.capabilities_json = payload.get("capabilities") or {}
+    worker_token = secrets.token_urlsafe(48)
+    worker.token_hash = _assignment_hash(worker_token)
+    worker.token_scopes = ["training", "inference"]
     worker.status = "idle"
     worker.last_heartbeat_at = now_utc()
     db.session.commit()
-    return jsonify({"worker": _build_worker_payload(worker)})
+    return jsonify({"worker": _build_worker_payload(worker), "workerToken": worker_token})
 
 
 @training_bp.post("/training/workers/<worker_id>/heartbeat")
 def heartbeat_training_worker(worker_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     worker = db.session.get(TrainingWorker, worker_id)
     if worker is None:
         return jsonify({"message": "worker not registered"}), 404
+    token_error = _require_worker_token(worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
 
     payload = TrainingWorkerHeartbeatSchema().load(request.get_json() or {})
     worker.last_heartbeat_at = now_utc()
     current_job_id = (payload.get("current_job_id") or "").strip()
     worker.current_job_id = current_job_id or worker.current_job_id
+    if worker.current_job_id:
+        active_job = db.session.get(TrainingJob, worker.current_job_id)
+        if active_job is not None and active_job.worker_id == worker.id:
+            assignment_error = _assignment_error(active_job, worker_id=worker.id)
+            if assignment_error is not None:
+                body, status = assignment_error
+                return jsonify(body), status
+            active_job.last_heartbeat_at = now_utc()
+            active_job.lease_expires_at = _lease_deadline()
     worker.status = "busy" if worker.current_job_id else payload["status"]
     db.session.commit()
     return jsonify({"worker": _build_worker_payload(worker)})
@@ -385,25 +519,38 @@ def heartbeat_training_worker(worker_id: str):
 
 @training_bp.post("/training/workers/<worker_id>/poll")
 def poll_training_job(worker_id: str):
-    token_error = _require_worker_token()
+    worker = db.session.execute(
+        select(TrainingWorker).where(TrainingWorker.id == worker_id).with_for_update()
+    ).scalar_one_or_none()
+    if worker is None:
+        return jsonify({"message": "worker not registered"}), 404
+    token_error = _require_worker_token(worker)
     if token_error is not None:
         body, status = token_error
         return jsonify(body), status
 
-    worker = db.session.get(TrainingWorker, worker_id)
-    if worker is None:
-        return jsonify({"message": "worker not registered"}), 404
-
     worker.last_heartbeat_at = now_utc()
+    _requeue_expired_assignments()
     if worker.current_job_id:
         active_job = db.session.get(TrainingJob, worker.current_job_id)
         if active_job is not None and active_job.status in ACTIVE_JOB_STATUSES:
+            assignment_token = _issue_assignment(active_job)
             worker.status = "busy"
             db.session.commit()
-            return jsonify({"job": _build_training_job_payload(active_job, include_assignment=True)})
+            return jsonify({
+                "job": _build_training_job_payload(
+                    active_job, include_assignment=True, assignment_token=assignment_token
+                )
+            })
         worker.current_job_id = None
 
-    queued_jobs = TrainingJob.query.filter_by(status="queued").order_by(TrainingJob.created_at.asc()).all()
+    queued_jobs = db.session.execute(
+        select(TrainingJob)
+        .where(TrainingJob.status == "queued")
+        .order_by(TrainingJob.created_at.asc())
+        .limit(50)
+        .with_for_update(skip_locked=True)
+    ).scalars()
     for job in queued_jobs:
         if job.export.status == "failed":
             job.status = "failed"
@@ -416,10 +563,15 @@ def poll_training_job(worker_id: str):
 
         job.status = "assigned"
         job.worker_id = worker.id
+        assignment_token = _issue_assignment(job)
         worker.current_job_id = job.id
         worker.status = "busy"
         db.session.commit()
-        return jsonify({"job": _build_training_job_payload(job, include_assignment=True)})
+        return jsonify({
+            "job": _build_training_job_payload(
+                job, include_assignment=True, assignment_token=assignment_token
+            )
+        })
 
     worker.status = "idle"
     db.session.commit()
@@ -428,16 +580,18 @@ def poll_training_job(worker_id: str):
 
 @training_bp.post("/training/workers/<worker_id>/inference/poll")
 def poll_training_inference_job(worker_id: str):
-    token_error = _require_worker_token()
+    worker = db.session.execute(
+        select(TrainingWorker).where(TrainingWorker.id == worker_id).with_for_update()
+    ).scalar_one_or_none()
+    if worker is None:
+        return jsonify({"message": "worker not registered"}), 404
+    token_error = _require_worker_token(worker)
     if token_error is not None:
         body, status = token_error
         return jsonify(body), status
 
-    worker = db.session.get(TrainingWorker, worker_id)
-    if worker is None:
-        return jsonify({"message": "worker not registered"}), 404
-
     worker.last_heartbeat_at = now_utc()
+    _requeue_expired_assignments()
     if worker.current_job_id:
         active_job = db.session.get(TrainingJob, worker.current_job_id)
         if active_job is not None and active_job.status in ACTIVE_JOB_STATUSES:
@@ -453,15 +607,22 @@ def poll_training_inference_job(worker_id: str):
         .first()
     )
     if active_test is not None:
+        assignment_token = _issue_assignment(active_test)
         worker.status = "busy"
         db.session.commit()
-        return jsonify({"test": _build_training_inference_assignment(active_test)})
+        return jsonify({
+            "test": _build_training_inference_assignment(
+                active_test, assignment_token=assignment_token
+            )
+        })
 
-    queued_test = (
-        TrainingInferenceJob.query.filter_by(status="queued")
+    queued_test = db.session.execute(
+        select(TrainingInferenceJob)
+        .where(TrainingInferenceJob.status == "queued")
         .order_by(TrainingInferenceJob.created_at.asc())
-        .first()
-    )
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    ).scalar_one_or_none()
     if queued_test is None:
         worker.status = "idle"
         db.session.commit()
@@ -469,28 +630,36 @@ def poll_training_inference_job(worker_id: str):
 
     queued_test.status = "assigned"
     queued_test.worker_id = worker.id
+    assignment_token = _issue_assignment(queued_test)
     worker.status = "busy"
     db.session.commit()
-    return jsonify({"test": _build_training_inference_assignment(queued_test)})
+    return jsonify({
+        "test": _build_training_inference_assignment(
+            queued_test, assignment_token=assignment_token
+        )
+    })
 
 
 @training_bp.get("/training/inference-jobs/<test_id>/model")
 def download_training_inference_model(test_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     test_job = db.session.get(TrainingInferenceJob, test_id)
     if test_job is None:
         return jsonify({"message": "test job not found"}), 404
+    token_error = _require_worker_token(test_job.worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+    assignment_error = _assignment_error(test_job)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
     artifact = test_job.artifact
     if artifact is None:
         return jsonify({"message": "model artifact not found"}), 404
     artifact_path = Path(artifact.storage_path)
     if not artifact_path.exists():
         return jsonify({"message": "model artifact file not found"}), 409
-    return send_file(
+    return deliver_local_file(
         artifact_path,
         as_attachment=True,
         download_name=artifact.filename,
@@ -500,18 +669,21 @@ def download_training_inference_model(test_id: str):
 
 @training_bp.get("/training/inference-jobs/<test_id>/image")
 def download_training_inference_image(test_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     test_job = db.session.get(TrainingInferenceJob, test_id)
     if test_job is None:
         return jsonify({"message": "test job not found"}), 404
+    token_error = _require_worker_token(test_job.worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+    assignment_error = _assignment_error(test_job)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
     input_path = Path(test_job.input_storage_path)
     if not input_path.exists():
         return jsonify({"message": "test image file not found"}), 409
-    return send_file(
+    return deliver_local_file(
         input_path,
         as_attachment=True,
         download_name=test_job.input_filename or input_path.name,
@@ -521,17 +693,20 @@ def download_training_inference_image(test_id: str):
 
 @training_bp.patch("/training/workers/<worker_id>/inference-jobs/<test_id>/status")
 def update_training_inference_job_status(worker_id: str, test_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     worker = db.session.get(TrainingWorker, worker_id)
     if worker is None:
         return jsonify({"message": "worker not registered"}), 404
+    token_error = _require_worker_token(worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
     test_job = db.session.get(TrainingInferenceJob, test_id)
     if test_job is None:
         return jsonify({"message": "test job not found"}), 404
+    assignment_error = _assignment_error(test_job, worker_id=worker.id)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
 
     payload = request.get_json() or {}
     next_status = str(payload.get("status") or "").strip()
@@ -544,15 +719,20 @@ def update_training_inference_job_status(worker_id: str, test_id: str):
         if test_job.started_at is None:
             test_job.started_at = now_utc()
         worker.status = "busy"
+        test_job.lease_expires_at = _lease_deadline()
     elif next_status == "completed":
         try:
             complete_training_inference_job(test_job, payload.get("detections") or [])
         except TrainingInferenceError as exc:
             return jsonify({"message": str(exc)}), exc.status_code
         worker.status = "idle"
+        test_job.assignment_token_hash = ""
+        test_job.lease_expires_at = None
     elif next_status == "failed":
         fail_training_inference_job(test_job, str(payload.get("error") or "prediction_failed"))
         worker.status = "idle"
+        test_job.assignment_token_hash = ""
+        test_job.lease_expires_at = None
 
     db.session.commit()
     return jsonify({"test": build_training_inference_payload(test_job)})
@@ -560,18 +740,21 @@ def update_training_inference_job_status(worker_id: str, test_id: str):
 
 @training_bp.get("/training/jobs/<job_id>/dataset.zip")
 def download_training_dataset(job_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     job = db.session.get(TrainingJob, job_id)
     if job is None:
         return jsonify({"message": "job not found"}), 404
+    token_error = _require_worker_token(job.worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+    assignment_error = _assignment_error(job)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
     archive_path = get_dataset_archive_path(current_app.config["STORAGE_ROOT"], job.export)
     if job.export.status != "ready" or not archive_path.exists():
         return jsonify({"message": "dataset export is not ready"}), 409
-    return send_file(
+    return deliver_local_file(
         archive_path,
         as_attachment=True,
         download_name=f"{job.dataset.name.replace(' ', '-').lower()}-training.zip",
@@ -581,17 +764,29 @@ def download_training_dataset(job_id: str):
 
 @training_bp.patch("/training/jobs/<job_id>/status")
 def update_training_job_status(job_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     job = db.session.get(TrainingJob, job_id)
     if job is None:
         return jsonify({"message": "job not found"}), 404
+    token_error = _require_worker_token(job.worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+    assignment_error = _assignment_error(job)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
 
     payload = TrainingJobStatusSchema().load(request.get_json() or {})
     next_status = payload["status"]
+    valid_transitions = {
+        "assigned": {"preparing", "running", "failed"},
+        "preparing": {"preparing", "running", "failed"},
+        "running": {"running", "uploading", "completed", "failed"},
+        "uploading": {"uploading", "completed", "failed"},
+    }
+    is_test_shortcut = current_app.testing and job.status == "queued" and next_status == "completed"
+    if not is_test_shortcut and next_status not in valid_transitions.get(job.status, set()):
+        return jsonify({"message": f"invalid training status transition: {job.status} -> {next_status}"}), 409
     job.status = next_status
     if payload.get("progress_percent") is not None:
         job.progress_percent = int(payload["progress_percent"])
@@ -603,8 +798,13 @@ def update_training_job_status(job_id: str):
         job.error_message = payload["error"]
     if next_status in {"preparing", "running"} and job.started_at is None:
         job.started_at = now_utc()
+    if next_status in ACTIVE_JOB_STATUSES:
+        job.last_heartbeat_at = now_utc()
+        job.lease_expires_at = _lease_deadline()
     if next_status in {"completed", "failed"}:
         job.completed_at = now_utc()
+        job.assignment_token_hash = ""
+        job.lease_expires_at = None
         if job.worker is not None:
             job.worker.current_job_id = None
             job.worker.status = "idle"
@@ -614,14 +814,17 @@ def update_training_job_status(job_id: str):
 
 @training_bp.post("/training/jobs/<job_id>/artifacts")
 def upload_training_artifact(job_id: str):
-    token_error = _require_worker_token()
-    if token_error is not None:
-        body, status = token_error
-        return jsonify(body), status
-
     job = db.session.get(TrainingJob, job_id)
     if job is None:
         return jsonify({"message": "job not found"}), 404
+    token_error = _require_worker_token(job.worker)
+    if token_error is not None:
+        body, status = token_error
+        return jsonify(body), status
+    assignment_error = _assignment_error(job)
+    if assignment_error is not None:
+        body, status = assignment_error
+        return jsonify(body), status
 
     uploaded: FileStorage | None = request.files.get("artifact")
     if uploaded is None or not uploaded.filename:
@@ -629,18 +832,32 @@ def upload_training_artifact(job_id: str):
 
     artifact_type = request.form.get("artifact_type", "other").strip() or "other"
     filename = secure_filename(uploaded.filename) or f"{artifact_type}.bin"
-    output_dir = _artifact_root(job.id)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / filename
-    uploaded.save(output_path)
-
-    artifact = TrainingArtifact(
-        job_id=job.id,
-        artifact_type=artifact_type,
-        filename=filename,
-        storage_path=str(output_path),
-        size_bytes=output_path.stat().st_size,
+    stored = local_backend(current_app.config["STORAGE_ROOT"]).put_stream(
+        f"training/{job.id}/artifacts/{filename}", uploaded.stream
     )
-    db.session.add(artifact)
+    output_path = stored.path
+
+    asset = register_local_asset(
+        current_app.config["STORAGE_ROOT"],
+        output_path,
+        user_id=job.user_id,
+        dataset_id=job.dataset_id,
+        kind="training_artifact",
+        mime_type=uploaded.mimetype or "application/octet-stream",
+        original_filename=filename,
+    )
+    artifact = TrainingArtifact.query.filter_by(job_id=job.id, artifact_type=artifact_type).first()
+    created = artifact is None
+    if artifact is None:
+        artifact = TrainingArtifact(job_id=job.id, artifact_type=artifact_type)
+        db.session.add(artifact)
+    artifact.filename = filename
+    artifact.storage_path = str(output_path)
+    artifact.size_bytes = output_path.stat().st_size
+    artifact.asset = asset
+    job.lease_expires_at = _lease_deadline()
     db.session.commit()
-    return jsonify({"artifact": _build_training_job_payload(job)["artifacts"][-1]}), 201
+    artifact_payload = next(
+        item for item in _build_training_job_payload(job)["artifacts"] if item["id"] == artifact.id
+    )
+    return jsonify({"artifact": artifact_payload}), 201 if created else 200

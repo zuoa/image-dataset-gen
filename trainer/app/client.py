@@ -26,7 +26,11 @@ class BackendClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        return response.json()["worker"]
+        payload = response.json()
+        worker_token = payload.get("workerToken")
+        if worker_token:
+            self.session.headers.update({"X-Training-Worker-Token": str(worker_token)})
+        return payload["worker"]
 
     def heartbeat(self, worker_id: str, status: str, current_job_id: str = "") -> None:
         response = self.session.post(
@@ -43,7 +47,10 @@ class BackendClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        return response.json().get("job")
+        job = response.json().get("job")
+        if job and job.get("assignmentToken"):
+            self.session.headers.update({"X-Assignment-Token": str(job["assignmentToken"])})
+        return job
 
     def poll_inference(self, worker_id: str) -> dict[str, Any] | None:
         response = self.session.post(
@@ -52,7 +59,10 @@ class BackendClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        return response.json().get("test")
+        test_job = response.json().get("test")
+        if test_job and test_job.get("assignmentToken"):
+            self.session.headers.update({"X-Assignment-Token": str(test_job["assignmentToken"])})
+        return test_job
 
     def dataset_download_url(self, job_id: str) -> str:
         return f"{self.base_url}/training/jobs/{job_id}/dataset.zip"

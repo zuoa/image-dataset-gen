@@ -31,6 +31,7 @@ function createDraftProfile(
     baseUrl: base?.baseUrl ?? fallback.baseUrl ?? "",
     model: base?.model ?? fallback.model,
     apiKey: base?.apiKey ?? "",
+    hasApiKey: base?.hasApiKey ?? false,
     concurrency: base?.concurrency ?? fallback.concurrency,
     batchSize: base?.batchSize ?? fallback.batchSize,
     jimengWatermark: base?.jimengWatermark ?? fallback.jimengWatermark,
@@ -117,6 +118,8 @@ export function ModelManagementPage() {
     setDraftProfile((current) => ({
       ...current,
       providerId,
+      apiKey: providerId === current.providerId ? current.apiKey : "",
+      hasApiKey: providerId === current.providerId ? current.hasApiKey : false,
       model: provider?.defaultModel || provider?.models[0] || "",
       concurrency: provider?.recommendConcurrency ?? current.concurrency,
       jimengWatermark: providerId === "jimeng" ? current.jimengWatermark : false,
@@ -136,7 +139,7 @@ export function ModelManagementPage() {
     if (
       !draftProfile.name.trim() ||
       !draftProfile.model.trim() ||
-      !draftProfile.apiKey.trim() ||
+      (!draftProfile.apiKey.trim() && !draftProfile.hasApiKey) ||
       missingBaseUrl
     ) {
       return;
@@ -314,7 +317,7 @@ export function ModelManagementPage() {
               <Input
                 type="password"
                 value={draftProfile.apiKey}
-                placeholder="输入该配置对应的 API Key"
+                placeholder={draftProfile.hasApiKey ? "已安全保存；留空保持不变" : "输入该配置对应的 API Key"}
                 onChange={(event) => setDraftProfile((current) => ({ ...current, apiKey: event.target.value }))}
               />
             </label>
@@ -405,7 +408,7 @@ export function ModelManagementPage() {
                   isLoading ||
                   !draftProfile.name.trim() ||
                   !draftProfile.model.trim() ||
-                  !draftProfile.apiKey.trim() ||
+                  (!draftProfile.apiKey.trim() && !draftProfile.hasApiKey) ||
                   (draftProfile.profileType === "llm" && !(draftProfile.baseUrl ?? "").trim())
                 }
               >

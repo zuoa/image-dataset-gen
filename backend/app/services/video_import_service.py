@@ -13,6 +13,8 @@ from PIL import Image
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
+from app.services.storage_backend import local_backend
+
 
 ALLOWED_VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm",
@@ -67,14 +69,13 @@ def video_target_size_max_dimension(value: str | None) -> int | None:
 
 
 def save_video_import_source(storage_root: str, task_id: str, upload: FileStorage) -> str:
-    source_dir = Path(storage_root) / "import_sources" / task_id
-    source_dir.mkdir(parents=True, exist_ok=True)
     safe_name = secure_filename(upload.filename or "source-video")
     if not safe_name:
         safe_name = "source-video"
-    source_path = source_dir / safe_name
-    upload.save(source_path)
-    return str(source_path.relative_to(storage_root))
+    stored = local_backend(storage_root).put_stream(
+        f"import_sources/{task_id}/{safe_name}", upload.stream
+    )
+    return stored.key
 
 
 def resolve_video_import_source(storage_root: str, relative_path: str) -> Path:

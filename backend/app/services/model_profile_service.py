@@ -107,6 +107,7 @@ def _resolved_profile_api_key(profile: ModelProfile) -> str:
 
 
 def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
+    has_api_key = bool(_resolved_profile_api_key(profile))
     return {
         "id": profile.id,
         "profileType": profile.profile_type,
@@ -114,7 +115,9 @@ def build_model_profile_payload(profile: ModelProfile) -> dict[str, Any]:
         "providerId": profile.provider_id,
         "baseUrl": profile.base_url,
         "model": profile.model,
-        "apiKey": _resolved_profile_api_key(profile),
+        # Secrets are write-only. Workers resolve and decrypt them server-side.
+        "apiKey": "",
+        "hasApiKey": has_api_key,
         "concurrency": profile.concurrency,
         "batchSize": profile.batch_size,
         "jimengWatermark": profile.jimeng_watermark,

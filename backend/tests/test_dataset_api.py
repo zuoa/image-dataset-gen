@@ -4,13 +4,15 @@ import zipfile
 from unittest.mock import patch
 from types import SimpleNamespace
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from PIL import Image
+import pytest
 from sqlalchemy import event
 
 from app import _backfill_detection_categories, create_app
 from app.config import TestConfig
 from app.extensions import db
-from app.models import Dataset, DatasetImage, DatasetTask
+from app.models import Dataset, DatasetImage, DatasetTask, TaskItem
 from app.services.annotation_storage import load_annotation_result, save_annotation_result
 from app.services.image_storage import existing_generated_image, save_generated_image
 
@@ -67,6 +69,24 @@ def _create_dataset(client, headers: dict[str, str]) -> str:
     return response.get_json()["dataset"]["id"]
 
 
+def test_create_dataset_rejects_duplicate_normalized_categories(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-duplicate-categories")
+
+    response = client.post(
+        "/api/v1/datasets",
+        headers=headers,
+        json={"name": "duplicate category dataset", "categories": ["cat", " cat "]},
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["errors"]["categories"] == ["category names must be unique"]
+
+
 def _create_generation_task(client, dataset_id: str, headers: dict[str, str]) -> str:
     response = client.post(
         f"/api/v1/datasets/{dataset_id}/tasks/generation",
@@ -91,6 +111,107 @@ def _create_generation_task(client, dataset_id: str, headers: dict[str, str]) ->
     )
     assert response.status_code == 201
     return response.get_json()["task"]["id"]
+
+
+def test_dataset_image_cursor_pages_without_duplicates(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-cursor")
+    dataset_id = _create_dataset(client, headers)
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        for ordinal in range(1, 6):
+            db.session.add(
+                DatasetImage(
+                    dataset_id=dataset_id,
+                    source_type="import",
+                    source_ordinal=ordinal,
+                    ordinal=ordinal,
+                    status="uploaded",
+                    seed=ordinal,
+                    prompt_text=f"image {ordinal}",
+                    diversity_vars={},
+                    preview_svg="",
+                    selected=True,
+                    annotation_status="pending",
+                )
+            )
+        dataset.image_count = 5
+        dataset.selected_count = 5
+        db.session.commit()
+
+    first = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_limit=2", headers=headers
+    ).get_json()["dataset"]
+    assert [image["ordinal"] for image in first["images"]] == [1, 2]
+    assert first["imagesNextCursor"]
+
+    second = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_limit=2&images_cursor={first['imagesNextCursor']}",
+        headers=headers,
+    ).get_json()["dataset"]
+    assert [image["ordinal"] for image in second["images"]] == [3, 4]
+    assert {image["id"] for image in first["images"]}.isdisjoint(
+        image["id"] for image in second["images"]
+    )
+
+
+def test_dataset_list_supports_keyset_cursor(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-list-cursor")
+    for index in range(3):
+        response = client.post(
+            "/api/v1/datasets",
+            headers=headers,
+            json={"name": f"dataset number {index}", "categories": ["object"]},
+        )
+        assert response.status_code == 201
+
+    first = client.get("/api/v1/datasets?limit=2", headers=headers).get_json()
+    assert len(first["datasets"]) == 2
+    assert first["nextCursor"]
+    second = client.get(
+        f"/api/v1/datasets?limit=2&cursor={first['nextCursor']}", headers=headers
+    ).get_json()
+    assert len(second["datasets"]) == 1
+    assert {item["id"] for item in first["datasets"]}.isdisjoint(
+        item["id"] for item in second["datasets"]
+    )
+
+
+def test_create_dataset_idempotency_key_replays_original_response(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = {
+        **_auth_headers(client, "dataset-idempotency"),
+        "Idempotency-Key": "create-dataset-1",
+    }
+    request_body = {"name": "idempotent dataset", "categories": ["object"]}
+    first = client.post("/api/v1/datasets", headers=headers, json=request_body)
+    second = client.post("/api/v1/datasets", headers=headers, json=request_body)
+    assert first.status_code == second.status_code == 201
+    assert first.get_json()["dataset"]["id"] == second.get_json()["dataset"]["id"]
+
+    conflict = client.post(
+        "/api/v1/datasets",
+        headers=headers,
+        json={"name": "different dataset", "categories": ["object"]},
+    )
+    assert conflict.status_code == 409
+
+    with app.app_context():
+        assert Dataset.query.filter_by(name="idempotent dataset").count() == 1
 
 
 def _fetch_images(client, dataset_id: str, headers: dict[str, str]) -> list[dict]:
@@ -471,6 +592,11 @@ def test_generation_task_writes_images_into_dataset_pool(tmp_path: Path):
     dataset_id = _create_dataset(client, headers)
     task_id = _create_generation_task(client, dataset_id, headers)
 
+    with app.app_context():
+        stored_task = db.session.get(DatasetTask, task_id)
+        assert "api_key" not in stored_task.config_json
+        assert stored_task.api_key_encrypted
+
     with patch(
         "app.worker_tasks.generate_gemini_image",
         return_value={"image_bytes": _png_bytes(), "mime_type": "image/png", "prompt": "ok"},
@@ -661,6 +787,76 @@ def test_delete_single_dataset_image_updates_pool_stats_and_assets(tmp_path: Pat
     assert all(item["id"] != image["id"] for item in _fetch_images(client, dataset_id, headers))
     assert not image_path.exists()
     assert not annotation_path.exists()
+
+
+def test_annotation_update_rejects_unknown_category_without_writing_revision(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-unknown-annotation-category")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample.png", _png_bytes())
+    archive_buffer.seek(0)
+    imported = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 200
+    image = _fetch_images(client, dataset_id, headers)[0]
+
+    response = client.patch(
+        f"/api/v1/datasets/{dataset_id}/images/{image['id']}/annotations",
+        headers=headers,
+        json={
+            "detections": [
+                {"category": "vehicle", "confidence": 0.8, "bbox": [0.5, 0.5, 0.2, 0.2]}
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["unknownCategories"] == ["vehicle"]
+    assert not (Path(tmp_path) / "annotations" / dataset_id / f"{image['id']}.json").exists()
+
+
+def test_generation_soft_limit_releases_lease_for_resume(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-generation-soft-limit")
+    dataset_id = _create_dataset(client, headers)
+    task_id = _create_generation_task(client, dataset_id, headers)
+
+    with app.app_context():
+        task = db.session.get(DatasetTask, task_id)
+        task.status = "running"
+        db.session.commit()
+
+        from app.worker_tasks import generate_dataset_task_images
+
+        with patch(
+            "app.worker_tasks._generate_dataset_asset",
+            side_effect=SoftTimeLimitExceeded(),
+        ), pytest.raises(SoftTimeLimitExceeded):
+            generate_dataset_task_images.run(task_id)
+
+        db.session.expire_all()
+        task = db.session.get(DatasetTask, task_id)
+        item = TaskItem.query.filter_by(task_id=task_id, item_index=1).one()
+        assert task.status == "running"
+        assert task.completed_at is None
+        assert item.status == "queued"
+        assert item.lease_expires_at is None
+        assert item.last_error == "soft time limit reached"
 
 
 def test_delete_multiple_dataset_images_clears_pool(tmp_path: Path):

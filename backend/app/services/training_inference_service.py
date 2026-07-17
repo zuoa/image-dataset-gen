@@ -12,6 +12,7 @@ from app.extensions import db
 from app.models import TrainingArtifact, TrainingInferenceJob, TrainingJob
 from app.services.dataset_service import now_utc
 from app.services.image_storage import normalize_uploaded_image, preview_data_url
+from app.services.storage_backend import local_backend, register_local_asset
 
 
 class TrainingInferenceError(RuntimeError):
@@ -54,10 +55,22 @@ def create_training_inference_job(
     db.session.flush()
 
     extension = "png" if test_job.input_mime_type == "image/png" else "jpg"
-    input_path = training_inference_root(job.id, test_job.id) / f"input.{extension}"
-    input_path.parent.mkdir(parents=True, exist_ok=True)
-    input_path.write_bytes(bytes(normalized["image_bytes"]))
+    input_path = local_backend(current_app.config["STORAGE_ROOT"]).put_bytes(
+        f"training/{job.id}/tests/{test_job.id}/input.{extension}",
+        bytes(normalized["image_bytes"]),
+    ).path
     test_job.input_storage_path = str(input_path)
+    test_job.input_asset = register_local_asset(
+        current_app.config["STORAGE_ROOT"],
+        input_path,
+        user_id=job.user_id,
+        dataset_id=job.dataset_id,
+        kind="inference_input",
+        mime_type=test_job.input_mime_type,
+        original_filename=test_job.input_filename,
+        width=test_job.input_width,
+        height=test_job.input_height,
+    )
     return test_job
 
 
@@ -86,14 +99,26 @@ def complete_training_inference_job(test_job: TrainingInferenceJob, detections: 
         normalized_detections,
     )
     extension = "png" if annotated_mime_type == "image/png" else "jpg"
-    output_path = training_inference_root(test_job.training_job_id, test_job.id) / f"result.{extension}"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(annotated_bytes)
+    output_path = local_backend(current_app.config["STORAGE_ROOT"]).put_bytes(
+        f"training/{test_job.training_job_id}/tests/{test_job.id}/result.{extension}",
+        annotated_bytes,
+    ).path
 
     test_job.status = "completed"
     test_job.detections_json = normalized_detections
     test_job.result_mime_type = annotated_mime_type
     test_job.result_storage_path = str(output_path)
+    test_job.result_asset = register_local_asset(
+        current_app.config["STORAGE_ROOT"],
+        output_path,
+        user_id=test_job.user_id,
+        dataset_id=test_job.dataset_id,
+        kind="inference_result",
+        mime_type=annotated_mime_type,
+        original_filename=f"result.{extension}",
+        width=test_job.input_width,
+        height=test_job.input_height,
+    )
     test_job.error_message = ""
     test_job.completed_at = now_utc()
 

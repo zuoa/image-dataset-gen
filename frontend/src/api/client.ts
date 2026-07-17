@@ -1,10 +1,51 @@
-import { notifyAuthExpired, sessionExpiredMessage } from "../lib/session";
+import { notifyAuthExpired, notifyAuthTokenRefreshed, sessionExpiredMessage } from "../lib/session";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 type RequestOptions = RequestInit & {
   token?: string | null;
+  skipAuthRefresh?: boolean;
 };
+
+let accessRefreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (accessRefreshPromise) return accessRefreshPromise;
+  accessRefreshPromise = fetch(buildApiUrl("/auth/refresh"), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  })
+    .then(async (response) => {
+      if (!response.ok) return null;
+      const payload = (await response.json()) as { token?: string };
+      if (!payload.token) return null;
+      notifyAuthTokenRefreshed(payload.token);
+      return payload.token;
+    })
+    .catch(() => null)
+    .finally(() => {
+      accessRefreshPromise = null;
+    });
+  return accessRefreshPromise;
+}
+
+async function fetchWithAuthRefresh(path: string, options: RequestOptions, headers: Headers) {
+  const { token, skipAuthRefresh, ...requestOptions } = options;
+  const execute = () => fetch(buildApiUrl(path), {
+    ...requestOptions,
+    credentials: requestOptions.credentials ?? "include",
+    headers,
+  });
+  let response = await execute();
+  if (response.status !== 401 || !token || skipAuthRefresh) return response;
+
+  const nextToken = await refreshAccessToken();
+  if (!nextToken) return response;
+  headers.set("Authorization", `Bearer ${nextToken}`);
+  response = await execute();
+  return response;
+}
 
 async function parseErrorMessage(response: Response) {
   const errorText = await response.text();
@@ -27,10 +68,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(buildApiUrl(path), { ...options, headers });
+  const response = await fetchWithAuthRefresh(path, options, headers);
   if (!response.ok) {
     const errorMessage = await parseErrorMessage(response);
-    if (response.status === 401) {
+    if (response.status === 401 && !options.skipAuthRefresh) {
       notifyAuthExpired(errorMessage || sessionExpiredMessage);
       throw new Error(errorMessage || sessionExpiredMessage);
     }
@@ -49,15 +90,14 @@ export async function apiRequestFormData<T>(
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(buildApiUrl(path), {
+  const response = await fetchWithAuthRefresh(path, {
     ...options,
     method: options.method ?? "POST",
     body,
-    headers,
-  });
+  }, headers);
   if (!response.ok) {
     const errorMessage = await parseErrorMessage(response);
-    if (response.status === 401) {
+    if (response.status === 401 && !options.skipAuthRefresh) {
       notifyAuthExpired(errorMessage || sessionExpiredMessage);
       throw new Error(errorMessage || sessionExpiredMessage);
     }
@@ -95,11 +135,15 @@ export function resolveApiUrl(path: string) {
 }
 
 export async function downloadWithToken(path: string, token: string, filename: string) {
-  const response = await fetch(resolveApiUrl(path), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  const headers = new Headers({ Authorization: `Bearer ${token}` });
+  let response = await fetch(resolveApiUrl(path), { headers, credentials: "include" });
+  if (response.status === 401) {
+    const nextToken = await refreshAccessToken();
+    if (nextToken) {
+      headers.set("Authorization", `Bearer ${nextToken}`);
+      response = await fetch(resolveApiUrl(path), { headers, credentials: "include" });
+    }
+  }
   if (!response.ok) {
     const errorMessage = await parseErrorMessage(response);
     if (response.status === 401) {
@@ -121,11 +165,15 @@ export async function downloadWithToken(path: string, token: string, filename: s
 }
 
 export async function fetchTextWithToken(path: string, token: string) {
-  const response = await fetch(resolveApiUrl(path), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  const headers = new Headers({ Authorization: `Bearer ${token}` });
+  let response = await fetch(resolveApiUrl(path), { headers, credentials: "include" });
+  if (response.status === 401) {
+    const nextToken = await refreshAccessToken();
+    if (nextToken) {
+      headers.set("Authorization", `Bearer ${nextToken}`);
+      response = await fetch(resolveApiUrl(path), { headers, credentials: "include" });
+    }
+  }
   if (!response.ok) {
     const errorMessage = await parseErrorMessage(response);
     if (response.status === 401) {

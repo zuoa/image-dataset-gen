@@ -74,6 +74,7 @@ export type ModelProfile = {
   baseUrl?: string | null;
   model: string;
   apiKey: string;
+  hasApiKey?: boolean;
   concurrency: number;
   batchSize: number;
   jimengWatermark: boolean;
@@ -305,6 +306,7 @@ export type Dataset = {
   updatedAt?: string | null;
   images: DatasetImage[];
   imagesTotal?: number;
+  imagesNextCursor?: string | null;
   imageClassCounts?: Record<string, number>;
   imageSplitCounts?: Record<"train" | "val" | "test" | "unselected", number>;
   imageAnnotationCounts?: { annotated: number; unannotated: number };

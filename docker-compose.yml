@@ -1,15 +1,31 @@
 x-backend-env: &backend-env
-  SECRET_KEY: ${SECRET_KEY:-change-me-please-with-at-least-32-bytes}
-  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-too-with-at-least-32-bytes}
-  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=}
-  DEMO_USERNAME: ${DEMO_USERNAME:-dataset}
-  DEMO_PASSWORD: ${DEMO_PASSWORD:-Dataset123!}
+  APP_ENV: production
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4173}
-  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dataset_gen:dataset_gen@postgres:5432/dataset_gen}
-  AUTO_CREATE_SCHEMA: ${AUTO_CREATE_SCHEMA:-true}
-  STARTUP_MAINTENANCE_ASYNC: ${STARTUP_MAINTENANCE_ASYNC:-true}
-  STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dataset_gen}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dataset_gen}
+  AUTO_CREATE_SCHEMA: "false"
+  BOOTSTRAP_DEMO_USER: "false"
+  REGISTRATION_MODE: ${REGISTRATION_MODE:-disabled}
+  REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-false}
+  REFRESH_ROTATION_GRACE_SECONDS: ${REFRESH_ROTATION_GRACE_SECONDS:-10}
+  STORAGE_ROOT: /app/storage
+  STORAGE_BACKEND: local
+  USE_X_ACCEL_REDIRECT: "true"
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
   MAX_IMPORTED_IMAGES: ${MAX_IMPORTED_IMAGES:-2000}
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  TRAINING_WORKER_TOKEN: ${TRAINING_WORKER_TOKEN:?set TRAINING_WORKER_TOKEN in .env}
+  TRAINING_DEFAULT_MODEL: ${TRAINING_DEFAULT_MODEL:-yolov8n.pt}
+  TRAINING_JOB_LEASE_SECONDS: ${TRAINING_JOB_LEASE_SECONDS:-120}
+  TASK_ITEM_LEASE_SECONDS: ${TASK_ITEM_LEASE_SECONDS:-900}
+  ASSET_GC_RETENTION_HOURS: ${ASSET_GC_RETENTION_HOURS:-24}
+  IDEMPOTENCY_TTL_HOURS: ${IDEMPOTENCY_TTL_HOURS:-24}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+  DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+  DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-60000}
   VL_ANNOTATOR_PROVIDER: ${VL_ANNOTATOR_PROVIDER:-gemini}
   VL_ANNOTATOR_MODEL: ${VL_ANNOTATOR_MODEL:-gemini-2.0-flash}
   VL_ANNOTATOR_API_KEY: ${VL_ANNOTATOR_API_KEY:-}
@@ -24,9 +40,21 @@ x-backend-env: &backend-env
   OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
   OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-https://api.deepseek.com/v1}
   OPENAI_COMPAT_MODEL: ${OPENAI_COMPAT_MODEL:-deepseek-chat}
-  IMAGE_BASE_URL: ${IMAGE_BASE_URL:-http://localhost:4173/images}
-  TRAINING_WORKER_TOKEN: ${TRAINING_WORKER_TOKEN:-change-me-training-worker-token}
-  TRAINING_DEFAULT_MODEL: ${TRAINING_DEFAULT_MODEL:-yolov8n.pt}
+
+x-backend-service: &backend-service
+  image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
+  build:
+    context: ./backend
+  init: true
+  restart: unless-stopped
+  environment: *backend-env
+  volumes:
+    - backend_storage:/app/storage
+  logging:
+    driver: json-file
+    options:
+      max-size: 20m
+      max-file: "5"
 
 services:
   postgres:
@@ -35,78 +63,101 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-dataset_gen}
       POSTGRES_USER: ${POSTGRES_USER:-dataset_gen}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataset_gen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+    stop_grace_period: 60s
+    shm_size: 256mb
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
-      retries: 3
+      retries: 10
+    volumes:
+      - redis_data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
 
-  backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
-    build:
-      context: ./backend
-    init: true
-    restart: unless-stopped
-    environment: *backend-env
+  migrate:
+    <<: *backend-service
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  backend:
+    <<: *backend-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/v1/health")'
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live')"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
-    volumes:
-      - backend_storage:/app/storage
-      - generated_images:/app/storage/images
 
-  celery-worker:
-    image: ${BACKEND_IMAGE:-ghcr.io/zuoa/dataset-gen-backend:latest}
-    build:
-      context: ./backend
-    init: true
-    restart: unless-stopped
-    environment:
-      <<: *backend-env
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+  outbox-dispatcher:
+    <<: *backend-service
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-      backend:
+    command: ["python", "run_outbox.py"]
+
+  generation-worker:
+    <<: *backend-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
-    volumes:
-      - backend_storage:/app/storage
-      - generated_images:/app/storage/images
-    command:
-      - celery
-      - -A
-      - app.celery_worker
-      - worker
-      - --concurrency=1
-      - --pool=solo
-      - --loglevel=info
+    command: ["celery", "-A", "app.celery_worker", "worker", "-Q", "generation", "--concurrency=2", "--loglevel=info"]
+
+  media-worker:
+    <<: *backend-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.celery_worker", "worker", "-Q", "media", "--concurrency=1", "--loglevel=info"]
+
+  maintenance:
+    <<: *backend-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "run_maintenance.py"]
 
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/zuoa/dataset-gen-frontend:latest}
@@ -127,9 +178,14 @@ services:
     ports:
       - "${FRONTEND_PORT:-4173}:80"
     volumes:
-      - generated_images:/usr/share/nginx/html/images:ro
+      - backend_storage:/srv/dataset-storage:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
 
 volumes:
   postgres_data:
+  redis_data:
   backend_storage:
-  generated_images:

@@ -1,214 +1,100 @@
 # Dataset Forge
 
-基于 Flask + PostgreSQL + React + Vite 的图片训练数据集生成平台骨架。当前版本覆盖：
+面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。
 
-- Token 鉴权与演示账号
-- 数据集管理与批次化生成
-- Prompt 预览与多样性变体生成
-- 数据集样本池、导入、增强、自动标注与导出
-- Docker / docker-compose / GitHub Actions CI
+详细设计见 [架构说明](docs/architecture.md)，部署、备份和故障处理见 [运维手册](docs/operations.md)。
 
-## Monorepo 结构
+## 服务结构
 
 ```text
-backend/    Flask REST API
-frontend/   React + Vite UI
-annotator/  Flask annotation microservice
-trainer/    YOLOv8 training worker service
+frontend/   React 18 + TypeScript + Vite；Nginx 统一入口和受保护文件转发
+backend/    Flask API、SQLAlchemy 领域模型、Alembic 迁移、Celery worker
+trainer/    可部署到 GPU 主机的 YOLOv8 worker
+annotator/  旧的 mock 标注服务，仅保留兼容测试，不进入生产 Compose
 ```
 
-## 本地开发
+生产数据只保存在 PostgreSQL 和 `backend_storage` 中。Redis 开启 AOF，承载 Celery broker；数据库事务通过 Outbox 投递任务，因此 Redis 暂时不可用时不会丢失已提交的业务任务。
 
-1. 复制环境变量：
+## 启动
+
+1. 生成配置：
 
 ```bash
 cp .env.example .env
+openssl rand -hex 32       # 分别填写 SECRET_KEY、JWT_SECRET_KEY、TRAINING_WORKER_TOKEN
+openssl rand -base64 32    # 填写 ENCRYPTION_KEY
 ```
 
-2. 使用 Docker Compose 启动：
+2. 编辑 `.env`，至少替换所有 `replace-with-...` 值，然后启动：
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-3. 打开：
+Compose 会先运行 `alembic upgrade head`，迁移成功后才启动 API、Outbox dispatcher、生成 worker、媒体 worker、维护任务和前端。应用不会在启动时执行 `create_all` 或隐式 schema 修补。
 
-- 前端：`http://localhost:4173`
-- 后端：`http://localhost:8000/api/v1/health`
-
-数据库说明：
-
-- Docker Compose 默认启动 `postgres:16-alpine`，数据持久化在 `postgres_data` volume
-- 默认连接串为 `postgresql+psycopg://dataset_gen:dataset_gen@postgres:5432/dataset_gen`
-- 本地直接运行后端时，默认连接 `postgresql+psycopg://dataset_gen:dataset_gen@localhost:5432/dataset_gen`
-- 可通过 `DATABASE_URL` 覆盖数据库连接；测试环境仍使用内存 SQLite，便于快速运行 pytest
-
-## 演示账号
-
-- 账号：`dataset`
-- 密码：`Dataset123!`
-
-JWT 说明：
-
-- Access token 默认有效期为 7 天
-- 可通过 `JWT_ACCESS_TOKEN_EXPIRES_DAYS` 覆盖
-
-## 后端说明
-
-- 使用应用工厂模式与 SQLAlchemy 模型层
-- Token 鉴权基于 JWT
-- API Key 使用 AES-GCM 加密存储
-- `gemini` provider 已接入 Google 官方 Imagen REST 适配层，调用失败会直接暂停生成批次并返回错误
-- `jimeng` provider 已接入火山引擎官方 Seedream 图片生成接口，默认模型为 `doubao-seedream-3-0-t2i-250415`
-- 导入上限默认 `MAX_IMPORTED_IMAGES=2000`，本地视频导入支持按帧间隔抽帧生成底库图片，Roboflow 导入支持下载 YOLOv8 数据集并导入检测框标注
-- 标注链路已拆成独立微服务，后续可直接替换为真实 YOLO 推理
-
-主要 REST API：
-
-- `POST /api/v1/auth/login`
-- `GET /api/v1/auth/me`
-- `GET /api/v1/system/providers`
-- `GET /api/v1/system/dashboard`
-- `GET /api/v1/datasets`
-- `POST /api/v1/datasets`
-- `GET /api/v1/datasets/:id`
-- `PATCH /api/v1/datasets/:id`
-- `DELETE /api/v1/datasets/:id`
-- `POST /api/v1/datasets/generation/prompt-preview`
-- `POST /api/v1/datasets/assist-subject`
-- `POST /api/v1/datasets/:id/tasks/generation`
-- `GET /api/v1/datasets/:id/tasks/:taskId`
-- `POST /api/v1/datasets/:id/tasks/:taskId/start`
-- `POST /api/v1/datasets/:id/tasks/:taskId/retry`
-- `POST /api/v1/datasets/:id/tasks/import`
-- `POST /api/v1/datasets/:id/tasks/import/video`
-- `POST /api/v1/datasets/:id/tasks/import/roboflow`
-- `POST /api/v1/datasets/:id/tasks/augmentation`
-- `PATCH /api/v1/datasets/:id/selection`
-- `PATCH /api/v1/datasets/:id/images/:imageId/annotations`
-- `POST /api/v1/datasets/:id/annotate`
-- `POST /api/v1/datasets/:id/export`
-- `GET /api/v1/datasets/:id/exports/:version/download`
-- `POST /api/v1/datasets/:id/training-jobs`
-- `GET /api/v1/datasets/:id/training-jobs`
-- `GET /api/v1/datasets/:id/training-jobs/:jobId`
-- `GET /api/v1/datasets/:id/training-jobs/:jobId/artifacts/:artifactId/download`
-- `POST /api/v1/datasets/:id/training-jobs/:jobId/test`
-- `GET /api/v1/datasets/:id/training-jobs/:jobId/tests/:testId`
-
-训练 worker API 使用 `X-Training-Worker-Token: <TRAINING_WORKER_TOKEN>`：
-
-- `POST /api/v1/training/workers/register`
-- `POST /api/v1/training/workers/:workerId/heartbeat`
-- `POST /api/v1/training/workers/:workerId/poll`
-- `POST /api/v1/training/workers/:workerId/inference/poll`
-- `GET /api/v1/training/jobs/:jobId/dataset.zip`
-- `PATCH /api/v1/training/jobs/:jobId/status`
-- `POST /api/v1/training/jobs/:jobId/artifacts`
-- `GET /api/v1/training/inference-jobs/:testId/model`
-- `GET /api/v1/training/inference-jobs/:testId/image`
-- `PATCH /api/v1/training/workers/:workerId/inference-jobs/:testId/status`
-
-Gemini 生成说明：
-
-- 默认模型：`imagen-4.0-generate-001`
-- 请求走官方 Gemini Imagen `:predict` REST 接口
-- 当前按生成批次轮询进度触发逐张生成；若 API 不可用或 provider 未实现，会暂停批次而不是回退
-
-Jimeng 生成说明：
-
-- 当前实现基于火山引擎官方图片生成 API 文档接入
-- 默认 Base URL：`https://operator.las.cn-beijing.volces.com/api/v1`
-- 默认模型：`doubao-seedream-3-0-t2i-250415`
-- 请求使用 `Authorization: Bearer <API_KEY>`，返回格式使用 `b64_json`
-
-Roboflow 导入说明：
-
-- 前端导入弹窗手动填写 Roboflow API Key、workspace、project 和 version；API Key 只随本次请求发送，不保存到后端配置或数据库
-- `MAX_IMPORTED_IMAGES` 控制单次本地 ZIP、视频抽帧或 Roboflow 导入上限，默认 `2000`
-- 当前固定下载 `yolov8` 格式，支持 object detection 的 YOLO 标签；classification、segmentation 和 oriented box 标注不在第一版范围内
-
-## 前端说明
-
-- React 18 + TypeScript + Vite
-- Zustand 管理认证与模型配置
-- 响应式黑白灰工作台风格
-- 数据集创建页支持先定义长期信息，再在详情页内管理批次
-- 生成批次页支持实时 Prompt 预览
-- 数据集详情页统一串联导入、增强、标注、导出与批次追踪
-- 数据集详情页通过“训练”按钮打开 YOLOv8 检测训练面板，支持创建训练作业、查看进度、指标、下载模型产物，以及上传单张图片测试模型并查看带框结果图
-- 下载动作通过带 token 的 blob 流方式完成，适配跨端口部署
-
-## 训练 worker
-
-第一版训练链路面向 YOLOv8 detection：
-
-1. 前端在数据集详情页创建训练作业。
-2. 后端生成 YOLO 数据集 ZIP，并把训练作业置为 `queued`。
-3. GPU 服务器上的 `trainer` 服务用共享 `TRAINING_WORKER_TOKEN` 注册到后端。
-4. worker 轮询任务，下载 ZIP，执行 Ultralytics 训练。
-5. worker 上传 `best.pt`、`last.pt`、`results.csv` 和 `metrics.json`，后端统一提供鉴权下载。
-6. 页面上传图片测试训练结果时，后端创建测试任务；已注册的 trainer worker 继续通过轮询领取测试任务，下载模型产物和测试图片，执行推理后上传检测结果，后端渲染带框结果图。
-
-训练作业默认使用 `epochs=200`、`patience=50`、`dropout=0.1`、`mixup=0.15`、`weight_decay=0.001`；可在创建作业时用 `classes` 选择类别索引，worker 会在训练时传给 Ultralytics 做类别过滤。trainer 默认把 Ultralytics dataloader `workers` 设为 `0`，降低大数据集训练时的文件句柄占用；如需提高吞吐，可在确认 `nofile` 上限足够后设置 `TRAINER_YOLO_WORKERS=2` 或更高。
-
-训练 worker 作为独立 GPU 服务部署，不再放在主 `docker-compose.yml` 的 profile 中。镜像由单独的 GitHub Actions workflow 发布到 GHCR：
-
-- `ghcr.io/<owner>/dataset-gen-trainer:latest`
-- `ghcr.io/<owner>/dataset-gen-trainer:sha-<commit>`
-
-本地或远端 GPU 服务器启动训练 worker：
+3. 创建首个管理员：
 
 ```bash
-TRAINER_BACKEND_URL=http://<backend-host>/api/v1 \
-TRAINER_WORKER_TOKEN=<与后端 TRAINING_WORKER_TOKEN 一致> \
-TRAINER_WORKER_ID=<稳定 worker id> \
-docker compose -f docker-compose.trainer.yml up -d
+docker compose run --rm backend flask --app manage.py create-admin \
+  --username your-admin --password 'replace-with-a-strong-password'
 ```
 
-跨服务器部署时，在 GPU 服务器安装 NVIDIA Container Toolkit，并配置：
+4. 打开 `http://localhost:4173`。生产 HTTPS 部署必须设置 `FRONTEND_URL=https://...` 和 `REFRESH_COOKIE_SECURE=true`。
 
-- `TRAINER_IMAGE=ghcr.io/<owner>/dataset-gen-trainer:latest`
-- `TRAINER_BACKEND_URL=https://<platform-host>/api/v1`
-- `TRAINER_WORKER_TOKEN=<与后端 TRAINING_WORKER_TOKEN 一致>`
-- `TRAINER_WORKER_ID=<稳定 worker id>`
-- `TRAINER_WORKER_NAME=<展示名>`
-- `TRAINER_WORK_ROOT=/app/work`
-- `TRAINER_MODEL_DIR=/app/models`
-- `TRAINER_MODEL_BASE_URL=<YOLO 权重镜像目录，可选>`
-- `TRAINER_MODEL_URL_TEMPLATE=<YOLO 权重下载 URL 模板，可选>`
-- `TRAINER_YOLO_AMP=false`
-- `TRAINER_YOLO_WORKERS=0`
-- `TRAINER_NOFILE_LIMIT=65535`
-
-`docker-compose.trainer.yml` 会持久化 `/app/work` 和 `/app/models`，后者用于缓存 YOLO 权重；如果模型文件已经存在，会优先复用本地文件。
-
-如果训练失败并看到 `[Errno 24] Too many open files`，请使用新版 `docker-compose.trainer.yml` 重建 worker 容器，使 `ulimits.nofile` 生效：
+## 开发与测试
 
 ```bash
-docker compose -f docker-compose.trainer.yml up -d --force-recreate trainer
+cd backend && pip install -r requirements.txt
+cd backend && PYTHONPATH=. pytest
+cd annotator && PYTHONPATH=. pytest
+cd trainer && PYTHONPATH=. pytest
+cd frontend && npm ci && npm run build
 ```
 
-在中国内地 GPU 服务器上，如果 GitHub release 下载不稳定，可以把 `yolov8n.pt`、`yolov8s.pt` 等权重同步到可信的内网或对象存储镜像，然后配置：
+测试使用 SQLite 内存库以获得快速反馈；CI 额外使用真实 PostgreSQL 执行 Alembic upgrade、`alembic check`、downgrade 和再次 upgrade。
+
+## 数据库与迁移
+
+- 生产数据库固定使用 PostgreSQL；UUID、JSONB、数值精度、外键、唯一约束和检查约束由数据库保证。
+- 当前 `20260717_01` 同时支持空库初始化和旧 Compose PostgreSQL 库接管：若检测到由 `AUTO_CREATE_SCHEMA` 创建、但没有 `alembic_version` 的旧表，会先转换 UUID/JSONB/金额字段，补齐新列和表，回填计数器与分类，再由 Alembic 记录版本。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
+- 修改模型后必须生成并审阅迁移，再运行：
 
 ```bash
-TRAINER_MODEL_BASE_URL=https://<mirror-host>/ultralytics-assets/v8.3.0
+cd backend
+alembic upgrade head
+alembic check
 ```
 
-worker 会从 `${TRAINER_MODEL_BASE_URL}/yolov8s.pt` 下载并缓存到 `/app/models/yolov8s.pt`。如果使用的是 GitHub 代理类服务，也可以配置模板：
+## 认证
+
+- Access token 默认 15 分钟，只保存在前端内存中。
+- 刷新令牌是可撤销、轮换的 opaque token，仅存于 `HttpOnly`、`SameSite=Lax` Cookie；同一客户端的并发轮换有默认 10 秒宽限期，宽限期外检测到旧 token 复用会撤销整个 session family。
+- 生产默认 `REGISTRATION_MODE=disabled`，首个账户通过 CLI 创建。
+- Nginx 对登录和注册接口限流。外部部署还应在 CDN/WAF 层增加 IP 与账号维度规则。
+
+## 文件与任务
+
+- 所有图片、视频源、导出包、训练产物和推理输入都登记在 `assets` 表，并通过原子临时文件替换写入。
+- 前端不能直接访问存储 volume；鉴权通过后，Flask 返回 `X-Accel-Redirect`，由 Nginx 内部 location 发送文件。
+- 删除图片先写 Asset tombstone，维护服务在保留期后清理文件。
+- 生成、增强和视频任务使用 TaskItem 租约确保单执行者；软时限退出会释放租约并由 Celery 重排队续跑。训练/推理任务使用数据库原子领取、assignment token 和可续期租约。
+- 关键创建接口支持 `Idempotency-Key`；同一个 key 与同一请求会回放首个结果，key 被不同请求复用会返回 409。
+
+## 监控端点
+
+- `GET /api/v1/health/live`：进程存活
+- `GET /api/v1/health/ready`：PostgreSQL、Redis、存储就绪
+- `GET /metrics`：Prometheus 指标（仅后端容器网络暴露）
+
+所有 API 响应包含 `X-Request-ID`，应用日志为 JSON。Docker 日志默认限制为 20 MB × 5 个文件。
+
+## 备份
 
 ```bash
-TRAINER_MODEL_URL_TEMPLATE='https://<proxy-host>/{github_url}'
+BACKUP_ROOT=/safe/off-host/path scripts/backup.sh
+scripts/verify-backup.sh /safe/off-host/path/<timestamp>
+RESTORE_CONFIRM=dataset-gen scripts/restore.sh /safe/off-host/path/<timestamp>
 ```
 
-模板变量包括 `{filename}`、`{release}` 和 `{github_url}`；默认 release 是 `v8.3.0`，可用 `TRAINER_MODEL_ASSETS_RELEASE` 覆盖。
-
-Ultralytics 在 `amp=True` 时会运行 AMP 自检，并可能额外下载 `yolo11n.pt`。trainer 默认设置 `TRAINER_YOLO_AMP=false`，避免这类隐藏 GitHub 下载；如果要启用 AMP，请先把自检权重也放进模型缓存目录，或配置上面的镜像地址。
-
-如果上传测试图片后失败并看到 `_pickle.UnpicklingError: could not find MARK`，通常不是图片内容问题，而是 worker 下载到的 `.pt` 模型产物不是有效的 PyTorch 权重。请检查测试任务选择的是 `best.pt`/`last.pt`，确认模型产物文件不是 HTML/JSON 错误页或损坏文件，并确认 `TRAINER_BACKEND_URL` 指向后端 API 根地址，例如 `https://<platform-host>/api/v1`。新版 worker 会在下载模型和图片后先校验格式，并把 `content_type`、大小和文件前缀写入失败信息，方便定位反向代理或产物损坏问题。
-
-## 已知边界
-
-- WebSocket、Bull、真实图像生成 API 尚未接入
-- 数据导出会生成真实 ZIP；只有在数据集样本池中确实存在图片文件后才会被打包
-- 当前使用 `AUTO_CREATE_SCHEMA=true` 自动建表，生产环境建议切换为 Alembic/Flask-Migrate 管理 PostgreSQL 迁移
+建议每天执行一次并复制到异机/对象存储，对应 RPO 24 小时；每月至少做一次隔离恢复演练，以验证 RTO 4 小时目标。

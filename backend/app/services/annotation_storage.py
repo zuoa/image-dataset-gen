@@ -26,21 +26,49 @@ def save_annotation_result(
     detections: list[dict[str, Any]],
     *,
     bbox_semantics: str = CENTER_BBOX_SEMANTICS,
+    source: str = "manual",
+    provider: str = "",
+    model: str = "",
 ) -> None:
-    annotation_path(storage_root, task_id, image_id).write_text(
-        json.dumps(
-            {
-                "bboxSemantics": bbox_semantics,
-                "detections": detections,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    payload = {
+        "bboxSemantics": bbox_semantics,
+        "detections": detections,
+    }
+    _save_annotation_revision_if_possible(
+        image_id,
+        payload,
+        source=source,
+        provider=provider,
+        model=model,
+    )
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    from app.services.storage_backend import local_backend
+
+    local_backend(storage_root).put_bytes(
+        f"annotations/{task_id}/{image_id}.json",
+        encoded,
     )
 
 
 def load_annotation_result(
+    storage_root: str,
+    task_id: str,
+    image_id: str,
+    *,
+    default_bbox_semantics: str | None = None,
+) -> dict[str, Any] | None:
+    database_result = _load_annotation_revision_if_possible(image_id)
+    if database_result is not None:
+        return database_result
+    return load_annotation_file_result(
+        storage_root,
+        task_id,
+        image_id,
+        default_bbox_semantics=default_bbox_semantics,
+    )
+
+
+def load_annotation_file_result(
     storage_root: str,
     task_id: str,
     image_id: str,
@@ -52,6 +80,176 @@ def load_annotation_result(
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return normalize_annotation_result(payload, default_bbox_semantics=default_bbox_semantics)
+
+
+def load_current_annotation_results(image_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not image_ids:
+        return {}
+    try:
+        from flask import has_app_context
+
+        if not has_app_context():
+            return {}
+        from sqlalchemy.orm import selectinload
+
+        from app.models import AnnotationRevision, Detection
+
+        revisions = (
+            AnnotationRevision.query.filter(
+                AnnotationRevision.image_id.in_(image_ids),
+                AnnotationRevision.is_current.is_(True),
+            )
+            .options(
+                selectinload(AnnotationRevision.detections).selectinload(Detection.category)
+            )
+            .all()
+        )
+        return {
+            revision.image_id: _revision_payload(revision)
+            for revision in revisions
+        }
+    except (ImportError, RuntimeError):
+        return {}
+
+
+def _save_annotation_revision_if_possible(
+    image_id: str,
+    payload: dict[str, Any],
+    *,
+    source: str,
+    provider: str,
+    model: str,
+) -> None:
+    try:
+        from flask import has_app_context
+
+        if not has_app_context():
+            return
+        from sqlalchemy import func
+
+        from app.extensions import db
+        from app.models import AnnotationRevision, DatasetCategory, DatasetImage, Detection
+
+        image = DatasetImage.query.filter_by(id=image_id).with_for_update().first()
+        if image is None:
+            return
+        normalized = normalize_annotation_result(payload)
+        categories_by_name = {row.name: row for row in image.dataset.category_rows}
+        configured_categories = [
+            str(name).strip()
+            for name in image.dataset.categories or []
+            if str(name).strip()
+        ]
+        configured_category_names = set(configured_categories)
+        unknown_categories = sorted(
+            {
+                str(detection.get("category") or "").strip()
+                for detection in normalized["detections"]
+            }
+            - configured_category_names
+        )
+        if unknown_categories:
+            raise ValueError(
+                "annotation contains categories not configured on the dataset: "
+                + ", ".join(unknown_categories)
+            )
+        for position, name in enumerate(configured_categories):
+            if name not in categories_by_name:
+                row = DatasetCategory(dataset_id=image.dataset_id, name=name, position=position)
+                db.session.add(row)
+                categories_by_name[name] = row
+
+        next_revision = int(
+            db.session.query(func.max(AnnotationRevision.revision))
+            .filter(AnnotationRevision.image_id == image.id)
+            .scalar()
+            or 0
+        ) + 1
+        AnnotationRevision.query.filter_by(image_id=image.id, is_current=True).update(
+            {"is_current": False}, synchronize_session=False
+        )
+        revision = AnnotationRevision(
+            image_id=image.id,
+            revision=next_revision,
+            source=source,
+            status="annotated" if normalized["detections"] else "empty",
+            provider=provider,
+            model=model,
+            bbox_semantics=CENTER_BBOX_SEMANTICS,
+            is_current=True,
+        )
+        db.session.add(revision)
+        for detection in normalized["detections"]:
+            category_name = str(detection.get("category") or "").strip()
+            category = categories_by_name.get(category_name)
+            bbox = detection.get("bbox")
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            try:
+                confidence = min(max(float(detection.get("confidence", 0.0)), 0.0), 1.0)
+                x_center, y_center, width, height = [float(value) for value in bbox]
+            except (TypeError, ValueError):
+                continue
+            revision.detections.append(
+                Detection(
+                    category=category,
+                    confidence=confidence,
+                    x_center=x_center,
+                    y_center=y_center,
+                    width=width,
+                    height=height,
+                    metadata_json={
+                        key: value
+                        for key, value in detection.items()
+                        if key not in {"category", "confidence", "bbox"}
+                    },
+                )
+            )
+    except (ImportError, RuntimeError):
+        # Standalone geometry tests deliberately load this module without Flask.
+        return
+
+
+def _load_annotation_revision_if_possible(image_id: str) -> dict[str, Any] | None:
+    try:
+        from flask import has_app_context
+
+        if not has_app_context():
+            return None
+        from app.models import AnnotationRevision
+
+        revision = (
+            AnnotationRevision.query.filter_by(image_id=image_id, is_current=True)
+            .order_by(AnnotationRevision.revision.desc())
+            .first()
+        )
+        if revision is None:
+            return None
+        return _revision_payload(revision)
+    except (ImportError, RuntimeError):
+        return None
+
+
+def _revision_payload(revision) -> dict[str, Any]:
+    return {
+        "bboxSemantics": CENTER_BBOX_SEMANTICS,
+        "revision": revision.revision,
+        "source": revision.source,
+        "detections": [
+            {
+                "category": detection.category.name,
+                "confidence": detection.confidence,
+                "bbox": [
+                    detection.x_center,
+                    detection.y_center,
+                    detection.width,
+                    detection.height,
+                ],
+                **(detection.metadata_json or {}),
+            }
+            for detection in revision.detections
+        ],
+    }
 
 
 def extract_detection_categories(

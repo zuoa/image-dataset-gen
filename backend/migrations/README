@@ -1,0 +1,5 @@
+This directory contains the authoritative PostgreSQL schema history.
+
+Create a revision with `alembic revision --autogenerate -m "description"`, review it,
+then apply it with `alembic upgrade head`. Application startup must never mutate the
+schema.

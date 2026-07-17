@@ -48,10 +48,14 @@ def _default_demo_username() -> str:
 
 @dataclass
 class Config:
+    APP_ENV: str = os.getenv("APP_ENV", "development")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-please-change-123456")
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-please-change-123456")
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
-        days=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
+        minutes=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_MINUTES", "15"))
+    )
+    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(
+        days=int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES_DAYS", "30"))
     )
     SQLALCHEMY_DATABASE_URI: str = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
@@ -60,9 +64,18 @@ class Config:
     DEMO_USERNAME: str = _default_demo_username()
     DEMO_PASSWORD: str = os.getenv("DEMO_PASSWORD", "Dataset123!")
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", _default_encryption_key())
-    AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() == "true"
-    STARTUP_MAINTENANCE_ASYNC: bool = os.getenv("STARTUP_MAINTENANCE_ASYNC", "true").lower() == "true"
+    AUTO_CREATE_SCHEMA: bool = os.getenv("AUTO_CREATE_SCHEMA", "false").lower() == "true"
+    BOOTSTRAP_DEMO_USER: bool = os.getenv("BOOTSTRAP_DEMO_USER", "false").lower() == "true"
+    REGISTRATION_MODE: str = os.getenv("REGISTRATION_MODE", "disabled")
+    REFRESH_COOKIE_NAME: str = os.getenv("REFRESH_COOKIE_NAME", "dataset_gen_refresh")
+    REFRESH_COOKIE_SECURE: bool = os.getenv(
+        "REFRESH_COOKIE_SECURE", "true" if os.getenv("APP_ENV", "development") == "production" else "false"
+    ).lower() == "true"
+    REFRESH_ROTATION_GRACE_SECONDS: int = int(os.getenv("REFRESH_ROTATION_GRACE_SECONDS", "10"))
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
+    STORAGE_BACKEND: str = os.getenv("STORAGE_BACKEND", "local")
+    USE_X_ACCEL_REDIRECT: bool = os.getenv("USE_X_ACCEL_REDIRECT", "false").lower() == "true"
+    MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
     MAX_IMPORTED_IMAGES: int = int(os.getenv("MAX_IMPORTED_IMAGES", "2000"))
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
     VL_ANNOTATOR_PROVIDER: str = os.getenv("VL_ANNOTATOR_PROVIDER", "gemini")
@@ -88,7 +101,22 @@ class Config:
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
     CELERY_TASK_TRACK_STARTED: bool = True
     CELERY_TASK_TIME_LIMIT: int = 3600
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 3300
+    CELERY_TASK_ACKS_LATE: bool = True
+    CELERY_TASK_REJECT_ON_WORKER_LOST: bool = True
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+    CELERY_TASK_IGNORE_RESULT: bool = True
     CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP: bool = True
+    DATABASE_POOL_SIZE: int = int(os.getenv("DATABASE_POOL_SIZE", "10"))
+    DATABASE_MAX_OVERFLOW: int = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))
+    DATABASE_POOL_TIMEOUT: int = int(os.getenv("DATABASE_POOL_TIMEOUT", "30"))
+    DATABASE_STATEMENT_TIMEOUT_MS: int = int(os.getenv("DATABASE_STATEMENT_TIMEOUT_MS", "60000"))
+    TRAINING_JOB_LEASE_SECONDS: int = int(os.getenv("TRAINING_JOB_LEASE_SECONDS", "120"))
+    TASK_ITEM_LEASE_SECONDS: int = int(os.getenv("TASK_ITEM_LEASE_SECONDS", "900"))
+    ASSET_GC_RETENTION_HOURS: int = int(os.getenv("ASSET_GC_RETENTION_HOURS", "24"))
+    IDEMPOTENCY_TTL_HOURS: int = int(os.getenv("IDEMPOTENCY_TTL_HOURS", "24"))
+    OUTBOX_POLL_INTERVAL_SECONDS: float = float(os.getenv("OUTBOX_POLL_INTERVAL_SECONDS", "1"))
+    OUTBOX_BATCH_SIZE: int = int(os.getenv("OUTBOX_BATCH_SIZE", "100"))
 
 
 @dataclass
@@ -97,7 +125,9 @@ class TestConfig(Config):
     TESTING: bool = True
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
     AUTO_CREATE_SCHEMA: bool = True
-    STARTUP_MAINTENANCE_ASYNC: bool = False
+    BOOTSTRAP_DEMO_USER: bool = True
+    REGISTRATION_MODE: str = "open"
+    REFRESH_COOKIE_SECURE: bool = False
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND: str = "cache+memory://"
     CELERY_TASK_ALWAYS_EAGER: bool = True

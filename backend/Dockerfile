@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "300", "--workers", "2", "manage:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "300", "--graceful-timeout", "30", "--workers", "1", "--threads", "4", "--access-logfile", "-", "manage:app"]

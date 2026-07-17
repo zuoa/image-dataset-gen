@@ -172,6 +172,7 @@ export function DatasetDetailPage() {
   const [loadedImages, setLoadedImages] = useState<DatasetImage[]>([]);
   const [imagesTotal, setImagesTotal] = useState(0);
   const [imagesCursor, setImagesCursor] = useState(0);
+  const [nextImagesCursor, setNextImagesCursor] = useState<string | null>(null);
   const [hasMoreImages, setHasMoreImages] = useState(false);
   const [isLoadingFirstPage, setIsLoadingFirstPage] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -182,6 +183,8 @@ export function DatasetDetailPage() {
   imagesTotalRef.current = imagesTotal;
   const cursorRef = useRef(0);
   cursorRef.current = imagesCursor;
+  const nextCursorRef = useRef<string | null>(null);
+  nextCursorRef.current = nextImagesCursor;
   const currentFilterRef = useRef<ImageFilter | undefined>(undefined);
   const pageLoadersRef = useRef<{
     fetchFirstPage: (filter: ImageFilter | undefined) => Promise<void>;
@@ -320,9 +323,8 @@ export function DatasetDetailPage() {
         setLoadedImages(response.dataset.images);
         setImagesTotal(response.dataset.imagesTotal ?? response.dataset.images.length);
         setImagesCursor(response.dataset.images.length);
-        setHasMoreImages(
-          (response.dataset.imagesTotal ?? response.dataset.images.length) > response.dataset.images.length,
-        );
+        setNextImagesCursor(response.dataset.imagesNextCursor ?? null);
+        setHasMoreImages(Boolean(response.dataset.imagesNextCursor));
         setTrainingJobs(trainingResponse.jobs);
         lastImageRefreshAtRef.current = Date.now();
         setActionError(null);
@@ -340,7 +342,12 @@ export function DatasetDetailPage() {
       if (offset >= imagesTotalRef.current) return;
       setIsLoadingMore(true);
       try {
-        const response = await getDataset(datasetId, token, { offset, limit: PAGE_SIZE, filter });
+        const response = await getDataset(datasetId, token, {
+          cursor: nextCursorRef.current ?? undefined,
+          offset: nextCursorRef.current ? undefined : offset,
+          limit: PAGE_SIZE,
+          filter,
+        });
         if (disposed) return;
         const incoming = response.dataset.images;
         if (incoming.length === 0) {
@@ -362,7 +369,8 @@ export function DatasetDetailPage() {
         setImagesTotal(response.dataset.imagesTotal ?? imagesTotalRef.current);
         const nextCursor = offset + incoming.length;
         setImagesCursor(nextCursor);
-        setHasMoreImages(nextCursor < (response.dataset.imagesTotal ?? imagesTotalRef.current));
+        setNextImagesCursor(response.dataset.imagesNextCursor ?? null);
+        setHasMoreImages(Boolean(response.dataset.imagesNextCursor));
         lastImageRefreshAtRef.current = Date.now();
       } catch (error) {
         if (!disposed) {
@@ -384,7 +392,8 @@ export function DatasetDetailPage() {
         setImagesTotal(total);
         const nextCursor = response.dataset.images.length;
         setImagesCursor(nextCursor);
-        setHasMoreImages(nextCursor < total);
+        setNextImagesCursor(response.dataset.imagesNextCursor ?? null);
+        setHasMoreImages(Boolean(response.dataset.imagesNextCursor));
         lastImageRefreshAtRef.current = Date.now();
         return response.dataset;
       } catch (error) {

@@ -44,7 +44,8 @@ def test_model_profiles_are_seeded_and_support_crud(tmp_path: Path):
     assert created.status_code == 201
     created_profile = created.get_json()["profile"]
     assert created_profile["name"] == "Custom Gemini Ultra"
-    assert created_profile["apiKey"] == "super-secret-key"
+    assert created_profile["apiKey"] == ""
+    assert created_profile["hasApiKey"] is True
 
     updated = client.patch(
         f"/api/v1/system/model-profiles/{created_profile['id']}",
@@ -66,7 +67,46 @@ def test_model_profiles_are_seeded_and_support_crud(tmp_path: Path):
     updated_profile = updated.get_json()["profile"]
     assert updated_profile["providerId"] == "jimeng"
     assert updated_profile["jimengWatermark"] is False
-    assert updated_profile["apiKey"] == "another-secret"
+    assert updated_profile["apiKey"] == ""
+    assert updated_profile["hasApiKey"] is True
+
+    retained = client.patch(
+        f"/api/v1/system/model-profiles/{created_profile['id']}",
+        headers=headers,
+        json={
+            "profileType": "image",
+            "name": "Custom Gemini Ultra Updated",
+            "providerId": "jimeng",
+            "baseUrl": "",
+            "model": "doubao-seedream-5-0-260128",
+            "apiKey": "",
+            "concurrency": 5,
+            "batchSize": 6,
+            "jimengWatermark": False,
+            "notes": "Kept existing secret",
+        },
+    )
+    assert retained.status_code == 200
+    assert retained.get_json()["profile"]["hasApiKey"] is True
+
+    rejected_provider_change = client.patch(
+        f"/api/v1/system/model-profiles/{created_profile['id']}",
+        headers=headers,
+        json={
+            "profileType": "image",
+            "name": "Custom Gemini Ultra Updated",
+            "providerId": "gemini",
+            "baseUrl": "",
+            "model": "imagen-4.0-ultra-generate-001",
+            "apiKey": "",
+            "concurrency": 5,
+            "batchSize": 6,
+            "jimengWatermark": False,
+            "notes": "Must not reuse a Jimeng secret",
+        },
+    )
+    assert rejected_provider_change.status_code == 422
+    assert "required when changing providers" in rejected_provider_change.get_json()["message"]
 
     deleted = client.delete(
         f"/api/v1/system/model-profiles/{created_profile['id']}",

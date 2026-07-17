@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 from app.models import Dataset, DatasetExport, DatasetImage
 from app.services.annotation_storage import infer_default_bbox_semantics, load_annotation_result
 from app.services.image_storage import existing_generated_image, export_image_to_format
+from app.services.storage_backend import local_backend
 
 
 IMAGE_SIZE = (512, 512)
@@ -27,9 +28,6 @@ def build_dataset_export_archive(
     include_readme: bool,
     storage_root: str,
 ) -> dict[str, Any]:
-    export_root = Path(storage_root) / "exports"
-    export_root.mkdir(parents=True, exist_ok=True)
-    archive_path = export_root / f"{export_job.id}.zip"
     dataset_name = _slugify(dataset.name or "dataset")
 
     selected_images = [image for image in dataset.images if image.selected]
@@ -39,6 +37,7 @@ def build_dataset_export_archive(
 
     with tempfile.TemporaryDirectory(prefix="dataset-export-") as temp_dir:
         temp_root = Path(temp_dir) / dataset_name
+        temporary_archive = Path(temp_dir) / f"{export_job.id}.zip"
         temp_root.mkdir(parents=True, exist_ok=True)
 
         if export_format == "yolo":
@@ -56,12 +55,14 @@ def build_dataset_export_archive(
         if export_format == "yolo":
             _write_data_yaml(temp_root, categories, split_assignments)
 
-        if archive_path.exists():
-            archive_path.unlink()
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for file_path in temp_root.rglob("*"):
                 if file_path.is_file():
                     archive.write(file_path, file_path.relative_to(temp_root.parent))
+        with temporary_archive.open("rb") as handle:
+            archive_path = local_backend(storage_root).put_stream(
+                f"exports/{export_job.id}.zip", handle
+            ).path
 
     return {
         "archivePath": str(archive_path),

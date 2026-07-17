@@ -15,10 +15,12 @@ from app.services.annotation_storage import save_annotation_result
 from app.services.dataset_service import (
     next_dataset_ordinal,
     now_utc,
+    sync_dataset_category_rows,
     sync_dataset_stats_from_db,
     sync_dataset_task_stats_from_db,
 )
 from app.services.image_storage import normalize_uploaded_image, preview_data_url, save_generated_image
+from app.services.storage_backend import register_local_asset
 
 
 ROBOFLOW_IMPORT_FORMAT = "yolov8"
@@ -212,6 +214,7 @@ def _persist_prepared_images(
     )
     db.session.add(task)
     dataset.categories = categories
+    sync_dataset_category_rows(dataset)
     db.session.flush()
 
     next_ordinal = next_dataset_ordinal(dataset)
@@ -220,7 +223,7 @@ def _persist_prepared_images(
 
     for index, prepared in enumerate(prepared_images, start=1):
         image_key = f"image-{next_ordinal:06d}"
-        save_generated_image(
+        saved_path = save_generated_image(
             current_app.config["STORAGE_ROOT"],
             dataset.id,
             image_key,
@@ -243,11 +246,28 @@ def _persist_prepared_images(
             annotation_status="annotated" if prepared.detections else "empty",
             confidence_score=max((float(item["confidence"]) for item in prepared.detections), default=None),
             detection_categories=sorted({str(item["category"]) for item in prepared.detections if item.get("category")}),
+            asset=register_local_asset(
+                current_app.config["STORAGE_ROOT"],
+                saved_path,
+                user_id=user_id,
+                dataset_id=dataset.id,
+                kind="dataset_image",
+                mime_type=prepared.mime_type,
+                original_filename=prepared.source_path.name,
+            ),
         )
         db.session.add(image)
         db.session.flush()
 
-        save_annotation_result(current_app.config["STORAGE_ROOT"], dataset.id, image.id, prepared.detections)
+        save_annotation_result(
+            current_app.config["STORAGE_ROOT"],
+            dataset.id,
+            image.id,
+            prepared.detections,
+            source="import",
+            provider="roboflow",
+            model=model_format,
+        )
         if prepared.detections:
             annotated_count += 1
         else:

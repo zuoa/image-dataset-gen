@@ -1,20 +1,83 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import UTC, datetime
 import json
+import uuid
 from typing import Any
 
 from flask import current_app
-from sqlalchemy import func, text
+from sqlalchemy import and_, bindparam, func, or_, select, text
 
 from app.extensions import db
-from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask
-from app.services.annotation_storage import infer_default_bbox_semantics, load_annotation_result
+from app.models import Dataset, DatasetCategory, DatasetExport, DatasetImage, DatasetTask
+from app.services.annotation_storage import (
+    infer_default_bbox_semantics,
+    load_annotation_file_result,
+    load_annotation_result,
+    load_current_annotation_results,
+)
 from app.services.image_storage import existing_generated_image
 
 
 def now_utc() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(UTC)
+
+
+def encode_image_cursor(image: DatasetImage) -> str:
+    payload = json.dumps(
+        {"ordinal": int(image.ordinal), "id": image.id}, separators=(",", ":")
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_image_cursor(value: str) -> tuple[int, str]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        ordinal = int(payload["ordinal"])
+        image_id = str(uuid.UUID(str(payload["id"])))
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        binascii.Error,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("invalid image cursor") from exc
+    if ordinal < 0 or not image_id:
+        raise ValueError("invalid image cursor")
+    return ordinal, image_id
+
+
+def encode_dataset_cursor(dataset: Dataset) -> str:
+    payload = json.dumps(
+        {"createdAt": dataset.created_at.isoformat(), "id": dataset.id},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_dataset_cursor(value: str) -> tuple[datetime, str]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        created_at = datetime.fromisoformat(str(payload["createdAt"]))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        dataset_id = str(uuid.UUID(str(payload["id"])))
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        binascii.Error,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("invalid dataset cursor") from exc
+    return created_at, dataset_id
 
 
 def _dataset_id(dataset: Dataset | str) -> str:
@@ -22,23 +85,61 @@ def _dataset_id(dataset: Dataset | str) -> str:
 
 
 def next_dataset_ordinal(dataset: Dataset | str) -> int:
-    max_ordinal = (
+    dataset_id = _dataset_id(dataset)
+    locked_dataset = db.session.execute(
+        select(Dataset).where(Dataset.id == dataset_id).with_for_update()
+    ).scalar_one()
+    max_ordinal = int(
         db.session.query(func.max(DatasetImage.ordinal))
-        .filter(DatasetImage.dataset_id == _dataset_id(dataset))
+        .filter(DatasetImage.dataset_id == dataset_id)
         .scalar()
         or 0
     )
-    return int(max_ordinal) + 1
+    ordinal = max(int(locked_dataset.next_image_ordinal or 1), max_ordinal + 1)
+    locked_dataset.next_image_ordinal = ordinal + 1
+    return ordinal
 
 
 def next_dataset_export_version(dataset: Dataset | str) -> int:
-    max_version = (
+    dataset_id = _dataset_id(dataset)
+    locked_dataset = db.session.execute(
+        select(Dataset).where(Dataset.id == dataset_id).with_for_update()
+    ).scalar_one()
+    max_version = int(
         db.session.query(func.max(DatasetExport.version))
-        .filter(DatasetExport.dataset_id == _dataset_id(dataset))
+        .filter(DatasetExport.dataset_id == dataset_id)
         .scalar()
         or 0
     )
-    return int(max_version) + 1
+    version = max(int(locked_dataset.next_export_version or 1), max_version + 1)
+    locked_dataset.next_export_version = version + 1
+    return version
+
+
+def sync_dataset_category_rows(dataset: Dataset) -> None:
+    """Keep normalized category identities in sync with the legacy API list."""
+    normalized_names: list[str] = []
+    seen_names: set[str] = set()
+    for value in dataset.categories or []:
+        name = str(value).strip()
+        if name and name not in seen_names:
+            normalized_names.append(name)
+            seen_names.add(name)
+    dataset.categories = normalized_names
+
+    existing = {row.name: row for row in dataset.category_rows}
+    for row in existing.values():
+        row.position = row.position + 10000
+        row.active = False
+    db.session.flush()
+    for position, name in enumerate(normalized_names):
+        row = existing.get(name)
+        if row is None:
+            row = DatasetCategory(dataset=dataset, name=name, position=position)
+            db.session.add(row)
+            existing[name] = row
+        row.position = position
+        row.active = True
 
 
 def sample_pool_split_map(dataset: Dataset) -> dict[str, str]:
@@ -261,7 +362,7 @@ def _image_class_counts_for_dataset(dataset: Dataset) -> dict[str, int]:
                 WHERE dataset_images.dataset_id = :dataset_id
                 GROUP BY json_each.value
                 """
-            ),
+            ).bindparams(bindparam("dataset_id", type_=Dataset.id.type)),
             {"dataset_id": dataset.id},
         ).all()
         for row in rows:
@@ -280,7 +381,7 @@ def _image_class_counts_for_dataset(dataset: Dataset) -> dict[str, int]:
                 WHERE dataset_images.dataset_id = :dataset_id
                 GROUP BY category.value
                 """
-            ),
+            ).bindparams(bindparam("dataset_id", type_=Dataset.id.type)),
             {"dataset_id": dataset.id},
         ).all()
         for row in rows:
@@ -400,7 +501,7 @@ def build_dataset_payload(
         "annotation": dataset.annotation_json or {},
         "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
         "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
-        "images": [build_dataset_image_payload(dataset, image, split_map=split_map) for image in page_images] if include_images else [],
+        "images": _build_dataset_image_payloads(dataset, page_images, split_map) if include_images else [],
         "imagesTotal": filtered_total,
         "imageClassCounts": class_counts,
         "imageSplitCounts": split_counts,
@@ -423,6 +524,7 @@ def build_dataset_detail_payload(
     image_filter: dict[str, Any] | None = None,
     images_offset: int = 0,
     images_limit: int | None = None,
+    images_cursor: tuple[int, str] | None = None,
 ) -> dict[str, Any]:
     image_count = int(dataset.image_count or 0)
     selected_count = int(dataset.selected_count or 0)
@@ -468,17 +570,28 @@ def build_dataset_detail_payload(
         filtered_query = filtered_query.filter(~DatasetImage.annotation_status.in_(["annotated", "empty"]))
 
     filtered_total = filtered_query.count()
+    if images_cursor is not None:
+        cursor_ordinal, cursor_id = images_cursor
+        filtered_query = filtered_query.filter(
+            or_(
+                DatasetImage.ordinal > cursor_ordinal,
+                and_(DatasetImage.ordinal == cursor_ordinal, DatasetImage.id > cursor_id),
+            )
+        )
     page_images: list[DatasetImage] = []
+    next_cursor: str | None = None
     if include_images:
-        image_query = filtered_query.order_by(DatasetImage.ordinal.asc())
+        image_query = filtered_query.order_by(DatasetImage.ordinal.asc(), DatasetImage.id.asc())
         if images_limit is None:
             page_images = image_query.all()
         else:
-            page_images = (
-                image_query.offset(max(0, int(images_offset or 0)))
-                .limit(max(0, int(images_limit)))
-                .all()
-            )
+            limit = max(0, int(images_limit))
+            if images_cursor is None:
+                image_query = image_query.offset(max(0, int(images_offset or 0)))
+            fetched = image_query.limit(limit + 1).all() if limit > 0 else []
+            page_images = fetched[:limit]
+            if len(fetched) > limit and page_images:
+                next_cursor = encode_image_cursor(page_images[-1])
 
     page_split_map = (
         sample_pool_split_map_for_images(dataset.id, page_images, selected_count=selected_count)
@@ -488,11 +601,9 @@ def build_dataset_detail_payload(
 
     payload = {
         **_dataset_base_payload(dataset),
-        "images": [
-            build_dataset_image_payload(dataset, image, split_map=page_split_map)
-            for image in page_images
-        ] if include_images else [],
+        "images": _build_dataset_image_payloads(dataset, page_images, page_split_map) if include_images else [],
         "imagesTotal": filtered_total,
+        "imagesNextCursor": next_cursor,
         "imageClassCounts": class_counts,
         "imageSplitCounts": split_counts,
         "imageAnnotationCounts": annotation_counts,
@@ -611,16 +722,24 @@ def build_dataset_image_payload(
     image: DatasetImage,
     *,
     split_map: dict[str, str] | None = None,
+    annotation_results: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    stored_annotation = (
-        load_annotation_result(
+    if annotation_results is None:
+        stored_annotation = load_annotation_result(
             current_app.config["STORAGE_ROOT"],
             dataset.id,
             image.id,
             default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
-        )
-        or {}
-    )
+        ) or {}
+    elif image.id in annotation_results:
+        stored_annotation = annotation_results[image.id]
+    else:
+        stored_annotation = load_annotation_file_result(
+            current_app.config["STORAGE_ROOT"],
+            dataset.id,
+            image.id,
+            default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
+        ) or {}
     detections = stored_annotation.get("detections", [])
     if image.preview_svg.startswith("data:image/svg+xml"):
         preview = image.preview_svg
@@ -661,6 +780,23 @@ def build_dataset_image_payload(
     if split_map is not None:
         payload["split"] = split_value
     return payload
+
+
+def _build_dataset_image_payloads(
+    dataset: Dataset,
+    images: list[DatasetImage],
+    split_map: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    annotation_results = load_current_annotation_results([image.id for image in images])
+    return [
+        build_dataset_image_payload(
+            dataset,
+            image,
+            split_map=split_map,
+            annotation_results=annotation_results,
+        )
+        for image in images
+    ]
 
 
 def build_dataset_export_payload(export_job: DatasetExport) -> dict[str, Any]:

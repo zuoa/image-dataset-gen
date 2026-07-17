@@ -4,6 +4,7 @@ import os
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ def main() -> None:
             job = client.poll(worker_id)
             if job is not None:
                 current_job_id = str(job["id"])
-                _run_job(client, job, work_root)
+                _run_job(client, worker_id, job, work_root)
                 current_job_id = ""
                 continue
 
@@ -88,24 +89,25 @@ def main() -> None:
             time.sleep(poll_interval)
 
 
-def _run_job(client: BackendClient, job: dict[str, Any], work_root: Path) -> None:
+def _run_job(client: BackendClient, worker_id: str, job: dict[str, Any], work_root: Path) -> None:
     job_id = str(job["id"])
     job_root = work_root / job_id
     dataset_zip = job_root / "dataset.zip"
     job_root.mkdir(parents=True, exist_ok=True)
 
-    client.update_status(job_id, "preparing", progress_percent=1)
-    client.download_job_dataset(job_id, dataset_zip)
+    with _lease_heartbeat(lambda: client.heartbeat(worker_id, "busy", job_id)):
+        client.update_status(job_id, "preparing", progress_percent=1)
+        client.download_job_dataset(job_id, dataset_zip)
 
-    def report_progress(percent: int) -> None:
-        client.update_status(job_id, "running", progress_percent=percent)
+        def report_progress(percent: int) -> None:
+            client.update_status(job_id, "running", progress_percent=percent)
 
-    client.update_status(job_id, "running", progress_percent=3)
-    result = train_yolov8(job, dataset_zip, work_root, report_progress)
+        client.update_status(job_id, "running", progress_percent=3)
+        result = train_yolov8(job, dataset_zip, work_root, report_progress)
 
-    client.update_status(job_id, "uploading", progress_percent=96, metrics=result.get("metrics") or {})
-    for artifact_type, path in result.get("artifacts") or []:
-        client.upload_artifact(job_id, artifact_type, Path(path))
+        client.update_status(job_id, "uploading", progress_percent=96, metrics=result.get("metrics") or {})
+        for artifact_type, path in result.get("artifacts") or []:
+            client.upload_artifact(job_id, artifact_type, Path(path))
     client.update_status(job_id, "completed", progress_percent=100, metrics=result.get("metrics") or {})
 
 
@@ -119,23 +121,47 @@ def _run_inference(client: BackendClient, worker_id: str, test_job: dict[str, An
     image_path = test_root / image_filename
     test_root.mkdir(parents=True, exist_ok=True)
 
-    client.update_inference_status(worker_id, test_id, "running")
-    client.download_model(client.inference_model_download_url(test_id), model_path)
-    client.download_image(client.inference_image_download_url(test_id), image_path)
+    with _lease_heartbeat(
+        lambda: client.update_inference_status(worker_id, test_id, "running")
+    ):
+        client.update_inference_status(worker_id, test_id, "running")
+        client.download_model(client.inference_model_download_url(test_id), model_path)
+        client.download_image(client.inference_image_download_url(test_id), image_path)
 
-    result = predict_yolov8(
-        model_path,
-        image_path,
-        categories=[str(item) for item in test_job.get("categories") or []],
-        confidence_threshold=float(test_job.get("confidenceThreshold") or 0.25),
-        image_size=int(test_job.get("imageSize") or 640),
-    )
+        result = predict_yolov8(
+            model_path,
+            image_path,
+            categories=[str(item) for item in test_job.get("categories") or []],
+            confidence_threshold=float(test_job.get("confidenceThreshold") or 0.25),
+            image_size=int(test_job.get("imageSize") or 640),
+        )
     client.update_inference_status(
         worker_id,
         test_id,
         "completed",
         detections=result.get("detections") or [],
     )
+
+
+@contextmanager
+def _lease_heartbeat(callback, *, interval_seconds: float = 30.0):
+    stopped = threading.Event()
+
+    def run() -> None:
+        while not stopped.wait(interval_seconds):
+            try:
+                callback()
+            except Exception:
+                # The foreground request will surface persistent backend failures.
+                continue
+
+    thread = threading.Thread(target=run, daemon=True, name="assignment-heartbeat")
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
 
 
 def _start_health_server(port: int):

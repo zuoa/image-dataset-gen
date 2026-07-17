@@ -9,6 +9,8 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
+from app.services.storage_backend import local_backend
+
 MAX_ROTATION_ANGLE_DEGREES = 8.0
 GENERATED_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg")
 DEFAULT_AUGMENTATION_SETTINGS = {
@@ -43,9 +45,10 @@ def save_generated_image(
 ) -> Path:
     extension = "png" if mime_type == "image/png" else "jpg"
     remove_generated_image_variants(storage_root, task_id, image_key)
-    path = image_path(storage_root, task_id, image_key, extension)
-    path.write_bytes(image_bytes)
-    return path
+    stored = local_backend(storage_root).put_bytes(
+        f"images/{task_id}/{image_key}.{extension}", image_bytes
+    )
+    return stored.path
 
 
 def existing_generated_image(storage_root: str, task_id: str, image_key: str) -> Path | None:
@@ -112,10 +115,11 @@ def augment_generated_image(
             working.convert("RGB").save(output, format="JPEG", quality=90)
         image_bytes = output.getvalue()
 
-    save_generated_image(storage_root, task_id, target_image_key, image_bytes, mime_type)
+    saved_path = save_generated_image(storage_root, task_id, target_image_key, image_bytes, mime_type)
     return {
         "image_bytes": image_bytes,
         "mime_type": mime_type,
+        "path": saved_path,
         "applied_methods": applied_methods,
         "augmentation_ops": augmentation_ops,
     }

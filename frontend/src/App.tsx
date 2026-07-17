@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
-import { authExpiredEvent, sessionExpiredMessage } from "./lib/session";
+import { authExpiredEvent, authTokenRefreshedEvent, sessionExpiredMessage } from "./lib/session";
 import { AuthPage } from "./pages/AuthPage";
 import { DatasetAnnotatePage } from "./pages/DatasetAnnotatePage";
 import { DatasetCreatePage } from "./pages/DatasetCreatePage";
@@ -44,6 +44,15 @@ export default function App() {
     window.addEventListener(authExpiredEvent, handleAuthExpired);
     return () => window.removeEventListener(authExpiredEvent, handleAuthExpired);
   }, [signOut]);
+
+  useEffect(() => {
+    const handleTokenRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ token?: string }>).detail;
+      if (detail?.token) useAuthStore.setState({ token: detail.token });
+    };
+    window.addEventListener(authTokenRefreshedEvent, handleTokenRefresh);
+    return () => window.removeEventListener(authTokenRefreshedEvent, handleTokenRefresh);
+  }, []);
 
   return (
     <BrowserRouter>

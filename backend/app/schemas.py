@@ -45,7 +45,7 @@ class ModelProfileSchema(Schema):
     providerId = fields.String(required=True, validate=validate.Length(min=1, max=64))
     baseUrl = fields.String(load_default="", allow_none=True, validate=validate.Length(max=255))
     model = fields.String(required=True, validate=validate.Length(min=1, max=120))
-    apiKey = fields.String(required=True, validate=validate.Length(min=8, max=255))
+    apiKey = fields.String(required=True, validate=validate.Length(max=255))
     concurrency = fields.Integer(required=True, validate=validate.Range(min=1, max=10))
     batchSize = fields.Integer(required=True, validate=validate.Range(min=1, max=50))
     jimengWatermark = fields.Boolean(load_default=True)
@@ -110,6 +110,15 @@ class DatasetSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(min=3, max=255))
     categories = fields.List(fields.String(), required=True, validate=validate.Length(min=1, max=24))
     description = fields.String(load_default="", allow_none=True, validate=validate.Length(max=1000))
+
+    @validates_schema
+    def validate_categories(self, data: dict, **_: object) -> None:
+        categories = [str(category).strip() for category in data.get("categories") or []]
+        if any(not category for category in categories):
+            raise ValidationError({"categories": ["category names cannot be empty"]})
+        if len(categories) != len(set(categories)):
+            raise ValidationError({"categories": ["category names must be unique"]})
+        data["categories"] = categories
 
 
 class GenerationTaskSchema(PromptPreviewSchema):
