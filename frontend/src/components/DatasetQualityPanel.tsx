@@ -18,6 +18,7 @@ import {
   updateDatasetQualityIssue,
 } from "../api/datasets";
 import { useQualityRuns } from "../hooks/useQualityRuns";
+import { confirm } from "../hooks/useConfirm";
 import { useAuthStore } from "../store/auth";
 import type { QualityIssue, QualityRun } from "../lib/types";
 import { formatDate } from "../lib/utils";
@@ -100,6 +101,13 @@ export function DatasetQualityPanel({
 
   async function startQualityRun() {
     if (!token || imageCount === 0) return;
+    const confirmed = await confirm({
+      title: dataRun ? "重新检查数据质量" : "开始数据质量检查",
+      content: dataRun
+        ? `将重新检查 ${imageCount} 张样本，并用新结果更新当前质量概览。`
+        : `将检查 ${imageCount} 张样本的标注结构、重复数据和文件完整性。`,
+    });
+    if (!confirmed) return;
     try {
       await createDatasetQualityRun(datasetId, token);
       await refresh();

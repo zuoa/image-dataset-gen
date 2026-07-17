@@ -59,7 +59,7 @@ import type { Dataset, DatasetImage, ImageFilter } from "../lib/types";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
-const categoryPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
+const categoryPalette = ["#64748b", "#4f6b73", "#6b7c74", "#7c8794", "#5b7080", "#7d8884", "#52636d", "#88949b", "#94a3b8"];
 const unsavedAnnotationMessage = "当前图片有未保存的标注改动，确认放弃并继续？";
 const PAGE_SIZE = 100;
 const MAX_HISTORY_LENGTH = 50;
@@ -1034,14 +1034,14 @@ export function DatasetAnnotatePage() {
   const suggestedDetections = Boolean(activeImage && !isProcessed(activeImage.annotationStatus) && !hasAnnotationChanges);
 
   return (
-    <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-[#f6f7f9] text-neutral-900 dark:bg-[#0b0f14] dark:text-white">
-      <header className="z-20 shrink-0 border-b border-[#d7dce3] bg-white px-3 py-2 dark:border-white/10 dark:bg-[#11151b] sm:px-4">
+    <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-[var(--df-color-bg-layout)] text-[var(--df-color-text)]">
+      <header className="z-20 shrink-0 border-b border-[var(--df-color-border-secondary)] bg-[var(--df-color-bg-container)] px-3 py-2 sm:px-4">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <Link
               to={`/datasets/${dataset.id}`}
               aria-label="返回数据集"
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-neutral-600 transition-colors duration-200 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-neutral-300 dark:hover:bg-white/10 dark:hover:text-white"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--df-color-text-secondary)] transition-colors duration-200 hover:bg-[var(--df-color-fill-alter)] hover:text-[var(--df-color-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-primary)]"
             >
               <ArrowLeft aria-hidden="true" className="h-4 w-4" />
             </Link>
@@ -1067,7 +1067,7 @@ export function DatasetAnnotatePage() {
             ) : (
               <Tag color="success" className="!mr-0">已保存</Tag>
             )}
-            {draftRecovered ? <Tag color="blue" className="hidden !mr-0 md:inline-flex">已恢复草稿</Tag> : null}
+            {draftRecovered ? <Tag color="processing" className="hidden !mr-0 md:inline-flex">已恢复草稿</Tag> : null}
           </div>
         </div>
       </header>
@@ -1087,7 +1087,7 @@ export function DatasetAnnotatePage() {
       <div className="sr-only" role="status" aria-live="polite">{saveAnnouncement}</div>
 
       <div className={cn("grid min-h-0 flex-1 overflow-hidden", isDesktop ? "grid-cols-[248px_minmax(0,1fr)_336px]" : "grid-cols-1")}>
-        {isDesktop ? <div className="min-h-0 border-r border-[#d7dce3] dark:border-white/10">{queuePanel}</div> : null}
+        {isDesktop ? <div className="min-h-0 border-r border-[var(--df-color-border-secondary)]">{queuePanel}</div> : null}
 
         <main id="annotation-canvas" className="relative flex min-h-0 flex-col bg-[#0b0f14]">
           <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-white/10 px-3 text-white">
@@ -1109,7 +1109,7 @@ export function DatasetAnnotatePage() {
                 </Typography.Text>
                 <Typography.Text className="hidden truncate text-xs !text-neutral-400 sm:block">{activeImage?.sourceType ?? "没有可处理图片"}</Typography.Text>
               </div>
-              {suggestedDetections ? <Tag color="gold" className="hidden !mr-0 lg:inline-flex">模型建议</Tag> : null}
+              {suggestedDetections ? <Tag className="hidden !mr-0 lg:inline-flex">模型建议</Tag> : null}
             </div>
 
             <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
@@ -1181,7 +1181,7 @@ export function DatasetAnnotatePage() {
                     <div className="pointer-events-none absolute inset-0">
                       {draftDetections.map((detection, index) => {
                         const selected = selectedDetectionIndex === index;
-                        const color = selected ? "#b7f34a" : categoryColor(detection.category, categories);
+                        const color = selected ? "#f4f4f5" : categoryColor(detection.category, categories);
                         return (
                           <div
                             key={`${detection.category}-${index}`}
@@ -1218,7 +1218,7 @@ export function DatasetAnnotatePage() {
                                     type="button"
                                     aria-label={`从${corner}方向缩放检测框 ${index + 1}`}
                                     className={cn(
-                                      "absolute h-11 w-11 touch-none appearance-none border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400",
+                                      "absolute h-11 w-11 touch-none appearance-none border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
                                       corner === "nw"
                                         ? "-left-[22px] -top-[22px]"
                                         : corner === "ne"
@@ -1270,7 +1270,7 @@ export function DatasetAnnotatePage() {
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
-              className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
               B 画框 · Enter 保存下一张
@@ -1309,7 +1309,7 @@ export function DatasetAnnotatePage() {
             </div>
           </div>
 
-          <footer className="flex h-[60px] shrink-0 items-center justify-between gap-2 border-t border-white/10 bg-[#0d1218] px-2 text-xs text-neutral-400 sm:px-3">
+          <footer className="flex h-[60px] shrink-0 items-center justify-between gap-2 border-t border-white/10 bg-[#111317] px-2 text-xs text-neutral-400 sm:px-3">
             <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
               <Button
                 type="text"
@@ -1425,7 +1425,7 @@ export function DatasetAnnotatePage() {
           </footer>
         </main>
 
-        {isDesktop ? <div className="min-h-0 border-l border-[#d7dce3] dark:border-white/10">{inspectorPanel}</div> : null}
+        {isDesktop ? <div className="min-h-0 border-l border-[var(--df-color-border-secondary)]">{inspectorPanel}</div> : null}
       </div>
 
       {!isDesktop ? (

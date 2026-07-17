@@ -1,6 +1,6 @@
 import { Checkbox, Button } from "antd";
 
-import { Trash2 } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { AuthImage } from "../../AuthImage";
 import type { DatasetImage } from "../../../lib/types";
 
@@ -33,12 +33,12 @@ export function ImageCard({
 }: ImageCardProps) {
   return (
     <article
-      className={`group overflow-hidden rounded-2xl border text-left transition ${
+      className={`group overflow-hidden rounded-xl border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md ${
         isQueuedForDelete
-          ? "border-red-300 bg-red-50 dark:border-red-300/50 dark:bg-red-500/10"
+          ? "border-red-400 bg-red-50 ring-2 ring-red-100 dark:border-red-400/60 dark:bg-red-500/10 dark:ring-red-500/10"
           : image.selected
-            ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.03]"
-            : "border-neutral-200 bg-white opacity-80 dark:border-white/10 dark:bg-black/20"
+            ? "border-[var(--df-color-primary)] bg-[var(--df-color-bg-container)] ring-1 ring-[var(--df-color-primary-bg-hover)]"
+            : "border-[var(--df-color-border-secondary)] bg-[var(--df-color-bg-container)] opacity-90"
       } ${isDeleting ? "opacity-50" : ""}`}
     >
       <div className="relative aspect-square overflow-hidden">
@@ -54,7 +54,7 @@ export function ImageCard({
             alt={image.promptText}
             className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
           />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,rgba(10,10,10,0.72))]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.04)_25%,rgba(2,6,23,0.82)_100%)]" />
           <div className="absolute bottom-3 left-3 right-3 text-white">
             <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
               <span>{sourceLabel}</span>
@@ -67,10 +67,10 @@ export function ImageCard({
         </button>
 
         <label
-          className={`absolute left-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border transition ${
+          className={`absolute left-3 top-3 z-10 flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border shadow-sm transition-colors ${
             isQueuedForDelete
               ? "border-red-300 bg-red-600 text-white"
-              : "border-white/60 bg-black/45 text-white hover:bg-black/65"
+              : "border-white/60 bg-slate-950/55 text-white backdrop-blur-sm hover:bg-slate-950/75"
           }`}
         >
           <Checkbox
@@ -83,12 +83,13 @@ export function ImageCard({
         </label>
 
         <Button
+          type={image.selected ? "primary" : "default"}
           size="small"
-          type={image.selected ? "default" : "primary"}
-          className={`absolute right-3 top-3 z-10 rounded-full px-3 py-1 text-xs ${
+          icon={image.selected ? <Check className="h-3.5 w-3.5" /> : undefined}
+          className={`absolute right-3 top-3 z-10 !h-10 !rounded-lg !border-white/60 !px-3 !text-xs !shadow-sm !backdrop-blur-sm ${
             image.selected
-              ? "bg-white text-neutral-900 hover:bg-neutral-100"
-              : "bg-black/65 text-white hover:bg-black/80"
+              ? "!border-[var(--df-color-primary)]"
+              : "!bg-slate-950/60 !text-white hover:!bg-slate-950/80"
           }`}
           onClick={onToggleSelection}
           disabled={isDeleting}
@@ -101,7 +102,7 @@ export function ImageCard({
           onClick={onDelete}
           disabled={isDeleting}
           aria-label={`删除样本 #${image.ordinal}`}
-          className="absolute right-3 top-12 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-red-600 text-white shadow-lg transition hover:bg-red-500 disabled:opacity-50"
+          className="absolute right-3 top-[3.75rem] z-10 flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border border-white/20 bg-slate-950/60 text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Trash2 className="h-4 w-4" />
         </button>

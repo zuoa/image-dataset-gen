@@ -121,6 +121,56 @@ async function openPreview(page: Page) {
   return dialog;
 }
 
+test("dataset detail groups operations and uses structured sample filters", async ({
+  page,
+}, testInfo: TestInfo) => {
+  await mockDatasetDetailApi(page);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/datasets/demo");
+
+  await expect(
+    page.getByRole("heading", { name: "城市道路车辆样本集" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成样本" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "导入样本" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "处理数据" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "训练与导出" })).toBeVisible();
+  await expect(page.getByLabel("按样本来源筛选")).toBeVisible();
+  await expect(page.getByLabel("按标注状态筛选")).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "按类别筛选" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "按数据划分筛选" })).toBeVisible();
+
+  await page.getByRole("button", { name: "生成样本" }).click();
+  const dialog = page.getByRole("dialog", { name: "进入生成工作台" });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "配置生成批次" }),
+  ).toBeVisible();
+  await dialog.getByRole("button", { name: "取 消" }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.screenshot({
+    path: testInfo.outputPath("dataset-detail-desktop.png"),
+    fullPage: true,
+  });
+});
+
+test("dataset detail remains usable on a narrow viewport", async ({ page }, testInfo: TestInfo) => {
+  await mockDatasetDetailApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/datasets/demo");
+
+  await expect(page.getByRole("button", { name: "生成样本" })).toBeVisible();
+  await expect(page.getByLabel("按样本来源筛选")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("dataset-detail-mobile.png"),
+    fullPage: true,
+  });
+});
+
 test("desktop image preview is bounded and lets the image use the canvas", async ({ page }, testInfo: TestInfo) => {
   await mockDatasetDetailApi(page);
   await page.setViewportSize({ width: 1440, height: 960 });

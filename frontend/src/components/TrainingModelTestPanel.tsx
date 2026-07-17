@@ -19,7 +19,7 @@ type DisplayDetection = {
 };
 
 const activeTestStatuses = new Set(["queued", "assigned", "running"]);
-const detectionPalette = ["#38bdf8", "#f59e0b", "#84cc16", "#fb7185", "#a78bfa", "#2dd4bf", "#f97316", "#e879f9", "#94a3b8"];
+const detectionPalette = ["#64748b", "#4f6b73", "#6b7c74", "#7c8794", "#5b7080", "#7d8884", "#52636d", "#88949b", "#94a3b8"];
 const TEST_STATUS_POLL_INITIAL_DELAY_MS = 1000;
 const TEST_STATUS_POLL_INTERVAL_MS = 4000;
 const TEST_STATUS_POLL_HIDDEN_INTERVAL_MS = 15000;
@@ -364,9 +364,9 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
                           type="default"
                           block
                           className={cn(
-                            "h-auto rounded-[16px] border bg-white px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-lime-300 dark:bg-neutral-950",
+                            "h-auto rounded-[16px] border bg-[var(--df-color-bg-container)] px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-[var(--df-color-primary)]",
                             selected
-                              ? "border-lime-300 shadow-[0_0_0_1px_rgba(190,242,100,0.45)] dark:border-lime-300"
+                              ? "border-[var(--df-color-primary)] shadow-[0_0_0_1px_var(--df-color-primary-border)]"
                               : "border-neutral-200 hover:border-neutral-300 dark:border-white/10 dark:hover:border-white/20",
                           )}
                           onClick={() => setSelectedDetectionIndex(index)}
@@ -501,14 +501,14 @@ function AnnotatedResultImage({
         <div className="absolute inset-0" onClick={() => onSelectDetection(null)}>
           {detections.map(({ detection, index }) => {
             const selected = selectedDetectionIndex === index;
-            const color = selected ? "#bef264" : detectionColor(index);
+            const color = selected ? "#f4f4f5" : detectionColor(index);
             return (
               <button
                 key={`${detection.category}-${index}`}
                 type="button"
                 aria-label={`选择 ${detection.category}，置信度 ${formatConfidence(detection.confidence)}`}
                 className={cn(
-                  "absolute rounded-lg border-2 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-lime-300",
+                  "absolute rounded-lg border-2 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-white",
                   selected ? "z-10 shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "hover:shadow-[0_0_0_2px_rgba(0,0,0,0.28)]",
                 )}
                 style={{ ...detectionStyle(detection.bbox), borderColor: color }}

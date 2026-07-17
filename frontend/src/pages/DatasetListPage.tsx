@@ -175,7 +175,7 @@ export function DatasetListPage() {
                         </Row>
                       </Col>
                     </Row>
-                    <div className="mt-4 flex items-center justify-end text-neutral-400 transition group-hover:text-blue-600 dark:text-neutral-500 dark:group-hover:text-blue-400">
+                    <div className="mt-4 flex items-center justify-end text-neutral-400 transition group-hover:text-[var(--df-color-primary)] dark:text-neutral-500 dark:group-hover:text-[var(--df-color-primary-text-hover)]">
                       <Text className="mr-1 text-sm">查看详情</Text>
                       <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
                     </div>

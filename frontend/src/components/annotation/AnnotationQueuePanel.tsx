@@ -79,8 +79,8 @@ export function AnnotationQueuePanel({
   });
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-white dark:bg-[#11151b]" aria-label="标注队列">
-      <div className="shrink-0 border-b border-[#d7dce3] px-3 py-3 dark:border-white/10">
+    <section className="flex h-full min-h-0 flex-col bg-[var(--df-color-bg-container)]" aria-label="标注队列">
+      <div className="shrink-0 border-b border-[var(--df-color-border-secondary)] px-3 py-3">
         <div className="flex items-center justify-between gap-3">
           <div>
             <Typography.Text className="block text-xs font-medium text-neutral-500 dark:text-neutral-400">
@@ -99,7 +99,7 @@ export function AnnotationQueuePanel({
           aria-valuenow={progress}
         >
           <div
-            className="h-full rounded-full bg-emerald-500 transition-[width] duration-200"
+            className="h-full rounded-full bg-[var(--df-color-primary)] transition-[width] duration-200"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -128,10 +128,10 @@ export function AnnotationQueuePanel({
               aria-current={active ? "true" : undefined}
               onClick={() => onSelectImage(image.id)}
               className={cn(
-                "grid w-full cursor-pointer appearance-none grid-cols-[48px_minmax(0,1fr)] gap-2.5 rounded-lg border bg-transparent px-2 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-[#11151b]",
+                "grid w-full cursor-pointer appearance-none grid-cols-[48px_minmax(0,1fr)] gap-2.5 rounded-lg border bg-transparent px-2 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-primary)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--df-color-bg-container)]",
                 active
-                  ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-400/10"
-                  : "border-transparent hover:border-neutral-200 hover:bg-neutral-50 dark:hover:border-white/10 dark:hover:bg-white/[0.04]",
+                  ? "border-[var(--df-color-primary)] bg-[var(--df-color-primary-bg)]"
+                  : "border-transparent hover:border-[var(--df-color-border-secondary)] hover:bg-[var(--df-color-fill-alter)]",
               )}
             >
               <span className="relative aspect-square overflow-hidden rounded-md bg-neutral-200 dark:bg-neutral-800">

@@ -14,10 +14,10 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <Layout className="min-h-screen bg-[#f6f7f9] dark:bg-[#0b0f14]">
+    <Layout className="min-h-screen bg-[var(--df-color-bg-layout)]">
       <a
         href="#main-content"
-        className="fixed left-3 top-3 z-[100] -translate-y-20 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-transform focus:translate-y-0"
+        className="fixed left-3 top-3 z-[100] -translate-y-20 rounded-md bg-[var(--df-color-primary)] px-3 py-2 text-sm font-medium text-[var(--df-color-text-light-solid)] transition-transform focus:translate-y-0"
       >
         跳到主要内容
       </a>
@@ -29,7 +29,7 @@ export function AppShell() {
           collapsed={desktopCollapsed}
           collapsedWidth={72}
           width={240}
-          className="border-r border-[#d7dce3] bg-white dark:border-white/10 dark:bg-[#11151b]"
+          className="border-r border-[var(--df-color-border)] bg-[var(--df-color-bg-container)]"
         >
           <Sidebar collapsed={desktopCollapsed} />
         </Sider>
@@ -50,7 +50,7 @@ export function AppShell() {
       ) : null}
 
       <Layout className="min-w-0 bg-transparent">
-        <Header className="sticky top-0 z-40 h-auto border-b border-[#d7dce3] bg-white/90 backdrop-blur dark:border-white/10 dark:bg-[#11151b]/90">
+        <Header className="sticky top-0 z-40 h-auto border-b border-[var(--df-color-border)] bg-[var(--df-color-bg-container)]/90 backdrop-blur">
           <TopBar
             collapsed={isMobile ? !mobileOpen : desktopCollapsed}
             onToggle={() => {

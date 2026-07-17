@@ -35,7 +35,7 @@ export function PromptPreviewCard({
         <div className="space-y-5">
           <Card className="rounded-2xl" size="small" bordered>
             <Space wrap className="mb-3">
-              <Tag color={preview.language === "zh" ? "blue" : "default"}>
+              <Tag color={preview.language === "zh" ? "processing" : "default"}>
                 {preview.language === "zh" ? "中文适配" : "英文适配"}
               </Tag>
               <Tag color={preview.token_safe ? "success" : "warning"}>

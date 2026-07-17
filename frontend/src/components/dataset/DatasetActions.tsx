@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
+  ArrowUpRight,
+  ChevronDown,
   ClipboardList,
   Cpu,
   Download,
-  Layers,
   PencilRuler,
   Sparkles,
   Tag,
@@ -10,7 +12,8 @@ import {
   Wand2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Button, Space } from "antd";
+import { Button, Divider, Dropdown, Modal } from "antd";
+import type { MenuProps } from "antd";
 
 import type { Dataset, TrainingJob } from "../../lib/types";
 
@@ -21,6 +24,8 @@ const activeTrainingStatuses = new Set([
   "running",
   "uploading",
 ]);
+
+type WorkspaceEntry = "generate" | "annotate";
 
 function trainingStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -44,7 +49,6 @@ interface DatasetActionsProps {
   onImport: () => void;
   onTrain: () => void;
   onTasks: () => void;
-  onTools: () => void;
   isAnyImporting?: boolean;
 }
 
@@ -57,72 +61,178 @@ export function DatasetActions({
   onImport,
   onTrain,
   onTasks,
-  onTools,
   isAnyImporting,
 }: DatasetActionsProps) {
+  const [workspaceEntry, setWorkspaceEntry] = useState<WorkspaceEntry | null>(
+    null,
+  );
   const annotationRunning = dataset.annotation?.status === "running";
   const trainingRunning = latestTrainingJob
     ? activeTrainingStatuses.has(latestTrainingJob.status)
     : false;
 
+  const processingItems: MenuProps["items"] = [
+    {
+      key: "augment",
+      icon: <Wand2 className="h-4 w-4" />,
+      label: "创建增强批次",
+      disabled: dataset.selectedOriginalCount === 0,
+    },
+    {
+      key: "auto-annotate",
+      icon: <Tag className="h-4 w-4" />,
+      label: annotationRunning ? "自动标注运行中" : "自动标注",
+      disabled: dataset.imageCount === 0 || annotationRunning,
+    },
+    { type: "divider" },
+    {
+      key: "manual-annotate",
+      icon: <PencilRuler className="h-4 w-4" />,
+      label: "进入标注工作台",
+      disabled: dataset.imageCount === 0,
+    },
+  ];
+
+  const outputItems: MenuProps["items"] = [
+    {
+      key: "train",
+      icon: <Cpu className="h-4 w-4" />,
+      label: latestTrainingJob
+        ? `模型训练 · ${
+            trainingRunning
+              ? "运行中"
+              : trainingStatusLabel(latestTrainingJob.status)
+          }`
+        : "模型训练",
+    },
+    {
+      key: "export",
+      icon: <Download className="h-4 w-4" />,
+      label: "导出数据集",
+      disabled: dataset.selectedCount === 0,
+    },
+  ];
+
+  function handleProcessingAction({ key }: { key: string }) {
+    if (key === "augment") onAugment();
+    else if (key === "auto-annotate") onAnnotate();
+    else if (key === "manual-annotate") setWorkspaceEntry("annotate");
+  }
+
+  function handleOutputAction({ key }: { key: string }) {
+    if (key === "train") onTrain();
+    else if (key === "export") onExport();
+  }
+
+  const workspaceIsGenerate = workspaceEntry === "generate";
+  const workspacePath = workspaceIsGenerate
+    ? `/datasets/${dataset.id}/generate`
+    : `/datasets/${dataset.id}/annotate`;
+
   return (
-    <Space wrap className="mt-6">
-      <Link to={`/datasets/${dataset.id}/generate`}>
-        <Button type="primary" icon={<Sparkles className="h-4 w-4" />}>
-          生成
+    <>
+      <div className="mt-6 flex flex-wrap items-center gap-2.5">
+        <Button
+          type="primary"
+          size="large"
+          icon={<Sparkles className="h-4 w-4" />}
+          onClick={() => setWorkspaceEntry("generate")}
+          className="!h-11 !px-5"
+        >
+          生成样本
         </Button>
-      </Link>
-      <Button
-        icon={<Wand2 className="h-4 w-4" />}
-        onClick={onAugment}
-        disabled={dataset.selectedOriginalCount === 0}
-      >
-        增强
-      </Button>
-      <Button
-        icon={<Tag className="h-4 w-4" />}
-        onClick={onAnnotate}
-        disabled={dataset.imageCount === 0 || annotationRunning}
-      >
-        自动标注
-      </Button>
-      <Link
-        to={`/datasets/${dataset.id}/annotate`}
-        className={dataset.imageCount === 0 ? "pointer-events-none" : undefined}
-      >
-        <Button disabled={dataset.imageCount === 0} icon={<PencilRuler className="h-4 w-4" />}>
-          标注模式
+        <Button
+          size="large"
+          icon={<Upload className="h-4 w-4" />}
+          onClick={onImport}
+          disabled={isAnyImporting}
+          className="!h-11 !px-4"
+        >
+          {isAnyImporting ? "正在导入" : "导入样本"}
         </Button>
-      </Link>
-      <Button
-        icon={<Download className="h-4 w-4" />}
-        onClick={onExport}
-        disabled={dataset.selectedCount === 0}
-      >
-        导出
-      </Button>
-      <Button
-        icon={<Upload className="h-4 w-4" />}
-        onClick={onImport}
-        disabled={isAnyImporting}
-      >
-        导入
-      </Button>
-      <Button icon={<Cpu className="h-4 w-4" />} onClick={onTrain}>
-        训练
-        {latestTrainingJob ? (
-          <span className="ml-1.5 text-xs text-neutral-400">
-            {trainingRunning ? "运行中" : trainingStatusLabel(latestTrainingJob.status)}
+        <Dropdown
+          menu={{ items: processingItems, onClick: handleProcessingAction }}
+          trigger={["click"]}
+          placement="bottomLeft"
+        >
+          <Button size="large" className="!h-11 !px-4">
+            处理数据
+            <ChevronDown className="ml-1 h-4 w-4" />
+          </Button>
+        </Dropdown>
+        <Dropdown
+          menu={{ items: outputItems, onClick: handleOutputAction }}
+          trigger={["click"]}
+          placement="bottomLeft"
+        >
+          <Button size="large" className="!h-11 !px-4">
+            训练与导出
+            <ChevronDown className="ml-1 h-4 w-4" />
+          </Button>
+        </Dropdown>
+
+        <Divider type="vertical" className="mx-1 hidden !h-6 sm:block" />
+
+        <Button
+          type="text"
+          size="large"
+          icon={<ClipboardList className="h-4 w-4" />}
+          onClick={onTasks}
+          className="!h-11 !text-slate-600 dark:!text-slate-300"
+        >
+          任务记录
+          <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400">
+            {dataset.tasks.length}
           </span>
-        ) : null}
-      </Button>
-      <Button icon={<ClipboardList className="h-4 w-4" />} onClick={onTasks}>
-        批次任务
-        <span className="ml-1.5 text-xs text-neutral-400">{dataset.tasks.length}</span>
-      </Button>
-      <Button icon={<Layers className="h-4 w-4" />} onClick={onTools}>
-        数据集功能
-      </Button>
-    </Space>
+        </Button>
+      </div>
+
+      <Modal
+        open={workspaceEntry !== null}
+        onCancel={() => setWorkspaceEntry(null)}
+        title={workspaceIsGenerate ? "进入生成工作台" : "进入标注工作台"}
+        width={520}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setWorkspaceEntry(null)}>取消</Button>
+            <Link to={workspacePath}>
+              <Button
+                type="primary"
+                icon={<ArrowUpRight className="h-4 w-4" />}
+                onClick={() => setWorkspaceEntry(null)}
+              >
+                {workspaceIsGenerate ? "配置生成批次" : "开始人工标注"}
+              </Button>
+            </Link>
+          </div>
+        }
+      >
+        <div className="py-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--df-color-primary)] text-[var(--df-color-text-light-solid)]">
+                {workspaceIsGenerate ? (
+                  <Sparkles className="h-5 w-5" />
+                ) : (
+                  <PencilRuler className="h-5 w-5" />
+                )}
+              </div>
+              <div>
+                <div className="font-medium text-slate-900 dark:text-white">
+                  {workspaceIsGenerate
+                    ? "创建新的图像生成批次"
+                    : `逐张检查并编辑 ${dataset.imageCount} 张样本`}
+                </div>
+                <p className="mb-0 mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {workspaceIsGenerate
+                    ? "生成配置包含模型、提示词、数量和成本预览，因此会在专用工作台中完成。"
+                    : "标注工作台提供大图画布、样本队列和检测框编辑，需要使用完整页面空间。"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }

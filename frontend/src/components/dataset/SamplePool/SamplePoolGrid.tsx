@@ -99,7 +99,7 @@ export function SamplePoolGrid({
             isDeleting={deletingImageIdSet.has(image.id)}
             split={samplePoolSplitLabel(split)}
             annotationLabel={samplePoolAnnotationLabel(image)}
-            annotationClassName={annotated ? "text-lime-200" : "text-amber-200"}
+            annotationClassName={annotated ? "text-white" : "text-slate-300"}
             sourceLabel={samplePoolSourceLabel(image.sourceType)}
             onOpenPreview={() => onOpenPreview(image.id)}
             onToggleDeleteSelection={() => onToggleDeleteSelection(image.id)}

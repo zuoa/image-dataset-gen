@@ -1,5 +1,5 @@
-import { X } from "lucide-react";
-import { Button, Card, Col, Row } from "antd";
+import { Cpu } from "lucide-react";
+import { Col, Modal, Row } from "antd";
 
 import { TrainingResultsPanel } from "../../TrainingResultsPanel";
 import { TrainingModelTestPanel } from "../../TrainingModelTestPanel";
@@ -16,6 +16,7 @@ const activeTrainingStatuses = new Set([
 ]);
 
 interface TrainingPanelProps {
+  open: boolean;
   dataset: Dataset;
   trainingJobs: TrainingJob[];
   trainingModel: string;
@@ -51,18 +52,27 @@ export function TrainingPanel(props: TrainingPanelProps) {
     : false;
 
   return (
-    <Card className="mt-6">
-      <div className="flex items-start justify-between gap-3">
-        <div />
-        <Button
-          type="text"
-          shape="circle"
-          icon={<X className="h-5 w-5" />}
-          onClick={props.onClose}
-          aria-label="关闭训练面板"
-        />
-      </div>
-
+    <Modal
+      open={props.open}
+      onCancel={props.onClose}
+      footer={null}
+      width={1180}
+      title={
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--df-color-primary)] text-[var(--df-color-text-light-solid)]">
+            <Cpu className="h-4 w-4" />
+          </span>
+          <span>模型训练</span>
+        </div>
+      }
+      styles={{
+        body: {
+          maxHeight: "calc(100vh - 160px)",
+          overflowY: "auto",
+          paddingTop: 12,
+        },
+      }}
+    >
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={16}>
           <TrainingForm
@@ -106,6 +116,6 @@ export function TrainingPanel(props: TrainingPanelProps) {
           <TrainingModelTestPanel job={latestTrainingJob} />
         </>
       ) : null}
-    </Card>
+    </Modal>
   );
 }

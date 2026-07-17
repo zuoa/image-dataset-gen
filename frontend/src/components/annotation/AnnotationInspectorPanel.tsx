@@ -32,8 +32,8 @@ export function AnnotationInspectorPanel({
   statusLabel,
 }: AnnotationInspectorPanelProps) {
   return (
-    <aside className="flex h-full min-h-0 flex-col bg-white dark:bg-[#11151b]" aria-label="标注检查器">
-      <div className="shrink-0 border-b border-[#d7dce3] px-4 py-3 dark:border-white/10">
+    <aside className="flex h-full min-h-0 flex-col bg-[var(--df-color-bg-container)]" aria-label="标注检查器">
+      <div className="shrink-0 border-b border-[var(--df-color-border-secondary)] px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <Typography.Text className="block text-xs font-medium text-neutral-500 dark:text-neutral-400">
@@ -67,8 +67,10 @@ export function AnnotationInspectorPanel({
               <section
                 key={`${detection.category}-${index}`}
                 className={cn(
-                  "rounded-lg border bg-white p-3 transition-colors duration-150 dark:bg-black/10",
-                  selected ? "border-blue-500 ring-1 ring-blue-500/20" : "border-neutral-200 dark:border-white/10",
+                  "rounded-lg border bg-[var(--df-color-bg-container)] p-3 transition-colors duration-150",
+                  selected
+                    ? "border-[var(--df-color-primary)] ring-1 ring-[var(--df-color-primary-bg-hover)]"
+                    : "border-[var(--df-color-border-secondary)]",
                 )}
                 aria-label={`检测框 ${index + 1}`}
               >
@@ -76,7 +78,7 @@ export function AnnotationInspectorPanel({
                   <button
                     type="button"
                     onClick={() => onSelectDetection(index)}
-                    className="flex min-w-0 cursor-pointer appearance-none items-center gap-2 rounded border-0 bg-transparent px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="flex min-w-0 cursor-pointer appearance-none items-center gap-2 rounded border-0 bg-transparent px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-primary)]"
                   >
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(detection.category) }} />
                     <span className="truncate text-sm font-medium">对象 {index + 1}</span>

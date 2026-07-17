@@ -1,20 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ClipboardList,
-  Download,
-  Layers,
-  Loader,
-} from "lucide-react";
+import { ClipboardList, Images } from "lucide-react";
 import { useParams } from "react-router-dom";
 import {
   Alert,
   Button,
   Card,
-  Col,
-  Drawer,
   List,
+  Modal,
   Progress,
-  Row,
   Space,
   Typography,
 } from "antd";
@@ -128,6 +121,23 @@ function buildImageFilter(
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
 type SamplePoolAnnotationFilter = "" | "annotated" | "unannotated";
 type SamplePoolSourceFilter = "" | SamplePoolSource;
+
+function SampleSummary({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--df-color-border-secondary)] bg-[var(--df-color-fill-alter)] px-2.5 py-1 text-[var(--df-color-text-secondary)]"
+    >
+      <span className="opacity-70">{label}</span>
+      <strong className="font-semibold">{value}</strong>
+    </span>
+  );
+}
 
 export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
@@ -306,7 +316,6 @@ export function DatasetDetailPage() {
 
   const [isTrainingPanelOpen, setIsTrainingPanelOpen] = useState(false);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
-  const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
 
   const archiveInputRef = useRef<HTMLInputElement>(null);
 
@@ -383,36 +392,13 @@ export function DatasetDetailPage() {
   function applySamplePoolRetention(mode: "all" | "none" | "invert") {
     const totalImages = dataset?.imageCount ?? 0;
     if (totalImages === 0) return;
-
-    const retainedImageCount = dataset?.selectedCount ?? 0;
-    const unretainedImageCount = Math.max(
-      0,
-      totalImages - retainedImageCount,
-    );
-    const confirmMessage =
-      mode === "all"
-        ? `确认将全部 ${totalImages} 张样本标记为保留？当前有 ${unretainedImageCount} 张会从不保留变为保留。`
-        : mode === "invert"
-          ? `确认反转全部 ${totalImages} 张样本的保留状态？当前 ${retainedImageCount} 张会变为不保留，${unretainedImageCount} 张会变为保留。`
-          : `确认将全部 ${totalImages} 张样本标记为不保留？当前 ${retainedImageCount} 张保留样本会被移出训练和导出。`;
-
-    void confirm({
-      title: mode === "all" ? "全部保留" : mode === "invert" ? "反向保留" : "全部不保留",
-      content: confirmMessage,
-    }).then((confirmed) => {
-      if (confirmed) void applySelection({ mode });
-    });
+    void applySelection({ mode });
   }
 
   function retainUnannotatedSamplePoolImages() {
     const count = dataset?.unretainedUnannotatedImageCount ?? 0;
     if (count === 0) return;
-    void confirm({
-      title: "保留未标注样本",
-      content: `确认将 ${count} 张未标注且当前不保留的样本标记为保留？`,
-    }).then((confirmed) => {
-      if (confirmed) void applySelection({ mode: "all", scope: "unannotated_unretained" });
-    });
+    void applySelection({ mode: "all", scope: "unannotated_unretained" });
   }
 
   function toggleDeleteSelection(imageId: string) {
@@ -815,9 +801,14 @@ export function DatasetDetailPage() {
 
   return (
     <PageContainer>
-      <Card className="shadow-panel">
-        <Row gutter={[32, 32]} align="middle">
-          <Col xs={24} lg={14}>
+      <Card
+        className="relative overflow-hidden !border-slate-200 shadow-[0_18px_50px_rgba(15,23,42,0.07)] dark:!border-white/10"
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,var(--df-color-text),var(--df-color-text-tertiary),var(--df-color-border))]" />
+        <div className="relative overflow-hidden px-5 py-6 md:px-7 md:py-8">
+          <div className="pointer-events-none absolute -right-20 -top-28 h-72 w-72 rounded-full bg-slate-500/[0.06] blur-3xl dark:bg-white/[0.04]" />
+          <div className="relative max-w-5xl">
             <DatasetHeader dataset={dataset} />
             <DatasetActions
               dataset={dataset}
@@ -832,22 +823,24 @@ export function DatasetDetailPage() {
               }}
               onTrain={() => setIsTrainingPanelOpen(true)}
               onTasks={() => setIsTasksDrawerOpen(true)}
-              onTools={() => setIsToolsDrawerOpen(true)}
               isAnyImporting={isAnyImporting}
             />
             {importSummary ? (
-              <div className="mt-3 text-sm text-neutral-500">{importSummary}</div>
+              <Alert
+                className="mt-4 max-w-xl"
+                message={importSummary}
+                type="success"
+                showIcon
+              />
             ) : null}
             {(dataset.selectedOriginalCount ?? 0) === 0 ? (
-              <div className="mt-3 text-sm text-neutral-500">
+              <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">
                 当前没有保留的原始样本，暂时不能创建增强批次。
               </div>
             ) : null}
-          </Col>
-          <Col xs={24} lg={10}>
-            <DatasetMetrics dataset={dataset} />
-          </Col>
-        </Row>
+          </div>
+        </div>
+        <DatasetMetrics dataset={dataset} />
       </Card>
 
       {actionError ? (
@@ -861,10 +854,9 @@ export function DatasetDetailPage() {
         />
       ) : null}
 
-      <DatasetQualityPanel datasetId={dataset.id} imageCount={dataset.imageCount} />
-
       {isTrainingPanelOpen ? (
         <TrainingPanel
+          open={isTrainingPanelOpen}
           dataset={dataset}
           trainingJobs={trainingJobs}
           trainingModel={trainingModel}
@@ -897,18 +889,28 @@ export function DatasetDetailPage() {
         />
       ) : null}
 
-      <Card className="mt-6 shadow-panel">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">
-              样本池
+      <Card
+        className="mt-6 !border-slate-200 shadow-[0_14px_40px_rgba(15,23,42,0.05)] dark:!border-white/10"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
+              <Images className="h-5 w-5" />
+            </span>
+            <div>
+              <div className="text-xl font-semibold tracking-tight text-slate-950 dark:text-white md:text-2xl">
+                样本池
+              </div>
+              <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                筛选、保留和检查数据集中的全部图像
+              </div>
             </div>
-            <div className="mt-2 text-2xl">统一筛选、标注和导出</div>
-            <div className="mt-2 text-sm text-neutral-500">
-              当前显示 {loadedImages.length} / {imagesTotal} 张，显示范围内已保留{" "}
-              {filteredSelectedCount} 张，已标注 {filteredAnnotatedCount} 张，未标注{" "}
-              {filteredUnannotatedCount} 张，当前范围勾选待删 {deleteSelectionCount} 张
-            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs tabular-nums">
+            <SampleSummary label="当前显示" value={`${loadedImages.length} / ${imagesTotal}`} />
+            <SampleSummary label="已保留" value={filteredSelectedCount} />
+            <SampleSummary label="已标注" value={filteredAnnotatedCount} />
+            <SampleSummary label="未标注" value={filteredUnannotatedCount} />
           </div>
         </div>
 
@@ -963,6 +965,8 @@ export function DatasetDetailPage() {
           sentinelRef={sentinelRef}
         />
       </Card>
+
+      <DatasetQualityPanel datasetId={dataset.id} imageCount={dataset.imageCount} />
 
       <ImportModal
         open={isImportModalOpen}
@@ -1076,17 +1080,23 @@ export function DatasetDetailPage() {
         onConfirmDiscardChanges={confirmDiscardChanges}
       />
 
-      <Drawer
+      <Modal
         title={
           <div className="flex items-center gap-3">
-            <ClipboardList className="h-5 w-5 text-neutral-500" />
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-white dark:bg-white dark:text-slate-950">
+              <ClipboardList className="h-4 w-4" />
+            </span>
             <span>批次任务</span>
-            <span className="text-xs text-neutral-400">{dataset.tasks.length} 个任务</span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400">
+              {dataset.tasks.length}
+            </span>
           </div>
         }
         open={isTasksDrawerOpen}
-        onClose={() => setIsTasksDrawerOpen(false)}
-        width={520}
+        onCancel={() => setIsTasksDrawerOpen(false)}
+        footer={null}
+        width={680}
+        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
       >
         <List
           dataSource={dataset.tasks}
@@ -1097,7 +1107,7 @@ export function DatasetDetailPage() {
           }}
           renderItem={(task) => (
             <List.Item key={task.id}>
-              <Card className="w-full bg-neutral-50 dark:bg-white/[0.03]">
+              <Card className="w-full !border-slate-200 bg-slate-50/80 dark:!border-white/10 dark:bg-white/[0.03]">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <Space wrap size="small">
@@ -1105,7 +1115,9 @@ export function DatasetDetailPage() {
                       <StatusBadge status={task.status} />
                     </Space>
                     <div className="mt-3 text-lg">{task.taskName}</div>
-                    <div className="mt-1 text-sm text-neutral-500">{task.subject}</div>
+                    <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                      {task.subject}
+                    </div>
                   </div>
                   {(task.status === "paused" || task.status === "failed") && token ? (
                     <Button
@@ -1122,7 +1134,7 @@ export function DatasetDetailPage() {
                   ) : null}
                 </div>
                 <Progress percent={task.progressPercent} className="mt-4" />
-                <Space wrap className="mt-3 text-xs text-neutral-500">
+                <Space wrap className="mt-3 text-xs text-slate-500 dark:text-slate-400">
                   <span>
                     {task.imagesGenerated} / {task.imageCount}
                   </span>
@@ -1133,87 +1145,7 @@ export function DatasetDetailPage() {
             </List.Item>
           )}
         />
-      </Drawer>
-
-      <Drawer
-        title={
-          <div className="flex items-center gap-3">
-            <Layers className="h-5 w-5 text-neutral-500" />
-            <span>数据集功能</span>
-          </div>
-        }
-        open={isToolsDrawerOpen}
-        onClose={() => setIsToolsDrawerOpen(false)}
-        width={520}
-      >
-        <div className="space-y-4">
-          <Card className="bg-neutral-50 dark:bg-white/[0.03]">
-            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">
-              自动标注
-            </div>
-            <div className="mt-3 text-lg">
-              {dataset.annotation?.status === "running"
-                ? "运行中"
-                : String(dataset.annotation?.status ?? "idle") === "completed"
-                  ? "已完成"
-                  : "待执行"}
-            </div>
-            <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              对当前样本池执行自动标注，默认阈值 {confidenceThreshold.toFixed(2)}。
-            </div>
-            <Button
-              className="mt-4"
-              onClick={() => {
-                setIsToolsDrawerOpen(false);
-                setIsAnnotationModalOpen(true);
-              }}
-              disabled={dataset.imageCount === 0 || dataset.annotation?.status === "running"}
-            >
-              自动标注
-            </Button>
-          </Card>
-
-          <Card className="bg-neutral-50 dark:bg-white/[0.03]">
-            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">导出</div>
-            <div className="mt-3 text-lg">
-              {latestExport
-                ? `v${latestExport.version} · ${String(latestExport.status)}`
-                : "未创建导出包"}
-            </div>
-            <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              当前保留 {dataset.selectedCount} 张样本，可导出为{" "}
-              {exportFormat.toUpperCase()} 数据集。
-            </div>
-            <Space className="mt-4">
-              <Button
-                onClick={() => {
-                  setIsToolsDrawerOpen(false);
-                  setIsExportModalOpen(true);
-                }}
-                disabled={dataset.selectedCount === 0}
-              >
-                导出
-              </Button>
-              {latestExport && latestExport.status === "ready" ? (
-                <Button
-                  type="primary"
-                  icon={<Download className="h-4 w-4" />}
-                  onClick={() => {
-                    if (!token) return;
-                    void downloadWithToken(
-                      latestExport.downloadUrl,
-                      token,
-                      `${dataset.name}-${latestExport.version}.zip`,
-                    );
-                  }}
-                >
-                  下载最新包
-                </Button>
-              ) : null}
-            </Space>
-          </Card>
-        </div>
-      </Drawer>
+      </Modal>
     </PageContainer>
   );
 }

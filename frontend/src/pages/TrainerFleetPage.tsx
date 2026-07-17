@@ -181,11 +181,11 @@ export function TrainerFleetPage() {
           }
         />
 
-        <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#13181f] px-5 py-5 text-white shadow-[0_28px_70px_-36px_rgba(13,148,136,0.75)] sm:px-6">
+        <div className="relative mt-4 overflow-hidden rounded-2xl bg-[#17191c] px-5 py-5 text-white shadow-[0_28px_70px_-36px_rgba(0,0,0,0.58)] sm:px-6">
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:22px_22px]" />
           <Row gutter={[24, 24]} className="relative" align="middle">
             <Col xs={24} lg={6}>
-              <Typography.Text className="block font-mono text-[11px] uppercase tracking-[0.22em] text-emerald-300/70">
+              <Typography.Text className="block font-mono text-[11px] uppercase tracking-[0.22em] text-white/55">
                 Live signal
               </Typography.Text>
               <div className="mt-2 flex items-baseline gap-2">

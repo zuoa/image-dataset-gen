@@ -31,10 +31,10 @@ export function Sidebar({ collapsed, onClose, onNavigate }: SidebarProps) {
       : "/";
 
   return (
-    <div className="flex h-full flex-col bg-white p-3 dark:bg-[#11151b]">
+    <div className="flex h-full flex-col bg-[var(--df-color-bg-container)] p-3">
       <div className="flex min-h-16 items-center px-2 py-3">
         {collapsed ? (
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0b0f14] font-mono text-xs font-semibold text-white dark:bg-white dark:text-[#0b0f14]">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--df-color-text)] font-mono text-xs font-semibold text-[var(--df-color-bg-container)]">
             DF
           </div>
         ) : (

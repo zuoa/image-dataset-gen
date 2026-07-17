@@ -353,11 +353,11 @@ export function ImagePreviewModal({
       }}
       keyboard={!isAddingDetection}
     >
-      <div className="grid h-full min-h-0 w-full grid-rows-[minmax(0,1fr)_minmax(280px,42%)] bg-white text-neutral-900 dark:bg-[#11151b] dark:text-white lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
+      <div className="grid h-full min-h-0 w-full grid-rows-[minmax(0,1fr)_minmax(280px,42%)] bg-[var(--df-color-bg-container)] text-[var(--df-color-text)] lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
         <section className="relative min-h-0 overflow-hidden bg-[#080c11]" aria-label="图片画布">
           <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-center justify-between gap-3 sm:left-4 sm:right-4 sm:top-4">
             <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-black/55 px-3 py-2 text-white shadow-lg backdrop-blur-md">
-              <ImageIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-sky-300" />
+              <ImageIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-neutral-300" />
               <span className="truncate text-sm font-medium">样本 #{previewImage.ordinal}</span>
               <span className="font-mono text-xs tabular-nums text-neutral-400">
                 {previewIndex + 1}/{images.length}
@@ -372,7 +372,7 @@ export function ImagePreviewModal({
               <button
                 type="button"
                 aria-label="上一张图片"
-                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-30"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-30"
                 onClick={() => void movePreview(-1)}
                 disabled={previewIndex <= 0}
               >
@@ -381,7 +381,7 @@ export function ImagePreviewModal({
               <button
                 type="button"
                 aria-label="下一张图片"
-                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-30"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-30"
                 onClick={() => void movePreview(1)}
                 disabled={previewIndex >= images.length - 1}
               >
@@ -391,7 +391,7 @@ export function ImagePreviewModal({
               <button
                 type="button"
                 aria-label="关闭图片详情"
-                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                 onClick={() => void closePreview()}
               >
                 <X aria-hidden="true" className="h-5 w-5" />
@@ -437,8 +437,8 @@ export function ImagePreviewModal({
                       key={`${detection.category}-${index}`}
                       className={`pointer-events-auto absolute rounded-sm border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.65)] ${
                         selectedDetectionIndex === index
-                          ? "border-lime-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.12)]"
-                          : "border-sky-400"
+                          ? "border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.12)]"
+                          : "border-slate-400"
                       }`}
                       style={detectionStyle(detection.bbox)}
                       onMouseDown={(event) => beginDragDetection(index, event)}
@@ -493,14 +493,14 @@ export function ImagePreviewModal({
             )}
           </div>
           {isAddingDetection ? (
-            <div className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-sky-300/30 bg-sky-400/15 px-4 py-2 text-sm text-sky-100 shadow-lg backdrop-blur-md">
+            <div className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/20 bg-black/55 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-md">
               在图片上拖拽创建检测框 · Esc 取消
             </div>
           ) : null}
         </section>
 
-        <aside className="flex min-h-0 flex-col border-t border-neutral-200 bg-white dark:border-white/10 dark:bg-[#11151b] lg:border-l lg:border-t-0" aria-label="图片标注信息">
-          <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10 sm:px-5 sm:py-4">
+        <aside className="flex min-h-0 flex-col border-t border-[var(--df-color-border-secondary)] bg-[var(--df-color-bg-container)] lg:border-l lg:border-t-0" aria-label="图片标注信息">
+          <div className="shrink-0 border-b border-[var(--df-color-border-secondary)] px-4 py-3 sm:px-5 sm:py-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400">图片详情</div>
@@ -526,7 +526,7 @@ export function ImagePreviewModal({
             </div>
           </div>
 
-          <div className="shrink-0 border-b border-neutral-200 p-3 dark:border-white/10 sm:px-4">
+          <div className="shrink-0 border-b border-[var(--df-color-border-secondary)] p-3 sm:px-4">
             <div className="grid grid-cols-2 gap-2">
               <Button
                 icon={<Plus aria-hidden="true" className="h-4 w-4" />}
@@ -558,8 +558,8 @@ export function ImagePreviewModal({
                 key={`${detection.category}-${index}`}
                 className={`rounded-xl border p-3 transition-colors duration-200 ${
                   selectedDetectionIndex === index
-                    ? "border-blue-500 bg-blue-50/70 ring-1 ring-blue-500/15 dark:bg-blue-400/10"
-                    : "border-neutral-200 bg-white hover:border-neutral-300 dark:border-white/10 dark:bg-black/10 dark:hover:border-white/20"
+                    ? "border-[var(--df-color-primary)] bg-[var(--df-color-primary-bg)] ring-1 ring-[var(--df-color-primary-bg-hover)]"
+                    : "border-[var(--df-color-border-secondary)] bg-[var(--df-color-bg-container)] hover:border-[var(--df-color-border)]"
                 }`}
                 onClick={() => setSelectedDetectionIndex(index)}
                 aria-label={`检测框 ${index + 1}`}
