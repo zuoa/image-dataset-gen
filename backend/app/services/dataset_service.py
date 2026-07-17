@@ -21,6 +21,24 @@ from app.services.annotation_storage import (
 from app.services.image_storage import existing_generated_image
 
 
+IMAGE_SOURCE_FILTER_TYPES = {
+    "generation": ("generation",),
+    "imported": ("import", "video", "roboflow"),
+    "augmentation": ("augmentation",),
+}
+
+
+def _image_source_group(source_type: str) -> str | None:
+    for group, source_types in IMAGE_SOURCE_FILTER_TYPES.items():
+        if source_type in source_types:
+            return group
+    return None
+
+
+def _empty_image_source_counts() -> dict[str, int]:
+    return {group: 0 for group in IMAGE_SOURCE_FILTER_TYPES}
+
+
 def now_utc() -> datetime:
     return datetime.now(UTC)
 
@@ -175,6 +193,15 @@ def _image_annotation_counts(dataset: Dataset) -> dict[str, int]:
     return {"annotated": annotated, "unannotated": len(dataset.images) - annotated}
 
 
+def _image_source_counts(dataset: Dataset) -> dict[str, int]:
+    counts = _empty_image_source_counts()
+    for image in dataset.images:
+        group = _image_source_group(image.source_type)
+        if group:
+            counts[group] += 1
+    return counts
+
+
 def _filter_dataset_images(
     dataset: Dataset,
     image_filter: dict[str, Any] | None,
@@ -186,9 +213,13 @@ def _filter_dataset_images(
     class_filter = image_filter.get("class")
     split_filter = image_filter.get("split")
     annotation_filter = image_filter.get("annotation")
+    source_filter = image_filter.get("source")
+    source_types = IMAGE_SOURCE_FILTER_TYPES.get(str(source_filter), ()) if source_filter else ()
 
     result: list[DatasetImage] = []
     for image in dataset.images:
+        if source_types and image.source_type not in source_types:
+            continue
         if class_filter and class_filter not in (image.detection_categories or []):
             continue
         if split_filter:
@@ -456,6 +487,21 @@ def _annotation_counts_for_dataset(dataset_id: str, image_count: int) -> dict[st
     return {"annotated": int(annotated), "unannotated": max(0, int(image_count or 0) - int(annotated))}
 
 
+def _source_counts_for_dataset(dataset_id: str) -> dict[str, int]:
+    counts = _empty_image_source_counts()
+    rows = (
+        db.session.query(DatasetImage.source_type, func.count(DatasetImage.id))
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .group_by(DatasetImage.source_type)
+        .all()
+    )
+    for source_type, count in rows:
+        group = _image_source_group(str(source_type))
+        if group:
+            counts[group] += int(count or 0)
+    return counts
+
+
 def build_dataset_payload(
     dataset: Dataset,
     *,
@@ -470,6 +516,7 @@ def build_dataset_payload(
     class_counts = _image_class_counts(dataset)
     split_counts = _image_split_counts(dataset, split_map)
     annotation_counts = _image_annotation_counts(dataset)
+    source_counts = _image_source_counts(dataset)
 
     selected_original_count = sum(
         1 for image in dataset.images if image.selected and image.status != "augmented"
@@ -506,6 +553,7 @@ def build_dataset_payload(
         "imageClassCounts": class_counts,
         "imageSplitCounts": split_counts,
         "imageAnnotationCounts": annotation_counts,
+        "imageSourceCounts": source_counts,
         "selectedOriginalCount": selected_original_count,
         "unretainedUnannotatedImageCount": unretained_unannotated_count,
         "tasks": [build_dataset_task_payload(task) for task in dataset.tasks] if include_tasks else [],
@@ -531,6 +579,7 @@ def build_dataset_detail_payload(
     split_counts = _image_split_counts_for_totals(image_count, selected_count)
     class_counts = _image_class_counts_for_dataset(dataset)
     annotation_counts = _annotation_counts_for_dataset(dataset.id, image_count)
+    source_counts = _source_counts_for_dataset(dataset.id)
 
     selected_original_count = (
         db.session.query(func.count(DatasetImage.id))
@@ -553,6 +602,11 @@ def build_dataset_detail_payload(
     class_filter = (image_filter or {}).get("class") if image_filter else None
     split_filter = (image_filter or {}).get("split") if image_filter else None
     annotation_filter = (image_filter or {}).get("annotation") if image_filter else None
+    source_filter = (image_filter or {}).get("source") if image_filter else None
+    source_types = IMAGE_SOURCE_FILTER_TYPES.get(str(source_filter), ()) if source_filter else ()
+
+    if source_types:
+        filtered_query = filtered_query.filter(DatasetImage.source_type.in_(source_types))
 
     filtered_query = _filter_by_image_class(filtered_query, dataset.id, class_filter)
 
@@ -607,6 +661,7 @@ def build_dataset_detail_payload(
         "imageClassCounts": class_counts,
         "imageSplitCounts": split_counts,
         "imageAnnotationCounts": annotation_counts,
+        "imageSourceCounts": source_counts,
         "selectedOriginalCount": int(selected_original_count),
         "unretainedUnannotatedImageCount": int(unretained_unannotated_count),
         "tasks": [],

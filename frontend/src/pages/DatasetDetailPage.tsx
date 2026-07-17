@@ -25,7 +25,7 @@ import {
   updateDatasetImageAnnotations,
   updateDatasetSelection,
 } from "../api/datasets";
-import type { ImageFilter, SamplePoolSplit } from "../lib/types";
+import type { ImageFilter, SamplePoolSource, SamplePoolSplit } from "../lib/types";
 import { AuthImage } from "../components/AuthImage";
 import { TrainingModelTestPanel } from "../components/TrainingModelTestPanel";
 import { TrainingResultsPanel } from "../components/TrainingResultsPanel";
@@ -99,6 +99,12 @@ const activeDatasetTaskStatuses = new Set(["running"]);
 const activeDatasetExportStatuses = new Set(["pending", "running"]);
 type SamplePoolSplitFilter = "" | SamplePoolSplit;
 type SamplePoolAnnotationFilter = "" | "annotated" | "unannotated";
+type SamplePoolSourceFilter = "" | SamplePoolSource;
+const samplePoolSourceOptions: Array<{ value: SamplePoolSource; label: string }> = [
+  { value: "generation", label: "AI 生成" },
+  { value: "imported", label: "导入" },
+  { value: "augmentation", label: "数据增强" },
+];
 const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> = [
   { value: "train", label: "训练集" },
   { value: "val", label: "验证集" },
@@ -119,13 +125,22 @@ function buildImageFilter(
   classFilter: string,
   splitFilter: SamplePoolSplitFilter,
   annotationFilter: SamplePoolAnnotationFilter,
+  sourceFilter: SamplePoolSourceFilter,
 ): ImageFilter | undefined {
   const filter: ImageFilter = {};
   if (classFilter) filter.class = classFilter;
   if (splitFilter) filter.split = splitFilter;
   if (annotationFilter) filter.annotation = annotationFilter;
-  if (!filter.class && !filter.split && !filter.annotation) return undefined;
+  if (sourceFilter) filter.source = sourceFilter;
+  if (!filter.class && !filter.split && !filter.annotation && !filter.source) return undefined;
   return filter;
+}
+
+function samplePoolSourceLabel(sourceType: string) {
+  if (sourceType === "generation") return "AI 生成";
+  if (sourceType === "augmentation") return "数据增强";
+  if (["import", "video", "roboflow"].includes(sourceType)) return "导入";
+  return sourceType;
 }
 
 function samplePoolSplitLabel(split: SamplePoolSplit) {
@@ -234,6 +249,7 @@ export function DatasetDetailPage() {
   const [samplePoolClassFilter, setSamplePoolClassFilter] = useState("");
   const [samplePoolSplitFilter, setSamplePoolSplitFilter] = useState<SamplePoolSplitFilter>("");
   const [samplePoolAnnotationFilter, setSamplePoolAnnotationFilter] = useState<SamplePoolAnnotationFilter>("");
+  const [samplePoolSourceFilter, setSamplePoolSourceFilter] = useState<SamplePoolSourceFilter>("");
   const [augmentationMethods, setAugmentationMethods] = useState<AugmentationMethod[]>(defaultAugmentationMethods);
   const [augmentationSettings, setAugmentationSettings] = useState(defaultAugmentationSettings);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -285,6 +301,7 @@ export function DatasetDetailPage() {
   const samplePoolClassCounts = dataset?.imageClassCounts ?? {};
   const samplePoolSplitCounts = dataset?.imageSplitCounts ?? { train: 0, val: 0, test: 0, unselected: 0 };
   const samplePoolAnnotationCounts = dataset?.imageAnnotationCounts ?? { annotated: 0, unannotated: 0 };
+  const samplePoolSourceCounts = dataset?.imageSourceCounts ?? { generation: 0, imported: 0, augmentation: 0 };
   const filteredImageIds = filteredImages.map((image) => image.id);
   const filteredSelectedCount = filteredImages.filter((image) => image.selected).length;
   const filteredAnnotatedCount = filteredImages.filter((image) => isImageAnnotated(image)).length;
@@ -528,11 +545,16 @@ export function DatasetDetailPage() {
   }, [dataset?.categories, samplePoolClassFilter]);
 
   useEffect(() => {
-    const filter = buildImageFilter(samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter);
+    const filter = buildImageFilter(
+      samplePoolClassFilter,
+      samplePoolSplitFilter,
+      samplePoolAnnotationFilter,
+      samplePoolSourceFilter,
+    );
     currentFilterRef.current = filter;
     if (!token || !datasetId) return;
     void pageLoadersRef.current.fetchFirstPage(filter);
-  }, [datasetId, token, samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter]);
+  }, [datasetId, token, samplePoolClassFilter, samplePoolSplitFilter, samplePoolAnnotationFilter, samplePoolSourceFilter]);
 
   useEffect(() => {
     const node = sentinelRef.current;
@@ -1784,6 +1806,39 @@ export function DatasetDetailPage() {
 
         <div className="mt-5 space-y-4">
             <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">来源</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSamplePoolSourceFilter("")}
+                  aria-pressed={samplePoolSourceFilter === ""}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    samplePoolSourceFilter === ""
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                      : "border-neutral-200 bg-neutral-100 text-neutral-600 hover:border-neutral-400 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300 dark:hover:border-white/30"
+                  }`}
+                >
+                  全部 {dataset?.imageCount ?? 0}
+                </button>
+                {samplePoolSourceOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSamplePoolSourceFilter(option.value)}
+                    aria-pressed={samplePoolSourceFilter === option.value}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      samplePoolSourceFilter === option.value
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                        : "border-neutral-200 bg-neutral-100 text-neutral-600 hover:border-neutral-400 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-300 dark:hover:border-white/30"
+                    }`}
+                  >
+                    {option.label} {samplePoolSourceCounts[option.value] ?? 0}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
               <div className="mb-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">Class</div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1905,7 +1960,7 @@ export function DatasetDetailPage() {
                       <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,rgba(10,10,10,0.72))]" />
                       <div className="absolute bottom-3 left-3 right-3 text-white">
                         <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
-                          <span>{image.sourceType}</span>
+                          <span>{samplePoolSourceLabel(image.sourceType)}</span>
                           <span>{samplePoolSplitLabel(split)}</span>
                           <span>#{image.ordinal}</span>
                           <span className={annotated ? "text-lime-200" : "text-amber-200"}>
@@ -1956,7 +2011,7 @@ export function DatasetDetailPage() {
             })}
             {filteredImages.length === 0 && !isLoadingFirstPage ? (
               <div className="col-span-full rounded-[22px] border border-dashed border-neutral-200 px-5 py-8 text-sm text-neutral-500 dark:border-white/10">
-                当前 class/split 条件下没有样本。
+                当前筛选条件下没有样本。
               </div>
             ) : null}
             {filteredImages.length === 0 && isLoadingFirstPage ? (
@@ -2872,7 +2927,7 @@ export function DatasetDetailPage() {
               </div>
               <div className="mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">{previewImage.promptText}</div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Badge>{previewImage.sourceType}</Badge>
+                <Badge>{samplePoolSourceLabel(previewImage.sourceType)}</Badge>
                 <Badge>{previewImage.annotationStatus}</Badge>
               </div>
 

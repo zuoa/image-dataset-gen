@@ -350,6 +350,8 @@ export type TrainingInferenceTest = {
   completedAt?: string | null;
 };
 
+export type SamplePoolSource = "generation" | "imported" | "augmentation";
+
 export type Dataset = {
   id: string;
   name: string;
@@ -369,6 +371,7 @@ export type Dataset = {
   imageClassCounts?: Record<string, number>;
   imageSplitCounts?: Record<"train" | "val" | "test" | "unselected", number>;
   imageAnnotationCounts?: { annotated: number; unannotated: number };
+  imageSourceCounts?: Record<SamplePoolSource, number>;
   selectedOriginalCount?: number;
   unretainedUnannotatedImageCount?: number;
   tasks: DatasetTask[];
@@ -387,6 +390,7 @@ export type ImageFilter = {
   class?: string;
   split?: SamplePoolSplit;
   annotation?: "annotated" | "unannotated";
+  source?: SamplePoolSource;
 };
 
 export type DatasetSummary = {

@@ -61,6 +61,7 @@ export function getDataset(
   if (options?.filter?.class) params.set("filter_class", options.filter.class);
   if (options?.filter?.split) params.set("filter_split", options.filter.split);
   if (options?.filter?.annotation) params.set("filter_annotation", options.filter.annotation);
+  if (options?.filter?.source) params.set("filter_source", options.filter.source);
   const query = params.toString();
   return apiRequest<{ dataset: Dataset }>(
     `/datasets/${datasetId}${query ? `?${query}` : ""}`,
@@ -70,7 +71,7 @@ export function getDataset(
 
 export function buildImageFilter(filter: ImageFilter | null): ImageFilter | undefined {
   if (!filter) return undefined;
-  if (!filter.class && !filter.split && !filter.annotation) return undefined;
+  if (!filter.class && !filter.split && !filter.annotation && !filter.source) return undefined;
   return filter;
 }
 

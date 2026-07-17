@@ -40,6 +40,7 @@ from app.services.annotation_storage import (
 from app.services.dataset_export_service import get_dataset_archive_path
 from app.services.file_delivery import deliver_local_file
 from app.services.dataset_service import (
+    IMAGE_SOURCE_FILTER_TYPES,
     build_dataset_export_payload,
     build_dataset_detail_payload,
     build_dataset_image_payload,
@@ -306,16 +307,20 @@ def _parse_image_filter() -> dict[str, Any] | None:
     class_filter = (request.args.get("filter_class") or "").strip() or None
     split_filter = (request.args.get("filter_split") or "").strip() or None
     annotation_filter = (request.args.get("filter_annotation") or "").strip() or None
-    if not class_filter and not split_filter and not annotation_filter:
+    source_filter = (request.args.get("filter_source") or "").strip() or None
+    if not class_filter and not split_filter and not annotation_filter and not source_filter:
         return None
     if annotation_filter not in (None, "annotated", "unannotated"):
         annotation_filter = None
     if split_filter not in (None, "train", "val", "test", "unselected"):
         split_filter = None
+    if source_filter not in (None, *IMAGE_SOURCE_FILTER_TYPES):
+        source_filter = None
     return {
         "class": class_filter,
         "split": split_filter,
         "annotation": annotation_filter,
+        "source": source_filter,
     }
 
 

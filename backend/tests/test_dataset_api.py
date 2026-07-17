@@ -502,6 +502,83 @@ def test_get_dataset_filters_split_class_and_annotation_from_queries(tmp_path: P
     assert class_dataset["imageClassCounts"]["umbrella"] == 6
 
 
+def test_get_dataset_filters_by_image_source_group_and_reports_counts(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-detail-source-filter")
+    dataset_id = _create_dataset(client, headers)
+    source_types = [
+        "generation",
+        "import",
+        "video",
+        "roboflow",
+        "augmentation",
+        "augmentation",
+        "generation",
+    ]
+
+    with app.app_context():
+        dataset = db.session.get(Dataset, dataset_id)
+        assert dataset is not None
+        for ordinal, source_type in enumerate(source_types, start=1):
+            db.session.add(
+                DatasetImage(
+                    dataset_id=dataset.id,
+                    source_type=source_type,
+                    source_ordinal=ordinal,
+                    ordinal=ordinal,
+                    status="ready",
+                    seed=ordinal,
+                    prompt_text=f"{source_type} image {ordinal}",
+                    diversity_vars={},
+                    preview_svg="",
+                    selected=True,
+                    annotation_status="annotated" if ordinal % 2 == 0 else "pending",
+                    detection_categories=["pedestrian"],
+                )
+            )
+        dataset.image_count = len(source_types)
+        dataset.selected_count = len(source_types)
+        db.session.commit()
+
+    imported_response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_limit=2&filter_source=imported",
+        headers=headers,
+    )
+    assert imported_response.status_code == 200
+    imported_dataset = imported_response.get_json()["dataset"]
+    assert imported_dataset["imagesTotal"] == 3
+    assert [image["sourceType"] for image in imported_dataset["images"]] == ["import", "video"]
+    assert imported_dataset["imagesNextCursor"]
+    assert imported_dataset["imageSourceCounts"] == {
+        "generation": 2,
+        "imported": 3,
+        "augmentation": 2,
+    }
+
+    imported_next_response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_limit=2&filter_source=imported"
+        f"&images_cursor={imported_dataset['imagesNextCursor']}",
+        headers=headers,
+    )
+    assert imported_next_response.status_code == 200
+    imported_next = imported_next_response.get_json()["dataset"]
+    assert [image["sourceType"] for image in imported_next["images"]] == ["roboflow"]
+
+    augmented_response = client.get(
+        f"/api/v1/datasets/{dataset_id}?images_limit=20"
+        "&filter_source=augmentation&filter_annotation=annotated",
+        headers=headers,
+    )
+    assert augmented_response.status_code == 200
+    augmented_dataset = augmented_response.get_json()["dataset"]
+    assert augmented_dataset["imagesTotal"] == 1
+    assert [image["ordinal"] for image in augmented_dataset["images"]] == [6]
+
+
 def test_selection_bulk_update_avoids_loading_image_rows(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)
