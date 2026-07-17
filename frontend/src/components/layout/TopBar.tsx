@@ -1,6 +1,7 @@
 import { MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Breadcrumb, Button, Space } from "antd";
-import { Link, useMatches } from "react-router-dom";
+import type { RouteObject } from "react-router-dom";
+import { Link, matchRoutes, useLocation } from "react-router-dom";
 
 import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
@@ -10,17 +11,42 @@ interface TopBarProps {
   onToggle: () => void;
 }
 
-export function TopBar({ collapsed, onToggle }: TopBarProps) {
-  const matches = useMatches();
+interface BreadcrumbHandle {
+  title: string;
+  to?: string;
+}
 
-  // Build breadcrumb from matched routes that have a handle title.
+const breadcrumbRoutes: RouteObject[] = [
+  { path: "/", handle: { title: "数据集" } satisfies BreadcrumbHandle },
+  {
+    path: "/datasets",
+    handle: { title: "数据集", to: "/" } satisfies BreadcrumbHandle,
+    children: [
+      { path: "new", handle: { title: "新建数据集" } satisfies BreadcrumbHandle },
+      {
+        path: ":datasetId",
+        handle: { title: "数据集详情" } satisfies BreadcrumbHandle,
+        children: [
+          { path: "generate", handle: { title: "创建生成批次" } satisfies BreadcrumbHandle },
+        ],
+      },
+    ],
+  },
+  { path: "/models", handle: { title: "模型管理" } satisfies BreadcrumbHandle },
+  { path: "/trainers", handle: { title: "训练节点" } satisfies BreadcrumbHandle },
+];
+
+export function TopBar({ collapsed, onToggle }: TopBarProps) {
+  const location = useLocation();
+  const matches = matchRoutes(breadcrumbRoutes, location) ?? [];
+
   const breadcrumbItems = matches
-    .filter((match) => match.handle && typeof match.handle === "object" && "title" in match.handle)
+    .filter((match) => match.route.handle)
     .map((match, index, array) => {
-      const title = (match.handle as { title: string }).title;
+      const handle = match.route.handle as BreadcrumbHandle;
       const isLast = index === array.length - 1;
       return {
-        title: isLast ? title : <Link to={match.pathname}>{title}</Link>,
+        title: isLast ? handle.title : <Link to={handle.to ?? match.pathname}>{handle.title}</Link>,
       };
     });
 
