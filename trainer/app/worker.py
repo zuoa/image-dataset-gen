@@ -6,7 +6,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app import create_app
 from app.client import BackendClient
@@ -25,6 +25,9 @@ def main() -> None:
     worker_id = os.getenv("TRAINER_WORKER_ID", socket.gethostname())
     worker_name = os.getenv("TRAINER_WORKER_NAME", f"trainer-{worker_id}")
     poll_interval = float(os.getenv("TRAINER_POLL_INTERVAL_SECONDS", "5"))
+    heartbeat_interval = max(
+        1.0, float(os.getenv("TRAINER_HEARTBEAT_INTERVAL_SECONDS", "15"))
+    )
     work_root = Path(os.getenv("TRAINER_WORK_ROOT", "/app/work")).resolve()
     model_dir = Path(os.getenv("TRAINER_MODEL_DIR", "/app/models")).resolve()
     health_port = int(os.getenv("TRAINER_HEALTH_PORT", "8010"))
@@ -61,39 +64,50 @@ def main() -> None:
 
     current_job_id = ""
     current_test_id = ""
-    while True:
-        try:
-            client.heartbeat(worker_id, "busy" if current_job_id or current_test_id else "idle", current_job_id)
-            job = client.poll(worker_id)
-            if job is not None:
-                current_job_id = str(job["id"])
-                _run_job(client, worker_id, job, work_root)
-                current_job_id = ""
-                continue
+    worker_state = _WorkerState()
+    with _worker_keepalive(
+        client.clone(),
+        worker_id,
+        worker_state.status,
+        interval_seconds=heartbeat_interval,
+    ):
+        while True:
+            try:
+                job = client.poll(worker_id)
+                if job is not None:
+                    current_job_id = str(job["id"])
+                    worker_state.set_status("busy")
+                    _run_job(client, worker_id, job, work_root)
+                    current_job_id = ""
+                    worker_state.set_status("idle")
+                    continue
 
-            test_job = client.poll_inference(worker_id)
-            if test_job is None:
+                test_job = client.poll_inference(worker_id)
+                if test_job is None:
+                    current_test_id = ""
+                    time.sleep(poll_interval)
+                    continue
+
+                current_test_id = str(test_job["id"])
+                worker_state.set_status("busy")
+                _run_inference(client, worker_id, test_job, work_root)
                 current_test_id = ""
+                worker_state.set_status("idle")
+            except Exception as exc:
+                if current_job_id:
+                    try:
+                        client.update_status(current_job_id, "failed", error=str(exc))
+                    except Exception:
+                        pass
+                    current_job_id = ""
+                if current_test_id:
+                    try:
+                        client.update_inference_status(worker_id, current_test_id, "failed", error=str(exc))
+                    except Exception:
+                        pass
+                    current_test_id = ""
+                worker_state.set_status("idle")
                 time.sleep(poll_interval)
-                continue
-
-            current_test_id = str(test_job["id"])
-            _run_inference(client, worker_id, test_job, work_root)
-            current_test_id = ""
-        except Exception as exc:
-            if current_job_id:
-                try:
-                    client.update_status(current_job_id, "failed", error=str(exc))
-                except Exception:
-                    pass
-                current_job_id = ""
-            if current_test_id:
-                try:
-                    client.update_inference_status(worker_id, current_test_id, "failed", error=str(exc))
-                except Exception:
-                    pass
-                current_test_id = ""
-            time.sleep(poll_interval)
 
 
 def _run_job(client: BackendClient, worker_id: str, job: dict[str, Any], work_root: Path) -> None:
@@ -163,6 +177,49 @@ def _lease_heartbeat(callback, *, interval_seconds: float = 30.0):
                 continue
 
     thread = threading.Thread(target=run, daemon=True, name="assignment-heartbeat")
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
+
+
+class _WorkerState:
+    def __init__(self) -> None:
+        self._status = "idle"
+        self._lock = threading.Lock()
+
+    def set_status(self, status: str) -> None:
+        with self._lock:
+            self._status = status
+
+    def status(self) -> str:
+        with self._lock:
+            return self._status
+
+
+@contextmanager
+def _worker_keepalive(
+    client: BackendClient,
+    worker_id: str,
+    status_getter: Callable[[], str],
+    *,
+    interval_seconds: float = 15.0,
+):
+    stopped = threading.Event()
+
+    def run() -> None:
+        while not stopped.is_set():
+            try:
+                client.heartbeat(worker_id, status_getter())
+            except Exception:
+                # Keep polling and job execution independent from transient heartbeat failures.
+                pass
+            if stopped.wait(interval_seconds):
+                break
+
+    thread = threading.Thread(target=run, daemon=True, name="worker-keepalive")
     thread.start()
     try:
         yield

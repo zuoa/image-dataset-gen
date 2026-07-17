@@ -10,6 +10,7 @@ import { DatasetDetailPage } from "./pages/DatasetDetailPage";
 import { DatasetListPage } from "./pages/DatasetListPage";
 import { GenerationTaskPage } from "./pages/GenerationTaskPage";
 import { ModelManagementPage } from "./pages/ModelManagementPage";
+import { TrainerFleetPage } from "./pages/TrainerFleetPage";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 
@@ -75,6 +76,7 @@ export default function App() {
           }
         >
           <Route path="models" element={<ModelManagementPage />} />
+          <Route path="trainers" element={<TrainerFleetPage />} />
           <Route index element={<DatasetListPage />} />
           <Route path="datasets/new" element={<DatasetCreatePage />} />
           <Route path="datasets/:datasetId" element={<DatasetDetailPage />} />

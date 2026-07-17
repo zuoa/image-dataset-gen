@@ -260,6 +260,35 @@ export type DatasetExport = {
   createdAt: string;
 };
 
+export type TrainingWorker = {
+  id: string;
+  name: string;
+  status: "idle" | "busy" | string;
+  isOnline: boolean;
+  heartbeatAgeSeconds?: number | null;
+  capabilities: Record<string, unknown>;
+  version: string;
+  currentJobId?: string | null;
+  lastHeartbeatAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type TrainingWorkerSummary = {
+  total: number;
+  online: number;
+  idle: number;
+  busy: number;
+  offline: number;
+};
+
+export type TrainingWorkerList = {
+  workers: TrainingWorker[];
+  summary: TrainingWorkerSummary;
+  offlineAfterSeconds: number;
+  observedAt: string;
+};
+
 export type TrainingArtifact = {
   id: string;
   type: string;

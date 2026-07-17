@@ -132,11 +132,25 @@ def _artifact_download_url(job: TrainingJob, artifact: TrainingArtifact) -> str:
     )
 
 
-def _build_worker_payload(worker: TrainingWorker) -> dict[str, Any]:
+def _build_worker_payload(
+    worker: TrainingWorker, *, observed_at: datetime | None = None
+) -> dict[str, Any]:
+    heartbeat_age_seconds: int | None = None
+    is_online = False
+    if worker.last_heartbeat_at is not None:
+        heartbeat_age_seconds = max(
+            0,
+            int(((observed_at or now_utc()) - _as_utc(worker.last_heartbeat_at)).total_seconds()),
+        )
+        is_online = heartbeat_age_seconds <= int(
+            current_app.config["TRAINING_WORKER_OFFLINE_SECONDS"]
+        )
     return {
         "id": worker.id,
         "name": worker.name,
         "status": worker.status,
+        "isOnline": is_online,
+        "heartbeatAgeSeconds": heartbeat_age_seconds,
         "capabilities": worker.capabilities_json or {},
         "version": worker.version,
         "currentJobId": worker.current_job_id,
@@ -463,6 +477,36 @@ def _bounded_form_float(name: str, *, default: float, minimum: float, maximum: f
     return value
 
 
+@training_bp.get("/training/workers")
+@jwt_required()
+def list_training_workers():
+    observed_at = now_utc()
+    workers = TrainingWorker.query.order_by(
+        TrainingWorker.last_heartbeat_at.desc(), TrainingWorker.name.asc()
+    ).all()
+    payloads = [_build_worker_payload(worker, observed_at=observed_at) for worker in workers]
+    online_count = sum(1 for worker in payloads if worker["isOnline"])
+    busy_count = sum(
+        1 for worker in payloads if worker["isOnline"] and worker["status"] == "busy"
+    )
+    return jsonify(
+        {
+            "workers": payloads,
+            "summary": {
+                "total": len(payloads),
+                "online": online_count,
+                "idle": online_count - busy_count,
+                "busy": busy_count,
+                "offline": len(payloads) - online_count,
+            },
+            "offlineAfterSeconds": int(
+                current_app.config["TRAINING_WORKER_OFFLINE_SECONDS"]
+            ),
+            "observedAt": observed_at.isoformat(),
+        }
+    )
+
+
 @training_bp.post("/training/workers/register")
 def register_training_worker():
     token_error = _require_worker_token(allow_bootstrap=True)
@@ -501,10 +545,10 @@ def heartbeat_training_worker(worker_id: str):
 
     payload = TrainingWorkerHeartbeatSchema().load(request.get_json() or {})
     worker.last_heartbeat_at = now_utc()
-    current_job_id = (payload.get("current_job_id") or "").strip()
-    worker.current_job_id = current_job_id or worker.current_job_id
-    if worker.current_job_id:
-        active_job = db.session.get(TrainingJob, worker.current_job_id)
+    reported_job_id = (payload.get("current_job_id") or "").strip()
+    if reported_job_id:
+        worker.current_job_id = reported_job_id
+        active_job = db.session.get(TrainingJob, reported_job_id)
         if active_job is not None and active_job.worker_id == worker.id:
             assignment_error = _assignment_error(active_job, worker_id=worker.id)
             if assignment_error is not None:

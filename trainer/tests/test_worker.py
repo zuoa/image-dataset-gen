@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.request
 
-from app.worker import _run_inference, _start_health_server
+from app.worker import _run_inference, _start_health_server, _WorkerState, _worker_keepalive
 
 
 def test_health_server_returns_trainer_status() -> None:
@@ -20,6 +21,30 @@ def test_health_server_returns_trainer_status() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_worker_keepalive_reports_state_independently() -> None:
+    idle_seen = threading.Event()
+    busy_seen = threading.Event()
+
+    class FakeClient:
+        def heartbeat(self, worker_id: str, status: str) -> None:
+            assert worker_id == "gpu-1"
+            if status == "idle":
+                idle_seen.set()
+            if status == "busy":
+                busy_seen.set()
+
+    state = _WorkerState()
+    with _worker_keepalive(
+        FakeClient(),  # type: ignore[arg-type]
+        "gpu-1",
+        state.status,
+        interval_seconds=0.01,
+    ):
+        assert idle_seen.wait(0.2)
+        state.set_status("busy")
+        assert busy_seen.wait(0.2)
 
 
 def test_run_inference_downloads_files_and_uploads_detections(tmp_path, monkeypatch) -> None:

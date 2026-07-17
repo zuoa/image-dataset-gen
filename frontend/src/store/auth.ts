@@ -15,23 +15,31 @@ type AuthState = {
   signOut: (message?: string | null) => void;
 };
 
+let hydrationPromise: Promise<void> | null = null;
+
 export const useAuthStore = create<AuthState>((set) => ({
   token: null,
   user: null,
-  isLoading: false,
+  isLoading: true,
   error: null,
-  async hydrate() {
-    clearLegacyToken();
-    set({ isLoading: true, error: null });
-    try {
-      const session = await refreshSession();
-      const token = session.token;
-      const data = await getMe(token);
-      set({ user: data.user, isLoading: false, token });
-    } catch (error) {
-      useModelProfilesStore.getState().clear();
-      set({ token: null, user: null, isLoading: false, error: null });
-    }
+  hydrate() {
+    if (hydrationPromise) return hydrationPromise;
+    hydrationPromise = (async () => {
+      clearLegacyToken();
+      set({ isLoading: true, error: null });
+      try {
+        const session = await refreshSession();
+        const token = session.token;
+        const data = await getMe(token);
+        set({ user: data.user, isLoading: false, token });
+      } catch (error) {
+        useModelProfilesStore.getState().clear();
+        set({ token: null, user: null, isLoading: false, error: null });
+      }
+    })().finally(() => {
+      hydrationPromise = null;
+    });
+    return hydrationPromise;
   },
   async signIn(username, password) {
     set({ isLoading: true, error: null });

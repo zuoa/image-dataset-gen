@@ -11,6 +11,7 @@ class BackendClient:
     def __init__(self, base_url: str, worker_token: str, timeout: int = 30) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.worker_token = worker_token
         self.session = requests.Session()
         self.session.headers.update({"X-Training-Worker-Token": worker_token})
 
@@ -29,13 +30,20 @@ class BackendClient:
         payload = response.json()
         worker_token = payload.get("workerToken")
         if worker_token:
-            self.session.headers.update({"X-Training-Worker-Token": str(worker_token)})
+            self.worker_token = str(worker_token)
+            self.session.headers.update({"X-Training-Worker-Token": self.worker_token})
         return payload["worker"]
 
+    def clone(self) -> "BackendClient":
+        return BackendClient(self.base_url, self.worker_token, self.timeout)
+
     def heartbeat(self, worker_id: str, status: str, current_job_id: str = "") -> None:
+        payload = {"status": status}
+        if current_job_id:
+            payload["current_job_id"] = current_job_id
         response = self.session.post(
             f"{self.base_url}/training/workers/{worker_id}/heartbeat",
-            json={"status": status, "current_job_id": current_job_id},
+            json=payload,
             timeout=self.timeout,
         )
         response.raise_for_status()

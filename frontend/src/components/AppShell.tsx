@@ -1,4 +1,4 @@
-import { Boxes, Cpu, LogOut, Sparkles } from "lucide-react";
+import { Boxes, Cpu, LogOut, Server, Sparkles } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { useAuthStore } from "../store/auth";
@@ -8,6 +8,7 @@ const navItems = [
   { to: "/", label: "数据集", icon: Boxes },
   { to: "/datasets/new", label: "新建数据集", icon: Sparkles },
   { to: "/models", label: "模型管理", icon: Cpu },
+  { to: "/trainers", label: "训练节点", icon: Server },
 ];
 
 export function AppShell() {
@@ -35,6 +36,7 @@ export function AppShell() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  end={item.to === "/"}
                   className={({ isActive }) =>
                     cn(
                       "flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm transition",

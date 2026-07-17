@@ -50,6 +50,23 @@ def test_inference_download_urls_use_configured_backend_base_url() -> None:
     )
 
 
+def test_process_heartbeat_does_not_claim_an_assignment() -> None:
+    client = BackendClient("https://platform.example.com/api/v1", "token")
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(url: str, **kwargs: Any) -> _FakeResponse:
+        requests.append({"url": url, **kwargs})
+        return _FakeResponse(b"{}")
+
+    client.session.post = fake_post  # type: ignore[method-assign]
+
+    client.heartbeat("gpu-1", "idle")
+    client.heartbeat("gpu-1", "busy", "job-1")
+
+    assert requests[0]["json"] == {"status": "idle"}
+    assert requests[1]["json"] == {"status": "busy", "current_job_id": "job-1"}
+
+
 def test_download_dataset_rejects_non_zip_response(tmp_path: Path) -> None:
     client = BackendClient("https://platform.example.com/api/v1", "token")
     body = b"<!doctype html><html><body>app shell</body></html>"

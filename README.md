@@ -51,6 +51,9 @@ docker compose run --rm backend flask --app manage.py create-admin \
 
 4. 打开 `http://localhost:4173`。生产 HTTPS 部署必须设置 `FRONTEND_URL=https://...` 和 `REFRESH_COOKIE_SECURE=true`。
 
+独立 GPU 主机使用 `docker-compose.trainer.yml` 启动 trainer。trainer 会按
+`TRAINER_HEARTBEAT_INTERVAL_SECONDS`（默认 15 秒）主动向平台保活；Forge 的“训练节点”页面会展示已注册节点、忙闲状态和最近心跳。平台默认在 60 秒未收到心跳后将节点标记为离线，可通过 `TRAINING_WORKER_OFFLINE_SECONDS` 调整。
+
 ## 开发与测试
 
 ```bash

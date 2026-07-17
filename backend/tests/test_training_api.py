@@ -1,3 +1,4 @@
+from datetime import timedelta
 from io import BytesIO
 import json
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.models import (
     TrainingWorker,
 )
 from app.services.image_storage import save_generated_image
+from app.services.dataset_service import now_utc
 
 
 def _png_bytes() -> bytes:
@@ -68,6 +70,58 @@ def test_registered_worker_receives_scoped_runtime_token(tmp_path: Path):
         json={"status": "idle"},
     )
     assert accepted.status_code == 200
+
+
+def test_authenticated_user_can_list_online_and_offline_training_workers(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+        TRAINING_WORKER_OFFLINE_SECONDS = 60
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "trainer-fleet-user")
+
+    for worker_id, name in (("gpu-online", "Online GPU"), ("gpu-stale", "Stale GPU")):
+        response = client.post(
+            "/api/v1/training/workers/register",
+            headers=_worker_headers(),
+            json={
+                "worker_id": worker_id,
+                "name": name,
+                "version": "0.1.0",
+                "capabilities": {"frameworks": ["yolov8"], "runtime": "cuda"},
+            },
+        )
+        assert response.status_code == 200
+
+    with app.app_context():
+        online = db.session.get(TrainingWorker, "gpu-online")
+        stale = db.session.get(TrainingWorker, "gpu-stale")
+        assert online is not None and stale is not None
+        online.status = "busy"
+        stale.last_heartbeat_at = now_utc() - timedelta(seconds=61)
+        db.session.commit()
+
+    unauthorized = client.get("/api/v1/training/workers")
+    assert unauthorized.status_code == 401
+
+    response = client.get("/api/v1/training/workers", headers=headers)
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["offlineAfterSeconds"] == 60
+    assert body["summary"] == {
+        "total": 2,
+        "online": 1,
+        "idle": 0,
+        "busy": 1,
+        "offline": 1,
+    }
+    workers = {worker["id"]: worker for worker in body["workers"]}
+    assert workers["gpu-online"]["isOnline"] is True
+    assert workers["gpu-online"]["heartbeatAgeSeconds"] <= 1
+    assert workers["gpu-stale"]["isOnline"] is False
+    assert workers["gpu-stale"]["heartbeatAgeSeconds"] >= 61
 
 
 def _create_dataset_with_image(app, client, headers: dict[str, str]) -> str:
