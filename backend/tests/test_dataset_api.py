@@ -810,14 +810,15 @@ def test_import_yolo_archive_preserves_annotations_and_split(tmp_path: Path):
     )
 
     assert response.status_code == 200
-    assert response.get_json()["summary"] == {
-        "annotatedCount": 1,
-        "detectedFormat": "yolo",
-        "emptyAnnotationCount": 0,
-        "importedCount": 1,
-        "skippedCount": 0,
-        "skippedFiles": [],
-    }
+    task = response.get_json()["task"]
+    assert task["status"] == "completed"
+    runtime = task["config"]["runtime"]
+    assert runtime["annotatedCount"] == 1
+    assert runtime["detectedFormat"] == "yolo"
+    assert runtime["emptyAnnotationCount"] == 0
+    assert runtime["importedCount"] == 1
+    assert runtime["skippedCount"] == 0
+    assert runtime["skippedFiles"] == []
     image = _fetch_images(client, dataset_id, headers)[0]
     assert image["annotationStatus"] == "annotated"
     assert image["split"] == "train"
@@ -853,10 +854,10 @@ def test_import_rejects_malformed_yolo_archive_with_actionable_error(tmp_path: P
         content_type="multipart/form-data",
     )
 
-    assert response.status_code == 400
-    assert response.get_json() == {
-        "message": "无法解析 YOLO 标注，请检查 data.yaml 和标签文件。"
-    }
+    assert response.status_code == 200
+    task = response.get_json()["task"]
+    assert task["status"] == "failed"
+    assert "无法解析 YOLO 标注" in task["config"]["runtime"]["workerError"]
 
 
 def test_selection_can_target_visible_image_scope(tmp_path: Path):

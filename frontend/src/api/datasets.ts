@@ -142,7 +142,7 @@ export function retryDatasetTask(datasetId: string, taskId: string, token: strin
 export function importDatasetImagesArchive(datasetId: string, token: string, archive: File) {
   const body = new FormData();
   body.append("archive", archive);
-  return apiRequestFormData<{ summary: Record<string, unknown>; dataset: Dataset }>(
+  return apiRequestFormData<{ task: DatasetTask; dataset: Dataset }>(
     `/datasets/${datasetId}/tasks/import`,
     body,
     { token, method: "POST" },

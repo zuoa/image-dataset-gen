@@ -101,14 +101,13 @@ def test_yolo_archive_round_trips_multiple_detections(tmp_path):
         content_type="multipart/form-data",
     )
     assert imported.status_code == 200
-    assert imported.get_json()["summary"] == {
-        "annotatedCount": 1,
-        "detectedFormat": "yolo",
-        "emptyAnnotationCount": 0,
-        "importedCount": 1,
-        "skippedCount": 0,
-        "skippedFiles": [],
-    }
+    runtime = imported.get_json()["task"]["config"]["runtime"]
+    assert runtime["annotatedCount"] == 1
+    assert runtime["detectedFormat"] == "yolo"
+    assert runtime["emptyAnnotationCount"] == 0
+    assert runtime["importedCount"] == 1
+    assert runtime["skippedCount"] == 0
+    assert runtime["skippedFiles"] == []
     image = client.get(
         f"/api/v1/datasets/{dataset_id}", headers=headers
     ).get_json()["dataset"]["images"][0]
@@ -141,14 +140,13 @@ def test_yolo_archive_round_trips_multiple_detections(tmp_path):
         content_type="multipart/form-data",
     )
     assert reimported.status_code == 200
-    assert reimported.get_json()["summary"] == {
-        "annotatedCount": 1,
-        "detectedFormat": "yolo",
-        "emptyAnnotationCount": 0,
-        "importedCount": 1,
-        "skippedCount": 0,
-        "skippedFiles": [],
-    }
+    reimported_runtime = reimported.get_json()["task"]["config"]["runtime"]
+    assert reimported_runtime["annotatedCount"] == 1
+    assert reimported_runtime["detectedFormat"] == "yolo"
+    assert reimported_runtime["emptyAnnotationCount"] == 0
+    assert reimported_runtime["importedCount"] == 1
+    assert reimported_runtime["skippedCount"] == 0
+    assert reimported_runtime["skippedFiles"] == []
     reimported_image = client.get(
         f"/api/v1/datasets/{reimported_dataset_id}", headers=headers
     ).get_json()["dataset"]["images"][0]

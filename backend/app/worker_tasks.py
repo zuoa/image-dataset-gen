@@ -63,6 +63,11 @@ from app.services.video_import_service import (
     video_frame_count,
     video_frame_rate,
 )
+from app.services.dataset_archive_import_service import (
+    cleanup_zip_import_source,
+    resolve_zip_import_source,
+    run_archive_import_task,
+)
 from app.utils.crypto import decrypt_secret
 
 
@@ -764,6 +769,39 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
     except Exception as exc:
         current_app.logger.exception("Video frame extraction failed for task %s", task_id)
         _mark_video_import_failed(task_id, str(exc))
+        _finish_task_execution(execution_item_id, "failed", str(exc))
+        db.session.commit()
+    finally:
+        _maybe_remove_session(self.request.is_eager)
+
+
+@celery.task(bind=True, max_retries=2)
+def extract_dataset_archive_images(self, task_id: str) -> None:
+    task = db.session.get(DatasetTask, task_id)
+    if (
+        task is None
+        or task.task_type != "import"
+        or (task.config_json or {}).get("source") != "zip"
+        or task.status != "running"
+    ):
+        return
+    execution_item_id = _claim_task_execution(task_id, "zip_import")
+    if execution_item_id is None:
+        return
+
+    try:
+        run_archive_import_task(task_id)
+        _finish_task_execution(execution_item_id, "completed")
+        db.session.commit()
+    except SoftTimeLimitExceeded as exc:
+        current_app.logger.warning(
+            "Archive import reached soft limit; rescheduling task %s", task_id
+        )
+        _release_dataset_task_execution_for_retry(task_id, "soft time limit reached")
+        raise self.retry(exc=exc, countdown=5)
+    except Exception as exc:
+        current_app.logger.exception("Archive import failed for task %s", task_id)
+        _mark_dataset_task_execution_failed(task_id, str(exc))
         _finish_task_execution(execution_item_id, "failed", str(exc))
         db.session.commit()
     finally:

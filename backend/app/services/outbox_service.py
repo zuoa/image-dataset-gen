@@ -17,6 +17,7 @@ TASK_QUEUES = {
     "app.worker_tasks.annotate_dataset_images_task": "generation",
     "app.worker_tasks.augment_dataset_task_images": "media",
     "app.worker_tasks.extract_dataset_video_frames": "media",
+    "app.worker_tasks.extract_dataset_archive_images": "media",
     "app.worker_tasks.export_dataset_archive": "media",
     "app.worker_tasks.import_roboflow_dataset_task": "media",
     "app.worker_tasks.analyze_dataset_quality": "media",

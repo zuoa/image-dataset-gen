@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import raiseload
+from werkzeug.utils import secure_filename
 
 from app.extensions import db
 from app.models import (
@@ -70,7 +71,7 @@ from app.services.idempotency_service import (
     begin_idempotent_request,
     complete_idempotent_request,
 )
-from app.services.storage_backend import register_local_asset
+from app.services.storage_backend import local_backend, register_local_asset
 from app.services.model_profile_service import _resolved_profile_api_key
 from app.services.outbox_service import enqueue_background_task
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
@@ -91,6 +92,8 @@ from app.services.video_import_service import (
     save_video_import_source,
     video_target_size_max_dimension,
 )
+from app.services.dataset_archive_import_service import save_zip_import_source
+from app.worker_tasks import extract_dataset_archive_images
 from app.utils.crypto import encrypt_secret
 
 datasets_bp = Blueprint("datasets", __name__)
@@ -536,24 +539,45 @@ def import_dataset_images(dataset_id: str):
     if not archive.filename.lower().endswith(".zip"):
         return jsonify({"message": "只支持上传 ZIP 压缩包。"}), 400
 
-    archive_bytes = archive.read()
-    if not archive_bytes:
-        return jsonify({"message": "上传的 ZIP 压缩包为空。"}), 400
-    from app.services.dataset_archive_import_service import (
-        DatasetArchiveImportError,
-        import_dataset_archive,
+    storage_root = current_app.config["STORAGE_ROOT"]
+    task = DatasetTask(
+        dataset_id=dataset.id,
+        user_id=user_id,
+        task_type="import",
+        task_name=f"导入批次 {int(dataset.task_count or 0) + 1}",
+        subject=dataset.name,
+        image_count=0,
+        categories=[],
+        config_json={"source": "zip", "filename": secure_filename(archive.filename)},
+        prompt_json={},
+        status="running",
+        progress_percent=0,
+        api_provider="local",
+        started_at=now_utc(),
     )
+    db.session.add(task)
+    db.session.flush()
 
-    try:
-        summary = import_dataset_archive(
-            dataset=dataset, user_id=user_id, archive_bytes=archive_bytes
-        )
-    except DatasetArchiveImportError as exc:
-        db.session.rollback()
-        return jsonify({"message": str(exc)}), 400
+    source_key = save_zip_import_source(storage_root, task.id, archive)
+    source_path = local_backend(storage_root).resolve(source_key)
+    task.source_asset = register_local_asset(
+        storage_root,
+        source_path,
+        user_id=user_id,
+        dataset_id=dataset.id,
+        kind="zip_source",
+        mime_type="application/zip",
+        original_filename=archive.filename,
+    )
+    config = {**(task.config_json or {})}
+    config["sourcePath"] = source_key
+    task.config_json = config
+
+    _dispatch_background_task(extract_dataset_archive_images, task.id)
+    db.session.commit()
     return jsonify(
         {
-            "summary": summary,
+            "task": build_dataset_task_summary_payload(task),
             "dataset": build_dataset_detail_payload(
                 _dataset_for_user(dataset.id, user_id), include_images=False
             ),

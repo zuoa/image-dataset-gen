@@ -668,12 +668,7 @@ export function DatasetDetailPage() {
     try {
       const response = await importDatasetImagesArchive(datasetId, token, file);
       setActionError(null);
-      setImportSummary(
-        `已导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
-          (Number(response.summary.skippedCount ?? 0) > 0
-            ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件`
-            : ""),
-      );
+      setImportSummary("ZIP 导入任务已创建，后台处理中。");
       setIsImportModalOpen(false);
       await invalidateDatasetData();
     } catch (error) {
