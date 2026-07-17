@@ -69,7 +69,7 @@ cd frontend && npm ci && npm run build
 ## 数据库与迁移
 
 - 生产数据库固定使用 PostgreSQL；UUID、JSONB、数值精度、外键、唯一约束和检查约束由数据库保证。
-- `20260717_01` 支持空库初始化和旧 Compose PostgreSQL 库接管；当前 head `20260717_02` 增加外部连接、质量运行与质量问题表。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
+- `20260717_01` 支持空库初始化和旧 Compose PostgreSQL 库接管；当前 head `20260717_03` 增加登录图片验证码表。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
 - 修改模型后必须生成并审阅迁移，再运行：
 
 ```bash
@@ -80,10 +80,15 @@ alembic check
 
 ## 认证
 
+- 登录前必须获取图片验证码。验证码默认 5 位、120 秒有效、绑定请求客户端且只能消费一次；长度和有效期可通过 `LOGIN_CAPTCHA_LENGTH`、`LOGIN_CAPTCHA_EXPIRES_SECONDS` 调整。
 - Access token 默认 15 分钟，只保存在前端内存中。
 - 刷新令牌是可撤销、轮换的 opaque token，仅存于 `HttpOnly`、`SameSite=Lax` Cookie；同一客户端的并发轮换有默认 10 秒宽限期，宽限期外检测到旧 token 复用会撤销整个 session family。
+- 页面刷新时前端先进入“检查中”状态，通过 refresh cookie 恢复用户和新的 access token；确认失败后才进入登录页。登录成功后会返回原先访问的站内页面。
+- 浏览器携带 refresh cookie 的请求会校验 `Origin`：接受配置的 `FRONTEND_URL`，也接受反向代理转发的当前同源 host。HTTPS 部署必须让代理保留原始 `Host` 和 `X-Forwarded-Proto`。
 - 生产默认 `REGISTRATION_MODE=disabled`，首个账户通过 CLI 创建。
-- Nginx 对登录和注册接口限流。外部部署还应在 CDN/WAF 层增加 IP 与账号维度规则。
+- Nginx 对验证码、登录和注册接口分别限流。外部部署还应在 CDN/WAF 层增加 IP 与账号维度规则。
+
+当前系统的授权模型是“登录用户 + 数据归属隔离”：业务 API 必须携带 access token，数据集、图片、模型配置和外部连接按 `user_id` 查询；`plan` 只是套餐展示字段，不是角色或管理员权限。以后如需多人管理员/只读角色，应单独增加 role/permission 模型，不要复用 `plan`。
 
 ## 文件与任务
 

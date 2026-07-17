@@ -37,7 +37,15 @@ def create_app(
     jwt.init_app(app)
     cors.init_app(
         app,
-        resources={f"{app.config['API_PREFIX']}/*": {"origins": app.config["FRONTEND_URL"]}},
+        resources={
+            f"{app.config['API_PREFIX']}/*": {
+                "origins": [
+                    origin.strip()
+                    for origin in str(app.config["FRONTEND_URL"]).split(",")
+                    if origin.strip()
+                ]
+            }
+        },
         supports_credentials=True,
     )
     _make_celery(app)

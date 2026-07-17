@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import hashlib
 import secrets
+from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidTag
 from flask import Blueprint, current_app, jsonify, request
@@ -12,7 +13,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
 from app.models import RefreshSession, User, generate_uuid
-from app.schemas import CredentialSchema
+from app.schemas import CredentialSchema, LoginSchema
+from app.services.captcha_service import consume_login_captcha, issue_login_captcha
 from app.services.model_profile_service import ensure_default_model_profiles
 from app.utils.crypto import decrypt_secret, encrypt_secret
 
@@ -137,9 +139,50 @@ def _auth_response(user: User, *, status: int = 200):
 
 
 def _trusted_cookie_request() -> bool:
-    origin = request.headers.get("Origin", "").rstrip("/")
-    expected = str(current_app.config["FRONTEND_URL"]).rstrip("/")
-    return current_app.testing or not origin or secrets.compare_digest(origin, expected)
+    origin = _normalize_origin(request.headers.get("Origin", ""))
+    if current_app.testing or not origin:
+        return True
+
+    configured_origins = {
+        normalized
+        for value in str(current_app.config["FRONTEND_URL"]).split(",")
+        if (normalized := _normalize_origin(value))
+    }
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", request.scheme).split(",", 1)[0].strip()
+    forwarded_host = request.headers.get("X-Forwarded-Host", request.host).split(",", 1)[0].strip()
+    current_origin = _normalize_origin(f"{forwarded_proto}://{forwarded_host}")
+    trusted_origins = configured_origins | ({current_origin} if current_origin else set())
+    return any(secrets.compare_digest(origin, expected) for expected in trusted_origins)
+
+
+def _normalize_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(value.strip().rstrip("/"))
+        port = parsed.port
+    except ValueError:
+        return ""
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return ""
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None and not (
+        scheme == "http" and port == 80
+    ) and not (
+        scheme == "https" and port == 443
+    ):
+        host = f"{host}:{port}"
+    return f"{scheme}://{host}"
+
+
+@auth_bp.get("/captcha")
+def captcha():
+    response = jsonify(issue_login_captcha())
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @auth_bp.post("/register")
@@ -161,10 +204,16 @@ def register():
 
 @auth_bp.post("/login")
 def login():
-    payload = CredentialSchema().load(request.get_json() or {})
+    payload = LoginSchema().load(request.get_json() or {})
+    captcha_valid = consume_login_captcha(payload["captchaId"], payload["captchaCode"])
+    if not captcha_valid:
+        db.session.commit()
+        return jsonify({"message": "验证码错误或已失效，请刷新后重试"}), 422
+
     user = User.query.filter_by(email=payload["username"]).first()
     if not user or not check_password_hash(user.password_hash, payload["password"]):
-        return jsonify({"message": "invalid username or password"}), 401
+        db.session.commit()
+        return jsonify({"message": "账号或密码错误"}), 401
 
     return _auth_response(user)
 

@@ -66,9 +66,10 @@ def test_initial_migration_adopts_unversioned_auto_created_schema(tmp_path: Path
     inspector = sa.inspect(engine)
     assert inspector.get_table_names()
     assert "refresh_sessions" in inspector.get_table_names()
+    assert "login_captchas" in inspector.get_table_names()
     assert "task_items" in inspector.get_table_names()
     worker_columns = {column["name"] for column in inspector.get_columns("training_workers")}
     assert {"token_hash", "token_scopes"} <= worker_columns
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260717_02"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260717_03"
         assert connection.scalar(sa.text("SELECT id FROM users WHERE email = 'legacy-user'")) == user_id

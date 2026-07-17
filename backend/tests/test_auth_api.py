@@ -1,7 +1,24 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from app import create_app
 from app.config import TestConfig
+
+
+def _login(client, username: str = "dataset", password: str = "Dataset123!", code: str = "ABCDE"):
+    with patch("app.services.captcha_service._random_code", return_value=code):
+        captcha = client.get("/api/v1/auth/captcha")
+    assert captcha.status_code == 200
+    challenge = captcha.get_json()
+    return client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": username,
+            "password": password,
+            "captchaId": challenge["captchaId"],
+            "captchaCode": code,
+        },
+    )
 
 
 def test_default_demo_user_logs_in_with_username(tmp_path: Path):
@@ -11,10 +28,7 @@ def test_default_demo_user_logs_in_with_username(tmp_path: Path):
     app = create_app(AuthConfig)
     client = app.test_client()
 
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"username": "dataset", "password": "Dataset123!"},
-    )
+    login = _login(client)
 
     assert login.status_code == 200
     payload = login.get_json()
@@ -56,10 +70,7 @@ def test_refresh_cookie_rotates_and_logout_revokes_session(tmp_path: Path):
 
     app = create_app(AuthConfig)
     client = app.test_client()
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"username": "dataset", "password": "Dataset123!"},
-    )
+    login = _login(client)
     assert login.status_code == 200
     first_cookie = login.headers.get("Set-Cookie", "")
     assert "HttpOnly" in first_cookie
@@ -82,10 +93,7 @@ def test_reusing_rotated_refresh_token_revokes_session_family(tmp_path: Path):
 
     app = create_app(AuthConfig)
     client = app.test_client()
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"username": "dataset", "password": "Dataset123!"},
-    )
+    login = _login(client)
     old_token = login.headers["Set-Cookie"].split("dataset_gen_refresh=", 1)[1].split(";", 1)[0]
     rotated = client.post("/api/v1/auth/refresh")
     assert rotated.status_code == 200
@@ -104,10 +112,7 @@ def test_concurrent_refresh_rotation_advances_successor_without_revoking_family(
 
     app = create_app(AuthConfig)
     client = app.test_client()
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"username": "dataset", "password": "Dataset123!"},
-    )
+    login = _login(client)
     old_token = login.headers["Set-Cookie"].split("dataset_gen_refresh=", 1)[1].split(";", 1)[0]
 
     first_rotation = client.post("/api/v1/auth/refresh")
@@ -122,6 +127,75 @@ def test_concurrent_refresh_rotation_advances_successor_without_revoking_family(
     assert concurrent_rotation.get_json()["token"]
     assert successor_token in concurrent_rotation.headers["Set-Cookie"]
     assert client.post("/api/v1/auth/refresh").status_code == 200
+
+
+def test_login_requires_one_time_image_captcha(tmp_path: Path):
+    class AuthConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(AuthConfig)
+    client = app.test_client()
+
+    missing = client.post(
+        "/api/v1/auth/login",
+        json={"username": "dataset", "password": "Dataset123!"},
+    )
+    assert missing.status_code == 422
+
+    with patch("app.services.captcha_service._random_code", return_value="ABCDE"):
+        captcha = client.get("/api/v1/auth/captcha")
+    assert captcha.status_code == 200
+    assert captcha.headers["Cache-Control"].startswith("no-store")
+    challenge = captcha.get_json()
+    assert challenge["image"].startswith("data:image/png;base64,")
+    assert challenge["expiresIn"] == 120
+
+    incorrect = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": "dataset",
+            "password": "Dataset123!",
+            "captchaId": challenge["captchaId"],
+            "captchaCode": "WRONG",
+        },
+    )
+    assert incorrect.status_code == 422
+
+    reused = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": "dataset",
+            "password": "Dataset123!",
+            "captchaId": challenge["captchaId"],
+            "captchaCode": "ABCDE",
+        },
+    )
+    assert reused.status_code == 422
+    assert _login(client).status_code == 200
+
+
+def test_refresh_accepts_same_origin_forwarded_host(tmp_path: Path):
+    class AuthConfig(TestConfig):
+        TESTING = False
+        STORAGE_ROOT = str(tmp_path)
+        FRONTEND_URL = "http://localhost:4173"
+
+    app = create_app(AuthConfig)
+    client = app.test_client()
+    assert _login(client).status_code == 200
+
+    forwarded_headers = {
+        "Origin": "http://192.168.1.20:4173",
+        "X-Forwarded-Host": "192.168.1.20:4173",
+        "X-Forwarded-Proto": "http",
+    }
+    assert client.post("/api/v1/auth/refresh", headers=forwarded_headers).status_code == 200
+
+    untrusted_headers = {
+        **forwarded_headers,
+        "Origin": "https://attacker.example",
+    }
+    assert client.post("/api/v1/auth/refresh", headers=untrusted_headers).status_code == 403
 
 
 def test_registration_can_be_disabled(tmp_path: Path):

@@ -6,10 +6,20 @@ type AuthResponse = {
   user: User;
 };
 
-export function login(username: string, password: string) {
+export type LoginCaptcha = {
+  captchaId: string;
+  image: string;
+  expiresIn: number;
+};
+
+export function getLoginCaptcha(signal?: AbortSignal) {
+  return apiRequest<LoginCaptcha>("/auth/captcha", { signal, skipAuthRefresh: true });
+}
+
+export function login(username: string, password: string, captchaId: string, captchaCode: string) {
   return apiRequest<AuthResponse>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, captchaId, captchaCode }),
     skipAuthRefresh: true,
   });
 }

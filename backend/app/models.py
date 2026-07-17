@@ -717,6 +717,16 @@ class RefreshSession(TimestampMixin, db.Model):
     ip_address = db.Column(db.String(64), nullable=False, default="")
 
 
+class LoginCaptcha(TimestampMixin, db.Model):
+    __tablename__ = "login_captchas"
+
+    id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
+    answer_hash = db.Column(db.String(64), nullable=False)
+    client_signature = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False, index=True)
+    used_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+
+
 class IdempotencyRecord(TimestampMixin, db.Model):
     __tablename__ = "idempotency_records"
     __table_args__ = (

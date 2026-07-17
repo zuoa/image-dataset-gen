@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.extensions import db
-from app.models import Asset, IdempotencyRecord, RefreshSession
+from app.models import Asset, IdempotencyRecord, LoginCaptcha, RefreshSession
 from app.services.dataset_service import now_utc
 from app.services.storage_backend import local_backend
 
@@ -41,5 +41,12 @@ def garbage_collect_expired_records() -> int:
     refresh_deleted = RefreshSession.query.filter(RefreshSession.expires_at <= now).delete(
         synchronize_session=False
     )
+    captchas_deleted = LoginCaptcha.query.filter(LoginCaptcha.expires_at <= now).delete(
+        synchronize_session=False
+    )
     db.session.commit()
-    return int(idempotency_deleted or 0) + int(refresh_deleted or 0)
+    return (
+        int(idempotency_deleted or 0)
+        + int(refresh_deleted or 0)
+        + int(captchas_deleted or 0)
+    )

@@ -53,3 +53,12 @@ TaskItem 或训练 assignment 租约到期后允许其他 worker 恢复。检查
 ### 数据库连接耗尽
 
 检查长事务和慢查询，再调整 `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW`。总连接上限约为 API 进程、worker 进程和维护进程各自连接池之和，不能只看单服务配置。
+
+### 刷新页面后回到登录页
+
+先检查浏览器中 `/api/v1/auth/refresh` 的响应。`401` 通常表示 refresh cookie 缺失、过期或已撤销；`403 untrusted origin` 表示外部访问地址与 `FRONTEND_URL`/代理转发信息不一致。确认：
+
+- `FRONTEND_URL` 使用浏览器实际访问的协议、域名和端口；多个来源用逗号分隔。
+- HTTPS 环境设置 `REFRESH_COOKIE_SECURE=true`。
+- 最外层代理保留原始 `Host`，把原始 `X-Forwarded-Proto` 继续传给前端 Nginx，且没有改写 `Set-Cookie` 的 Path。
+- 前端与 API 跨站部署时不要继续使用默认 `SameSite=Lax` 方案，应改为同站域名或单独设计 `SameSite=None; Secure` 和更严格的 CSRF 防护。

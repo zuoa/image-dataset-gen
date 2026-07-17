@@ -72,6 +72,8 @@ class Config:
         "REFRESH_COOKIE_SECURE", "true" if os.getenv("APP_ENV", "development") == "production" else "false"
     ).lower() == "true"
     REFRESH_ROTATION_GRACE_SECONDS: int = int(os.getenv("REFRESH_ROTATION_GRACE_SECONDS", "10"))
+    LOGIN_CAPTCHA_LENGTH: int = int(os.getenv("LOGIN_CAPTCHA_LENGTH", "5"))
+    LOGIN_CAPTCHA_EXPIRES_SECONDS: int = int(os.getenv("LOGIN_CAPTCHA_EXPIRES_SECONDS", "120"))
     STORAGE_ROOT: str = os.getenv("STORAGE_ROOT", _default_storage_root())
     STORAGE_BACKEND: str = os.getenv("STORAGE_BACKEND", "local")
     USE_X_ACCEL_REDIRECT: bool = os.getenv("USE_X_ACCEL_REDIRECT", "false").lower() == "true"

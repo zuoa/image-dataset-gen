@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
 import { authExpiredEvent, authTokenRefreshedEvent, sessionExpiredMessage } from "./lib/session";
@@ -15,12 +15,24 @@ import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const token = useAuthStore((state) => state.token);
-  const isLoading = useAuthStore((state) => state.isLoading);
-  if (isLoading) {
-    return <div className="flex min-h-screen items-center justify-center bg-white text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">Loading...</div>;
+  const status = useAuthStore((state) => state.status);
+  const location = useLocation();
+  if (status === "checking") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white text-sm text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
+        正在恢复登录状态…
+      </div>
+    );
   }
-  return token ? <>{children}</> : <Navigate to="/auth" replace />;
+  return status === "authenticated" ? (
+    <>{children}</>
+  ) : (
+    <Navigate
+      to="/auth"
+      replace
+      state={{ from: `${location.pathname}${location.search}${location.hash}` }}
+    />
+  );
 }
 
 export default function App() {

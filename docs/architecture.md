@@ -53,6 +53,15 @@ API 在同一个 PostgreSQL 事务内写入业务状态和 `outbox_events`。独
 - `quality_runs` / `quality_issues`：数据质检和模型评测的不可变运行记录，以及可处理、可追溯的问题样本。
 - `outbox_events`：事务消息。
 - `refresh_sessions`：刷新令牌 hash、轮换 family 和撤销状态。
+- `login_captchas`：短时、一次性的登录图片验证码 challenge，只保存答案 HMAC 和客户端签名，不保存明文答案。
+
+## 认证与授权边界
+
+- 公开边界：登录验证码和登录接口；验证码绑定客户端、短时有效并在第一次提交时消费。
+- 会话边界：access token 仅存在浏览器内存，refresh token 仅存在限定 `/api/v1/auth` 路径的 HttpOnly Cookie。页面刷新先恢复会话，不把“尚未检查”误判为“未登录”。
+- CSRF 边界：refresh/logout 会校验配置的前端 Origin 或反向代理传入的当前同源 Origin；Nginx 必须保留外部协议与 host。
+- 数据授权边界：业务路由先验证 JWT，再以当前 `user_id` 过滤资源。资源不存在和不属于当前用户使用相同的不可见语义，避免泄露其他用户对象。
+- 当前没有 RBAC。`users.plan` 是展示/套餐属性，不参与权限判断；未来角色权限需要独立模型和显式策略。
 
 ## PostgreSQL 约定
 

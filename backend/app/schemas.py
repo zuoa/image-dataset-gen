@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
 
 
@@ -34,9 +36,21 @@ def _ensure_number(settings: dict[str, object], key: str, min_value: float, max_
 USERNAME_VALIDATOR = validate.Regexp(r"^\S+$", error="username cannot contain spaces")
 
 
+def _validate_uuid(value: str) -> None:
+    try:
+        uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValidationError("invalid UUID") from error
+
+
 class CredentialSchema(Schema):
     username = fields.String(required=True, validate=[validate.Length(min=1, max=64), USERNAME_VALIDATOR])
     password = fields.String(required=True, validate=validate.Length(min=8, max=64))
+
+
+class LoginSchema(CredentialSchema):
+    captchaId = fields.String(required=True, validate=[validate.Length(equal=36), _validate_uuid])
+    captchaCode = fields.String(required=True, validate=validate.Length(min=4, max=8))
 
 
 class ModelProfileSchema(Schema):
