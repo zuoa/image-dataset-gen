@@ -58,6 +58,7 @@ export function AnnotationQueuePanel({
       : annotationFilter === "annotated"
         ? `${imagesTotal} 张已完成`
         : `${imagesTotal} 张样本`;
+  const progress = totalImageCount > 0 ? Math.round((annotatedTotal / totalImageCount) * 100) : 0;
 
   const options = filterOptions.map((option) => {
     const count =
@@ -88,6 +89,19 @@ export function AnnotationQueuePanel({
             <Typography.Text className="mt-0.5 block text-sm font-semibold">{queueLabel}</Typography.Text>
           </div>
           <CheckCircle2 aria-hidden="true" className="h-4 w-4 text-neutral-400" />
+        </div>
+        <div
+          className="mt-3 h-1 overflow-hidden rounded-full bg-neutral-100 dark:bg-white/10"
+          role="progressbar"
+          aria-label="标注完成进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <div
+            className="h-full rounded-full bg-emerald-500 transition-[width] duration-200"
+            style={{ width: `${progress}%` }}
+          />
         </div>
         <div className="mt-3 flex min-w-0 items-center gap-2">
           <ListFilter aria-hidden="true" className="h-4 w-4 shrink-0 text-neutral-400" />

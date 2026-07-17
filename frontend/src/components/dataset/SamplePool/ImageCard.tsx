@@ -44,6 +44,7 @@ export function ImageCard({
       <div className="relative aspect-square overflow-hidden">
         <button
           type="button"
+          aria-label={`查看样本 #${image.ordinal} 详情`}
           className="absolute inset-0 text-left"
           onClick={onOpenPreview}
           disabled={isDeleting}

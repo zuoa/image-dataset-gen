@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronLeft, ChevronRight, Trash2, X } from "lucide-react";
-import { Button, Drawer, Input, Space, Tag, Typography } from "antd";
+import { ChevronLeft, ChevronRight, ImageIcon, Plus, Save, Trash2, X } from "lucide-react";
+import { Button, Input, Modal, Select, Tag, Typography } from "antd";
 
 import { AuthImage } from "../AuthImage";
 import {
@@ -87,11 +87,10 @@ export function ImagePreviewModal({
 
     const stage = stageRef.current;
     const syncViewport = () => {
-      const rect = stage.getBoundingClientRect();
       setImageViewport(
         fitImageViewport(
-          rect.width,
-          rect.height,
+          stage.clientWidth,
+          stage.clientHeight,
           previewImageNaturalSize.width,
           previewImageNaturalSize.height,
         ),
@@ -109,24 +108,26 @@ export function ImagePreviewModal({
   useEffect(() => {
     if (!previewImage) return;
 
-    const handleKeydown = async (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (isAddingDetection) {
-          setIsAddingDetection(false);
-          return;
-        }
-        if (await onConfirmDiscardChanges()) {
-          onClose();
-        }
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isAddingDetection) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsAddingDetection(false);
         return;
       }
+
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, button")) return;
+
       if (event.key === "ArrowLeft" && previewIndex > 0) {
+        event.preventDefault();
         movePreview(-1);
       }
       if (event.key === "ArrowRight" && previewIndex < images.length - 1) {
+        event.preventDefault();
         movePreview(1);
       }
       if (event.key === "Delete" && selectedDetectionIndex !== null) {
+        event.preventDefault();
         removeDetection(selectedDetectionIndex);
       }
     };
@@ -139,8 +140,6 @@ export function ImagePreviewModal({
     previewImage,
     previewIndex,
     selectedDetectionIndex,
-    onConfirmDiscardChanges,
-    onClose,
   ]);
 
   async function movePreview(direction: -1 | 1) {
@@ -321,60 +320,94 @@ export function ImagePreviewModal({
     });
   }
 
+  async function closePreview() {
+    if (await onConfirmDiscardChanges()) {
+      onClose();
+    }
+  }
+
   if (!previewImage) return null;
 
   return (
-    <Drawer
+    <Modal
       open={open}
-      onClose={async () => {
-        if (await onConfirmDiscardChanges()) {
-          onClose();
-        }
-      }}
-      width="100%"
-      styles={{ body: { padding: 0 } }}
+      onCancel={() => void closePreview()}
+      footer={null}
       closable={false}
       title={null}
+      centered
+      width="min(1600px, calc(100vw - 24px))"
+      styles={{
+        mask: {
+          background: "rgba(3, 7, 12, 0.76)",
+          backdropFilter: "blur(6px)",
+        },
+        content: {
+          padding: 0,
+          overflow: "hidden",
+          borderRadius: 16,
+        },
+        body: {
+          height: "min(900px, calc(100dvh - 32px))",
+        },
+      }}
+      keyboard={!isAddingDetection}
     >
-      <div className="relative flex h-full w-full flex-col xl:flex-row">
-        <button
-          type="button"
-          className="absolute right-5 top-5 z-10 rounded-full bg-black/10 p-2 transition hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20"
-          onClick={async () => {
-            if (await onConfirmDiscardChanges()) {
-              onClose();
-            }
-          }}
-        >
-          <X className="h-5 w-5" />
-        </button>
+      <div className="grid h-full min-h-0 w-full grid-rows-[minmax(0,1fr)_minmax(280px,42%)] bg-white text-neutral-900 dark:bg-[#11151b] dark:text-white lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
+        <section className="relative min-h-0 overflow-hidden bg-[#080c11]" aria-label="图片画布">
+          <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-center justify-between gap-3 sm:left-4 sm:right-4 sm:top-4">
+            <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-black/55 px-3 py-2 text-white shadow-lg backdrop-blur-md">
+              <ImageIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-sky-300" />
+              <span className="truncate text-sm font-medium">样本 #{previewImage.ordinal}</span>
+              <span className="font-mono text-xs tabular-nums text-neutral-400">
+                {previewIndex + 1}/{images.length}
+              </span>
+              <span className="hidden h-4 w-px bg-white/15 sm:block" />
+              <span className="hidden font-mono text-xs text-neutral-300 sm:block">
+                {draftDetections.length} 个框
+              </span>
+            </div>
 
-        <div className="relative flex-1 bg-neutral-950 p-4">
-          <button
-            type="button"
-            className="absolute left-5 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/12 p-3 text-white transition hover:bg-white/20"
-            onClick={() => void movePreview(-1)}
-            disabled={previewIndex <= 0}
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <button
-            type="button"
-            className="absolute right-5 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/12 p-3 text-white transition hover:bg-white/20"
-            onClick={() => void movePreview(1)}
-            disabled={previewIndex >= images.length - 1}
-          >
-            <ChevronRight className="h-5 w-5" />
-          </button>
+            <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-black/55 p-1 shadow-lg backdrop-blur-md">
+              <button
+                type="button"
+                aria-label="上一张图片"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-30"
+                onClick={() => void movePreview(-1)}
+                disabled={previewIndex <= 0}
+              >
+                <ChevronLeft aria-hidden="true" className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                aria-label="下一张图片"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-30"
+                onClick={() => void movePreview(1)}
+                disabled={previewIndex >= images.length - 1}
+              >
+                <ChevronRight aria-hidden="true" className="h-5 w-5" />
+              </button>
+              <span className="mx-0.5 h-6 w-px bg-white/15" />
+              <button
+                type="button"
+                aria-label="关闭图片详情"
+                className="flex h-11 w-11 cursor-pointer appearance-none items-center justify-center rounded-lg border-0 bg-transparent p-0 text-white transition-colors duration-200 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                onClick={() => void closePreview()}
+              >
+                <X aria-hidden="true" className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
 
           <div
             ref={stageRef}
-            className="relative mx-auto flex h-full max-h-[72vh] w-full max-w-[72vh] items-center justify-center overflow-hidden rounded-[28px]"
+            data-testid="image-preview-stage"
+            className="absolute inset-x-3 bottom-3 top-[68px] flex items-center justify-center overflow-hidden sm:inset-x-5 sm:bottom-5 sm:top-20"
           >
             {imageViewport && imageViewport.width > 0 && imageViewport.height > 0 ? (
               <div
                 ref={viewportRef}
-                className={`relative ${
+                className={`relative shrink-0 bg-neutral-900 shadow-[0_24px_80px_rgba(0,0,0,0.45)] ${
                   isAddingDetection ? "cursor-crosshair" : "cursor-default"
                 }`}
                 style={{
@@ -386,7 +419,10 @@ export function ImagePreviewModal({
                 <AuthImage
                   src={previewImage.previewSvg}
                   alt={previewImage.promptText}
-                  className="h-full w-full"
+                  width={previewImageNaturalSize?.width ?? Math.round(imageViewport.width)}
+                  height={previewImageNaturalSize?.height ?? Math.round(imageViewport.height)}
+                  className="h-full w-full object-contain"
+                  draggable={false}
                   onLoad={(event) => {
                     const target = event.currentTarget;
                     setPreviewImageNaturalSize({
@@ -399,10 +435,10 @@ export function ImagePreviewModal({
                   {draftDetections.map((detection, index) => (
                     <div
                       key={`${detection.category}-${index}`}
-                      className={`pointer-events-auto absolute rounded-xl border-2 ${
+                      className={`pointer-events-auto absolute rounded-sm border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.65)] ${
                         selectedDetectionIndex === index
-                          ? "border-lime-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.08)]"
-                          : "border-white/90"
+                          ? "border-lime-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.12)]"
+                          : "border-sky-400"
                       }`}
                       style={detectionStyle(detection.bbox)}
                       onMouseDown={(event) => beginDragDetection(index, event)}
@@ -415,22 +451,27 @@ export function ImagePreviewModal({
                         {detection.category} ·{" "}
                         {(detection.confidence * 100).toFixed(0)}%
                       </div>
-                      {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
-                        <button
-                          key={corner}
-                          type="button"
-                          className={`absolute h-3 w-3 rounded-full border border-white bg-black/70 ${
-                            corner === "nw"
-                              ? "-left-1.5 -top-1.5"
-                              : corner === "ne"
-                                ? "-right-1.5 -top-1.5"
-                                : corner === "sw"
-                                  ? "-left-1.5 -bottom-1.5"
-                                  : "-right-1.5 -bottom-1.5"
-                          }`}
-                          onMouseDown={(event) => beginResizeDetection(index, corner, event)}
-                        />
-                      ))}
+                      {selectedDetectionIndex === index
+                        ? (["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
+                            <button
+                              key={corner}
+                              type="button"
+                              aria-label={`从${corner}方向缩放检测框 ${index + 1}`}
+                              className={`absolute h-11 w-11 rounded-full border-0 bg-transparent p-0 ${
+                                corner === "nw"
+                                  ? "-left-[22px] -top-[22px]"
+                                  : corner === "ne"
+                                    ? "-right-[22px] -top-[22px]"
+                                    : corner === "sw"
+                                      ? "-bottom-[22px] -left-[22px]"
+                                      : "-bottom-[22px] -right-[22px]"
+                              }`}
+                              onMouseDown={(event) => beginResizeDetection(index, corner, event)}
+                            >
+                              <span className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-neutral-950" />
+                            </button>
+                          ))
+                        : null}
                     </div>
                   ))}
                 </div>
@@ -440,6 +481,7 @@ export function ImagePreviewModal({
                 src={previewImage.previewSvg}
                 alt={previewImage.promptText}
                 className="h-full w-full object-contain"
+                draggable={false}
                 onLoad={(event) => {
                   const target = event.currentTarget;
                   setPreviewImageNaturalSize({
@@ -450,88 +492,142 @@ export function ImagePreviewModal({
               />
             )}
           </div>
-        </div>
+          {isAddingDetection ? (
+            <div className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-sky-300/30 bg-sky-400/15 px-4 py-2 text-sm text-sky-100 shadow-lg backdrop-blur-md">
+              在图片上拖拽创建检测框 · Esc 取消
+            </div>
+          ) : null}
+        </section>
 
-        <div className="w-full overflow-y-auto border-t border-neutral-200 p-6 dark:border-white/10 xl:w-[420px] xl:border-l xl:border-t-0">
-          <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Image Inspector
+        <aside className="flex min-h-0 flex-col border-t border-neutral-200 bg-white dark:border-white/10 dark:bg-[#11151b] lg:border-l lg:border-t-0" aria-label="图片标注信息">
+          <div className="shrink-0 border-b border-neutral-200 px-4 py-3 dark:border-white/10 sm:px-5 sm:py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400">图片详情</div>
+                <Typography.Title level={4} className="!mb-0 !mt-1">
+                  样本 #{previewImage.ordinal}
+                </Typography.Title>
+              </div>
+              <Button
+                type="text"
+                danger
+                icon={<Trash2 aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => onDeleteImage(previewImage)}
+                disabled={isSavingAnnotations}
+                aria-label={`删除样本 #${previewImage.ordinal}`}
+              />
+            </div>
+            <Typography.Paragraph className="!mb-0 !mt-2 line-clamp-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
+              {previewImage.promptText}
+            </Typography.Paragraph>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Tag bordered={false}>{previewImage.sourceType}</Tag>
+              <Tag bordered={false}>{previewImage.annotationStatus}</Tag>
+            </div>
           </div>
-          <Typography.Title level={3} className="mt-2 !text-2xl">
-            样本 #{previewImage.ordinal}
-          </Typography.Title>
-          <Typography.Text className="block text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-            {previewImage.promptText}
-          </Typography.Text>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Tag bordered>{previewImage.sourceType}</Tag>
-            <Tag bordered>{previewImage.annotationStatus}</Tag>
+
+          <div className="shrink-0 border-b border-neutral-200 p-3 dark:border-white/10 sm:px-4">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                icon={<Plus aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => setIsAddingDetection(!isAddingDetection)}
+              >
+                {isAddingDetection ? "取消新增框" : "新增框"}
+              </Button>
+              <Button
+                type="primary"
+                icon={<Save aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void onSaveAnnotations()}
+                loading={isSavingAnnotations}
+              >
+                保存标注
+              </Button>
+            </div>
           </div>
 
-          <Space className="mt-6">
-            <Button onClick={() => setIsAddingDetection(!isAddingDetection)}>
-              {isAddingDetection ? "取消新增框" : "新增框"}
-            </Button>
-            <Button
-              type="primary"
-              onClick={() => void onSaveAnnotations()}
-              loading={isSavingAnnotations}
-            >
-              保存标注
-            </Button>
-            <Button
-              danger
-              icon={<Trash2 className="h-4 w-4" />}
-              onClick={() => onDeleteImage(previewImage)}
-              disabled={isSavingAnnotations}
-            >
-              删除样本
-            </Button>
-          </Space>
-
-          <div className="mt-6 space-y-3">
-            {draftDetections.map((detection, index) => (
-              <div
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4">
+            <div className="mb-3 flex items-center justify-between px-1">
+              <Typography.Text className="text-sm font-semibold">检测对象</Typography.Text>
+              <Typography.Text className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                {draftDetections.length} 个框
+              </Typography.Text>
+            </div>
+            <div className="space-y-2">
+              {draftDetections.map((detection, index) => (
+                <section
                 key={`${detection.category}-${index}`}
-                className={`rounded-2xl border p-4 ${
+                className={`rounded-xl border p-3 transition-colors duration-200 ${
                   selectedDetectionIndex === index
-                    ? "border-neutral-900 bg-neutral-100 dark:border-white dark:bg-white/[0.04]"
-                    : "border-neutral-200 bg-white dark:border-white/10 dark:bg-black/20"
+                    ? "border-blue-500 bg-blue-50/70 ring-1 ring-blue-500/15 dark:bg-blue-400/10"
+                    : "border-neutral-200 bg-white hover:border-neutral-300 dark:border-white/10 dark:bg-black/10 dark:hover:border-white/20"
                 }`}
                 onClick={() => setSelectedDetectionIndex(index)}
+                aria-label={`检测框 ${index + 1}`}
               >
-                <div className="grid gap-3">
-                  <Input
-                    value={detection.category}
-                    onChange={(event) =>
-                      updateDetectionField(index, "category", event.target.value)
-                    }
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-neutral-100 font-mono text-xs dark:bg-white/10">
+                      {index + 1}
+                    </span>
+                    <span className="truncate text-sm font-medium">{detection.category}</span>
+                  </div>
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    icon={<Trash2 aria-hidden="true" className="h-4 w-4" />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeDetection(index);
+                    }}
+                    aria-label={`删除检测框 ${index + 1}`}
                   />
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={detection.confidence}
-                    onChange={(event) =>
-                      updateDetectionField(
-                        index,
-                        "confidence",
-                        Number(event.target.value),
-                      )
-                    }
-                  />
-                  <Button onClick={() => removeDetection(index)}>删除框</Button>
                 </div>
-              </div>
-            ))}
-            {draftDetections.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-white/10 dark:text-neutral-400">
-                当前没有检测框。可以点击“新增框”后直接在图片上拖拽创建。
-              </div>
-            ) : null}
+                <div className="grid gap-3">
+                  <label className="grid gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                    类别
+                    {dataset.categories.length > 0 ? (
+                      <Select
+                        aria-label={`检测框 ${index + 1} 的类别`}
+                        value={detection.category}
+                        options={dataset.categories.map((category) => ({ value: category, label: category }))}
+                        onChange={(value) => updateDetectionField(index, "category", value as string)}
+                      />
+                    ) : (
+                      <Input
+                        aria-label={`检测框 ${index + 1} 的类别`}
+                        value={detection.category}
+                        onChange={(event) => updateDetectionField(index, "category", event.target.value)}
+                      />
+                    )}
+                  </label>
+                  <label className="grid gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                    <span className="flex items-center justify-between">
+                      <span>置信度</span>
+                      <span className="font-mono tabular-nums">{(detection.confidence * 100).toFixed(0)}%</span>
+                    </span>
+                    <Input
+                      aria-label={`检测框 ${index + 1} 的置信度`}
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={detection.confidence}
+                      onChange={(event) => updateDetectionField(index, "confidence", Number(event.target.value))}
+                    />
+                  </label>
+                </div>
+                </section>
+              ))}
+              {draftDetections.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-neutral-300 p-4 text-center text-sm leading-6 text-neutral-500 dark:border-white/15 dark:text-neutral-400">
+                  当前没有检测框。可以点击“新增框”后直接在图片上拖拽创建。
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
+        </aside>
       </div>
-    </Drawer>
+    </Modal>
   );
 }

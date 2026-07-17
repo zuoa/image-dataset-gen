@@ -1,4 +1,4 @@
-import { PencilRuler, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { Button, Input, Select, Slider, Typography } from "antd";
 
 import { StatusBadge } from "../common/StatusBadge";
@@ -7,13 +7,10 @@ import type { DatasetImage } from "../../lib/types";
 import { cn } from "../../lib/utils";
 
 interface AnnotationInspectorPanelProps {
-  activeCategory: string;
   activeImage: DatasetImage | null;
   categories: string[];
   categoryColor: (category: string) => string;
   detections: Detection[];
-  onAddDetection: () => void;
-  onCategoryChange: (category: string) => void;
   onDetectionCategoryChange: (index: number, category: string) => void;
   onDetectionConfidenceChange: (index: number, confidence: number) => void;
   onRemoveDetection: (index: number) => void;
@@ -23,13 +20,10 @@ interface AnnotationInspectorPanelProps {
 }
 
 export function AnnotationInspectorPanel({
-  activeCategory,
   activeImage,
   categories,
   categoryColor,
   detections,
-  onAddDetection,
-  onCategoryChange,
   onDetectionCategoryChange,
   onDetectionConfidenceChange,
   onRemoveDetection,
@@ -37,38 +31,8 @@ export function AnnotationInspectorPanel({
   selectedDetectionIndex,
   statusLabel,
 }: AnnotationInspectorPanelProps) {
-  const availableCategories = categories.length > 0 ? categories : ["object"];
-
   return (
     <aside className="flex h-full min-h-0 flex-col bg-white dark:bg-[#11151b]" aria-label="标注检查器">
-      <div className="shrink-0 border-b border-[#d7dce3] px-4 py-3 dark:border-white/10">
-        <Typography.Text className="block text-xs font-medium text-neutral-500 dark:text-neutral-400">
-          当前类别
-        </Typography.Text>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {availableCategories.map((category, index) => {
-            const active = category === activeCategory;
-            return (
-              <button
-                key={category}
-                type="button"
-                aria-pressed={active}
-                onClick={() => onCategoryChange(category)}
-                className={cn(
-                  "flex min-h-10 min-w-0 cursor-pointer appearance-none items-center gap-2 rounded-lg border bg-white px-2.5 text-left text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-transparent",
-                  active
-                    ? "border-blue-600 bg-blue-600 text-white"
-                    : "border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 dark:border-white/10 dark:hover:bg-white/5",
-                )}
-              >
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: categoryColor(category) }} />
-                <span className="truncate"><span className="font-mono text-xs opacity-70">{index + 1}</span> {category}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="shrink-0 border-b border-[#d7dce3] px-4 py-3 dark:border-white/10">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -76,7 +40,7 @@ export function AnnotationInspectorPanel({
               当前样本
             </Typography.Text>
             <Typography.Text className="mt-1 block truncate font-mono text-base font-semibold">
-              {activeImage ? `#${activeImage.ordinal}` : "—"}
+              {activeImage ? `#${activeImage.ordinal}` : "无可用样本"}
             </Typography.Text>
           </div>
           {activeImage ? <StatusBadge status={activeImage.annotationStatus}>{statusLabel}</StatusBadge> : null}
@@ -94,12 +58,6 @@ export function AnnotationInspectorPanel({
             </Typography.Text>
             <Typography.Text className="text-sm font-semibold">{detections.length} 个框</Typography.Text>
           </div>
-          <Button
-            icon={<PencilRuler aria-hidden="true" className="h-4 w-4" />}
-            onClick={onAddDetection}
-            disabled={!activeImage}
-            aria-label="新增检测框"
-          />
         </div>
 
         <div className="space-y-2">

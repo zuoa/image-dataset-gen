@@ -12,6 +12,7 @@ import {
   Menu,
   MoreHorizontal,
   MousePointer2,
+  PanelRight,
   PencilRuler,
   Redo2,
   Save,
@@ -930,11 +931,6 @@ export function DatasetAnnotatePage() {
     });
   }
 
-  function enterAddingDetectionMode() {
-    if (!activeImage) return;
-    setIsAddingDetection(true);
-  }
-
   function changeActiveCategory(category: string) {
     setCurrentCategory(category);
     if (selectedDetectionIndex !== null) {
@@ -1019,13 +1015,10 @@ export function DatasetAnnotatePage() {
 
   const inspectorPanel = (
     <AnnotationInspectorPanel
-      activeCategory={activeCategory}
       activeImage={activeImage}
       categories={categories}
       categoryColor={(category) => categoryColor(category, categories)}
       detections={draftDetections}
-      onAddDetection={enterAddingDetectionMode}
-      onCategoryChange={changeActiveCategory}
       onDetectionCategoryChange={updateDetectionCategory}
       onDetectionConfidenceChange={updateDetectionConfidence}
       onRemoveDetection={removeDetection}
@@ -1043,25 +1036,30 @@ export function DatasetAnnotatePage() {
   return (
     <div className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-[#f6f7f9] text-neutral-900 dark:bg-[#0b0f14] dark:text-white">
       <header className="z-20 shrink-0 border-b border-[#d7dce3] bg-white px-3 py-2 dark:border-white/10 dark:bg-[#11151b] sm:px-4">
-        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <Link
               to={`/datasets/${dataset.id}`}
               aria-label="返回数据集"
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-neutral-300 dark:hover:bg-white/10 dark:hover:text-white"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-neutral-600 transition-colors duration-200 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-neutral-300 dark:hover:bg-white/10 dark:hover:text-white"
             >
               <ArrowLeft aria-hidden="true" className="h-4 w-4" />
             </Link>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+              <div className="flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
                 <PencilRuler aria-hidden="true" className="h-3.5 w-3.5" />
                 <span>标注工作台</span>
               </div>
-              <Typography.Text className="block max-w-[44vw] truncate text-base font-semibold sm:max-w-sm">
+              <Typography.Text className="block max-w-[46vw] truncate text-sm font-semibold sm:max-w-sm sm:text-base">
                 {dataset.name}
               </Typography.Text>
             </div>
-            <Tag className="!mr-0 font-mono tabular-nums">{annotatedTotal}/{totalImageCount}</Tag>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <span className="hidden font-mono text-xs tabular-nums text-neutral-500 dark:text-neutral-400 sm:inline">
+              完成 {annotatedTotal}/{totalImageCount}
+            </span>
             {saveStatus === "unsaved" ? (
               <Tag color="warning" className="!mr-0">未保存</Tag>
             ) : saveStatus === "pending" ? (
@@ -1070,80 +1068,6 @@ export function DatasetAnnotatePage() {
               <Tag color="success" className="!mr-0">已保存</Tag>
             )}
             {draftRecovered ? <Tag color="blue" className="hidden !mr-0 md:inline-flex">已恢复草稿</Tag> : null}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 sm:justify-end">
-            <div className="flex items-center gap-1">
-              <Tooltip title="撤销（Ctrl/⌘ + Z）">
-                <Button
-                  type="text"
-                  icon={<Undo2 aria-hidden="true" className="h-4 w-4" />}
-                  onClick={undoDetectionChange}
-                  disabled={!canUndo}
-                  aria-label="撤销标注操作"
-                />
-              </Tooltip>
-              <Tooltip title="重做（Ctrl/⌘ + Shift + Z）">
-                <Button
-                  type="text"
-                  icon={<Redo2 aria-hidden="true" className="h-4 w-4" />}
-                  onClick={redoDetectionChange}
-                  disabled={!canRedo}
-                  aria-label="重做标注操作"
-                />
-              </Tooltip>
-              <Button
-                icon={<ChevronLeft aria-hidden="true" className="h-4 w-4" />}
-                onClick={() => void moveActiveImage(-1)}
-                disabled={activeIndex <= 0 || Boolean(deletingImageId)}
-                aria-label="上一张图片"
-              >
-                <span className="hidden lg:inline">上一张</span>
-              </Button>
-              <Button
-                icon={<ChevronRight aria-hidden="true" className="h-4 w-4" />}
-                onClick={() => void moveActiveImage(1)}
-                disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}
-                aria-label="下一张图片"
-              >
-                <span className="hidden lg:inline">下一张</span>
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Dropdown
-                trigger={["click"]}
-                menu={{
-                  items: [
-                    {
-                      key: "delete-image",
-                      danger: true,
-                      disabled: !activeImage || isSaving || Boolean(deletingImageId),
-                      icon: isDeletingActiveImage
-                        ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-                        : <Trash2 aria-hidden="true" className="h-4 w-4" />,
-                      label: "删除当前图片",
-                    },
-                  ],
-                  onClick: ({ key }) => {
-                    if (key === "delete-image" && activeImage) void removeDatasetImage(activeImage);
-                  },
-                }}
-              >
-                <Button
-                  icon={<MoreHorizontal aria-hidden="true" className="h-4 w-4" />}
-                  aria-label="更多图片操作"
-                />
-              </Dropdown>
-              <Button
-                type="primary"
-                icon={isSaving ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
-                onClick={() => void confirmAndAdvance()}
-                disabled={isSaving || !activeImage || Boolean(deletingImageId)}
-              >
-                保存并下一张
-              </Button>
-            </div>
           </div>
         </div>
       </header>
@@ -1166,8 +1090,8 @@ export function DatasetAnnotatePage() {
         {isDesktop ? <div className="min-h-0 border-r border-[#d7dce3] dark:border-white/10">{queuePanel}</div> : null}
 
         <main id="annotation-canvas" className="relative flex min-h-0 flex-col bg-[#0b0f14]">
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2 text-white">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-white/10 px-3 text-white">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               {!isDesktop ? (
                 <Button
                   type="text"
@@ -1177,19 +1101,22 @@ export function DatasetAnnotatePage() {
                   aria-label="打开标注队列"
                 />
               ) : null}
-              <MousePointer2 aria-hidden="true" className="h-4 w-4 shrink-0 text-neutral-500" />
+              <MousePointer2 aria-hidden="true" className="hidden h-4 w-4 shrink-0 text-neutral-500 sm:block" />
               <div className="min-w-0">
-                <Typography.Text className="block truncate text-sm font-medium !text-white">样本 #{activeImage?.ordinal ?? "—"}</Typography.Text>
-                <Typography.Text className="block truncate text-xs !text-neutral-400">{activeImage?.sourceType ?? "没有可处理图片"}</Typography.Text>
+                <Typography.Text className="block truncate text-sm font-medium !text-white">
+                  <span className="sm:hidden">#{activeImage?.ordinal ?? "—"}</span>
+                  <span className="hidden sm:inline">样本 #{activeImage?.ordinal ?? "—"}</span>
+                </Typography.Text>
+                <Typography.Text className="hidden truncate text-xs !text-neutral-400 sm:block">{activeImage?.sourceType ?? "没有可处理图片"}</Typography.Text>
               </div>
-              {suggestedDetections ? <Tag color="gold" className="hidden !mr-0 md:inline-flex">模型建议</Tag> : null}
+              {suggestedDetections ? <Tag color="gold" className="hidden !mr-0 lg:inline-flex">模型建议</Tag> : null}
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
               <Select
                 aria-label="当前画框类别"
                 value={activeCategory}
-                className="w-28 sm:w-36"
+                className="w-24 sm:w-36"
                 options={(categories.length > 0 ? categories : ["object"]).map((category, index) => ({
                   value: category,
                   label: `${index + 1}. ${category}`,
@@ -1209,16 +1136,19 @@ export function DatasetAnnotatePage() {
                 onClick={() => setIsAddingDetection((current) => !current)}
                 disabled={!activeImage}
                 aria-pressed={isAddingDetection}
+                aria-label={isAddingDetection ? "结束画框" : "新增框"}
               >
-                {isAddingDetection ? "拖动画框" : "新增框"}
-              </Button>
-              <Tag color="blue" className="!mr-0 font-mono">{draftDetections.length}</Tag>
-              <Button onClick={() => void markEmptyAndAdvance()} disabled={!activeImage || isSaving}>
-                <span className="hidden sm:inline">标记为空</span>
-                <span className="sm:hidden">空标注</span>
+                <span className="hidden sm:inline">{isAddingDetection ? "拖动画框" : "新增框"}</span>
+                <span className="ml-1 rounded bg-black/10 px-1.5 font-mono text-xs tabular-nums dark:bg-white/10">
+                  {draftDetections.length}
+                </span>
               </Button>
               {!isDesktop ? (
-                <Button onClick={() => setInspectorOpen(true)}>检查器</Button>
+                <Button
+                  icon={<PanelRight aria-hidden="true" className="h-4 w-4" />}
+                  onClick={() => setInspectorOpen(true)}
+                  aria-label="检查器"
+                />
               ) : null}
             </div>
           </div>
@@ -1336,17 +1266,19 @@ export function DatasetAnnotatePage() {
             </div>
           </div>
 
-          <footer className="flex h-9 shrink-0 items-center justify-between gap-3 border-t border-white/10 px-3 text-xs text-neutral-400">
+          <div className="pointer-events-none absolute bottom-[72px] left-3 z-10 hidden sm:block">
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
-              className="flex cursor-pointer appearance-none items-center gap-1.5 rounded border border-white/10 bg-white/5 px-1.5 py-1 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">B 画框 · 1–9 类别 · Enter 保存下一张</span>
-              <span className="sm:hidden">快捷键</span>
+              B 画框 · Enter 保存下一张
             </button>
-            <div className="flex items-center gap-1">
+          </div>
+
+          <div className="pointer-events-none absolute bottom-[72px] right-3 z-10">
+            <div className="pointer-events-auto flex items-center gap-0.5 rounded-lg border border-white/10 bg-black/55 p-1 text-xs text-neutral-300 shadow-lg backdrop-blur-md">
               <Button
                 type="text"
                 size="small"
@@ -1374,7 +1306,121 @@ export function DatasetAnnotatePage() {
                 className="!text-neutral-300 hover:!bg-white/10"
                 aria-label="适应画布"
               />
-              <span className="ml-2 hidden font-mono tabular-nums sm:inline">{activeIndex + 1}/{imagesTotal}</span>
+            </div>
+          </div>
+
+          <footer className="flex h-[60px] shrink-0 items-center justify-between gap-2 border-t border-white/10 bg-[#0d1218] px-2 text-xs text-neutral-400 sm:px-3">
+            <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
+              <Button
+                type="text"
+                icon={<ChevronLeft aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void moveActiveImage(-1)}
+                disabled={activeIndex <= 0 || Boolean(deletingImageId)}
+                className="!text-neutral-200 hover:!bg-white/10"
+                aria-label="上一张图片"
+              />
+              <span className="min-w-12 text-center font-mono text-xs tabular-nums text-neutral-300">
+                {activeIndex + 1}/{imagesTotal}
+              </span>
+              <Button
+                type="text"
+                icon={<ChevronRight aria-hidden="true" className="h-4 w-4" />}
+                onClick={() => void moveActiveImage(1)}
+                disabled={(activeIndex >= images.length - 1 && !hasMoreImages) || Boolean(deletingImageId) || isLoadingMore}
+                className="!text-neutral-200 hover:!bg-white/10"
+                aria-label="下一张图片"
+              />
+            </div>
+
+            <div className="flex min-w-0 items-center justify-end gap-1.5 sm:gap-2">
+              <div className="hidden items-center gap-1 md:flex">
+                <Tooltip title="撤销（Ctrl/⌘ + Z）">
+                  <Button
+                    type="text"
+                    icon={<Undo2 aria-hidden="true" className="h-4 w-4" />}
+                    onClick={undoDetectionChange}
+                    disabled={!canUndo}
+                    className="!text-neutral-200 hover:!bg-white/10"
+                    aria-label="撤销标注操作"
+                  />
+                </Tooltip>
+                <Tooltip title="重做（Ctrl/⌘ + Shift + Z）">
+                  <Button
+                    type="text"
+                    icon={<Redo2 aria-hidden="true" className="h-4 w-4" />}
+                    onClick={redoDetectionChange}
+                    disabled={!canRedo}
+                    className="!text-neutral-200 hover:!bg-white/10"
+                    aria-label="重做标注操作"
+                  />
+                </Tooltip>
+              </div>
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    {
+                      key: "undo",
+                      disabled: !canUndo,
+                      icon: <Undo2 aria-hidden="true" className="h-4 w-4" />,
+                      label: "撤销",
+                    },
+                    {
+                      key: "redo",
+                      disabled: !canRedo,
+                      icon: <Redo2 aria-hidden="true" className="h-4 w-4" />,
+                      label: "重做",
+                    },
+                    {
+                      key: "shortcuts",
+                      icon: <Keyboard aria-hidden="true" className="h-4 w-4" />,
+                      label: "快捷键",
+                    },
+                    { type: "divider" },
+                    {
+                      key: "delete-image",
+                      danger: true,
+                      disabled: !activeImage || isSaving || Boolean(deletingImageId),
+                      icon: isDeletingActiveImage
+                        ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                        : <Trash2 aria-hidden="true" className="h-4 w-4" />,
+                      label: "删除当前图片",
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "undo") undoDetectionChange();
+                    if (key === "redo") redoDetectionChange();
+                    if (key === "shortcuts") setHelpOpen(true);
+                    if (key === "delete-image" && activeImage) void removeDatasetImage(activeImage);
+                  },
+                }}
+              >
+                <Button
+                  icon={<MoreHorizontal aria-hidden="true" className="h-4 w-4" />}
+                  className="shrink-0"
+                  aria-label="更多图片操作"
+                />
+              </Dropdown>
+              <Button
+                className="shrink-0"
+                onClick={() => void markEmptyAndAdvance()}
+                disabled={!activeImage || isSaving}
+              >
+                <span className="hidden sm:inline">标记为空</span>
+                <span className="sm:hidden">空标注</span>
+              </Button>
+              <Button
+                type="primary"
+                icon={isSaving
+                  ? <Loader2 aria-hidden="true" className="hidden h-4 w-4 animate-spin sm:block" />
+                  : <Save aria-hidden="true" className="hidden h-4 w-4 sm:block" />}
+                onClick={() => void confirmAndAdvance()}
+                disabled={isSaving || !activeImage || Boolean(deletingImageId)}
+                className="shrink-0"
+              >
+                <span className="hidden sm:inline">保存并下一张</span>
+                <span className="sm:hidden">保存下一张</span>
+              </Button>
             </div>
           </footer>
         </main>
