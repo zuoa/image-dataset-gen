@@ -20,7 +20,12 @@ flowchart LR
   G --> S
   M --> P
   M --> S
+  M --> Q[Supervision QA]
+  Q --> P
   T[GPU trainer] <-->|lease + assignment token| A
+  T --> E[Supervision evaluation]
+  E --> P
+  F[Roboflow] -->|encrypted saved connection| A
 ```
 
 ## 一致性边界
@@ -44,6 +49,8 @@ API 在同一个 PostgreSQL 事务内写入业务状态和 `outbox_events`。独
 - `dataset_tasks` / `task_items`：批次与可恢复执行租约。
 - `dataset_exports`：不可变版本号和导出 Asset。
 - `training_jobs` / `training_inference_jobs`：GPU worker 领取状态、租约和结果。
+- `external_connections`：用户级外部服务连接；Roboflow API Key 只保存加密密文、验证状态和非敏感元数据。
+- `quality_runs` / `quality_issues`：数据质检和模型评测的不可变运行记录，以及可处理、可追溯的问题样本。
 - `outbox_events`：事务消息。
 - `refresh_sessions`：刷新令牌 hash、轮换 family 和撤销状态。
 
@@ -58,6 +65,16 @@ API 在同一个 PostgreSQL 事务内写入业务状态和 `outbox_events`。独
 ## 存储演进
 
 当前 `LocalStorageBackend` 使用同盘原子 rename，适合单机部署。未来切换 S3/MinIO 时，保留 `assets.storage_backend/storage_key` 和服务接口，只替换 put/open/delete/presign 实现；数据库关系和 API 不需要再次重构。
+
+## Supervision 集成边界
+
+Supervision 位于格式适配、质量分析和训练评测层，不取代平台的领域模型与任务系统：
+
+- `supervision_adapter` 负责平台归一化中心框与 `sv.Detections` 的双向转换。
+- ZIP 导入服务用 `DetectionDataset` 读取 YOLO、COCO、Pascal VOC，落库后仍以 `annotation_revisions` / `detections` 为事实来源。
+- 导出服务从当前标注版本生成多格式数据，并用 manifest 保留平台身份，保证模型错误样本可以回流。
+- 数据质检由 Celery media worker 异步执行；模型评测在 GPU trainer 内自动执行，评测 artifact 上传后由 API 转为 model 类型的质量运行。
+- Roboflow 是并列的数据来源而不是 Supervision 的替代品；下载入口和 SDK 流程继续保留，凭据由 `external_connections` 管理。
 
 ## 扩展路径
 

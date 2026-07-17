@@ -61,6 +61,12 @@ class User(TimestampMixin, db.Model):
         order_by="Dataset.created_at.desc()",
     )
     assets = db.relationship("Asset", back_populates="user")
+    external_connections = db.relationship(
+        "ExternalConnection",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="ExternalConnection.created_at.asc()",
+    )
 
 
 class ModelProfile(TimestampMixin, db.Model):
@@ -83,6 +89,30 @@ class ModelProfile(TimestampMixin, db.Model):
     notes = db.Column(db.Text, nullable=False, default="")
 
     user = db.relationship("User", back_populates="model_profiles")
+
+
+class ExternalConnection(TimestampMixin, db.Model):
+    __tablename__ = "external_connections"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "user_id", "provider", "name", name="uq_external_connections_user_provider_name"
+        ),
+    )
+
+    id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
+    user_id = db.Column(
+        uuid_column_type(), db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider = db.Column(db.String(32), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    secret_encrypted = db.Column(db.Text, nullable=False)
+    key_version = db.Column(db.Integer, nullable=False, default=1, server_default="1")
+    status = db.Column(db.String(24), nullable=False, default="unverified", index=True)
+    last_validated_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_error = db.Column(db.Text, nullable=False, default="")
+    metadata_json = db.Column(json_column_type(), nullable=False, default=dict)
+
+    user = db.relationship("User", back_populates="external_connections")
 
 
 class Dataset(TimestampMixin, db.Model):
@@ -141,6 +171,12 @@ class Dataset(TimestampMixin, db.Model):
         back_populates="dataset",
         cascade="all, delete-orphan",
         order_by="DatasetCategory.position.asc()",
+    )
+    quality_runs = db.relationship(
+        "QualityRun",
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="QualityRun.created_at.desc()",
     )
 
 
@@ -532,6 +568,78 @@ class Detection(TimestampMixin, db.Model):
 
     revision_row = db.relationship("AnnotationRevision", back_populates="detections")
     category = db.relationship("DatasetCategory", back_populates="detections")
+
+
+class QualityRun(TimestampMixin, db.Model):
+    __tablename__ = "quality_runs"
+    __table_args__ = (
+        db.Index("ix_quality_runs_dataset_created", "dataset_id", "created_at"),
+        db.Index("ix_quality_runs_status_created", "status", "created_at"),
+        db.CheckConstraint("attempt_count >= 0", name="ck_quality_runs_attempts_nonnegative"),
+    )
+
+    id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
+    dataset_id = db.Column(
+        uuid_column_type(), db.ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = db.Column(
+        uuid_column_type(), db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    training_job_id = db.Column(
+        uuid_column_type(), db.ForeignKey("training_jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    export_id = db.Column(
+        uuid_column_type(), db.ForeignKey("dataset_exports.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    run_type = db.Column(db.String(24), nullable=False, default="dataset", index=True)
+    status = db.Column(db.String(24), nullable=False, default="queued", index=True)
+    config_json = db.Column(json_column_type(), nullable=False, default=dict)
+    summary_json = db.Column(json_column_type(), nullable=False, default=dict)
+    supervision_version = db.Column(db.String(32), nullable=False, default="")
+    error_message = db.Column(db.Text, nullable=False, default="")
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+
+    dataset = db.relationship("Dataset", back_populates="quality_runs")
+    training_job = db.relationship("TrainingJob")
+    export = db.relationship("DatasetExport")
+    issues = db.relationship(
+        "QualityIssue",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="QualityIssue.score.desc()",
+    )
+
+
+class QualityIssue(TimestampMixin, db.Model):
+    __tablename__ = "quality_issues"
+    __table_args__ = (
+        db.Index("ix_quality_issues_run_status", "quality_run_id", "status"),
+        db.Index("ix_quality_issues_image_status", "image_id", "status"),
+        db.CheckConstraint("score >= 0 AND score <= 1", name="ck_quality_issues_score_range"),
+    )
+
+    id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
+    quality_run_id = db.Column(
+        uuid_column_type(), db.ForeignKey("quality_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    image_id = db.Column(
+        uuid_column_type(), db.ForeignKey("dataset_images.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    annotation_revision_id = db.Column(
+        uuid_column_type(), db.ForeignKey("annotation_revisions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    issue_type = db.Column(db.String(48), nullable=False, index=True)
+    severity = db.Column(db.String(16), nullable=False, default="warning", index=True)
+    score = db.Column(db.Float, nullable=False, default=0.5)
+    status = db.Column(db.String(16), nullable=False, default="open", index=True)
+    details_json = db.Column(json_column_type(), nullable=False, default=dict)
+    resolved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    run = db.relationship("QualityRun", back_populates="issues")
+    image = db.relationship("DatasetImage")
+    annotation_revision = db.relationship("AnnotationRevision")
 
 
 class TaskItem(TimestampMixin, db.Model):

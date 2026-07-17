@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from typing import Any
-import zipfile
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -12,7 +10,15 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import raiseload
 
 from app.extensions import db
-from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, ModelProfile, generate_uuid
+from app.models import (
+    Dataset,
+    DatasetExport,
+    DatasetImage,
+    DatasetTask,
+    ExternalConnection,
+    ModelProfile,
+    generate_uuid,
+)
 from app.schemas import (
     AnnotationUpdateSchema,
     DatasetExportSchema,
@@ -46,7 +52,6 @@ from app.services.dataset_service import (
     encode_dataset_cursor,
     dataset_has_selected_images,
     next_dataset_export_version,
-    next_dataset_ordinal,
     now_utc,
     sample_pool_split_map_for_images,
     selected_original_image_ids,
@@ -57,10 +62,7 @@ from app.services.dataset_service import (
 )
 from app.services.image_storage import (
     existing_generated_image,
-    normalize_uploaded_image,
-    preview_data_url,
     remove_generated_image_variants,
-    save_generated_image,
 )
 from app.services.idempotency_service import (
     IdempotencyError,
@@ -71,7 +73,7 @@ from app.services.storage_backend import register_local_asset
 from app.services.model_profile_service import _resolved_profile_api_key
 from app.services.outbox_service import enqueue_background_task
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
-from app.services.roboflow_import_service import RoboflowImportError, import_roboflow_dataset
+from app.services.roboflow_import_service import ROBOFLOW_IMPORT_FORMAT
 from app.services.subject_assist_service import suggest_subject_fields
 from app.services.video_import_service import (
     DEFAULT_VIDEO_FILENAME_PREFIX,
@@ -92,7 +94,6 @@ from app.utils.crypto import encrypt_secret
 
 datasets_bp = Blueprint("datasets", __name__)
 
-ALLOWED_ARCHIVE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _dataset_for_user(dataset_id: str, user_id: str) -> Dataset:
@@ -156,10 +157,6 @@ def _delete_dataset_images(dataset: Dataset, images: list[DatasetImage]) -> dict
         "deletedCount": len(deleted_ids),
         "dataset": build_dataset_detail_payload(sync_dataset_stats_from_db(dataset), include_images=False),
     }
-
-
-def _max_imported_images() -> int:
-    return max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
 
 
 def _dispatch_background_task(task_callable, *args: object) -> None:
@@ -537,112 +534,24 @@ def import_dataset_images(dataset_id: str):
     archive_bytes = archive.read()
     if not archive_bytes:
         return jsonify({"message": "上传的 ZIP 压缩包为空。"}), 400
+    from app.services.dataset_archive_import_service import (
+        DatasetArchiveImportError,
+        import_dataset_archive,
+    )
 
     try:
-        zip_file = zipfile.ZipFile(BytesIO(archive_bytes))
-    except zipfile.BadZipFile:
-        return jsonify({"message": "无法解析 ZIP 压缩包。"}), 400
-
-    task = DatasetTask(
-        dataset_id=dataset.id,
-        user_id=user_id,
-        task_type="import",
-        task_name=f"导入批次 {int(dataset.task_count or 0) + 1}",
-        subject=dataset.name,
-        image_count=0,
-        categories=dataset.categories,
-        config_json={"source": "zip"},
-        prompt_json={},
-        status="running",
-        progress_percent=0,
-        api_provider="local",
-        started_at=now_utc(),
-    )
-    db.session.add(task)
-    db.session.flush()
-
-    imported_count = 0
-    skipped_files: list[str] = []
-    next_ordinal = next_dataset_ordinal(dataset)
-
-    with zip_file:
-        for member in zip_file.infolist():
-            if imported_count >= _max_imported_images():
-                break
-            if member.is_dir():
-                continue
-            suffix = Path(member.filename).suffix.lower()
-            if suffix not in ALLOWED_ARCHIVE_IMAGE_EXTENSIONS:
-                skipped_files.append(Path(member.filename).name)
-                continue
-
-            normalized = normalize_uploaded_image(zip_file.read(member))
-            if normalized is None:
-                skipped_files.append(Path(member.filename).name)
-                continue
-
-            image_key = f"image-{next_ordinal:06d}"
-            saved_path = save_generated_image(
-                current_app.config["STORAGE_ROOT"],
-                dataset.id,
-                image_key,
-                bytes(normalized["image_bytes"]),
-                str(normalized["mime_type"]),
-            )
-            image = DatasetImage(
-                dataset_id=dataset.id,
-                source_task_id=task.id,
-                source_type="import",
-                source_ordinal=imported_count + 1,
-                ordinal=next_ordinal,
-                status="uploaded",
-                seed=700000 + next_ordinal,
-                prompt_text=f"uploaded image: {Path(member.filename).name}",
-                diversity_vars={"composition": "uploaded asset"},
-                latency_ms=0,
-                preview_svg=preview_data_url(bytes(normalized["image_bytes"]), str(normalized["mime_type"])),
-                selected=True,
-                annotation_status="pending",
-                confidence_score=None,
-                asset=register_local_asset(
-                    current_app.config["STORAGE_ROOT"],
-                    saved_path,
-                    user_id=user_id,
-                    dataset_id=dataset.id,
-                    kind="dataset_image",
-                    mime_type=str(normalized["mime_type"]),
-                    original_filename=Path(member.filename).name,
-                    width=int(normalized["width"]),
-                    height=int(normalized["height"]),
-                ),
-            )
-            db.session.add(image)
-            imported_count += 1
-            next_ordinal += 1
-
-    if imported_count == 0:
+        summary = import_dataset_archive(
+            dataset=dataset, user_id=user_id, archive_bytes=archive_bytes
+        )
+    except DatasetArchiveImportError as exc:
         db.session.rollback()
-        return jsonify({"message": "压缩包中没有可导入的图片文件。"}), 400
-
-    task.image_count = imported_count
-    task.images_generated = imported_count
-    task.selected_count = imported_count
-    task.progress_percent = 100
-    task.status = "completed"
-    task.completed_at = now_utc()
-    sync_dataset_task_stats_from_db(task)
-    sync_dataset_stats_from_db(dataset, commit=False)
-    db.session.commit()
-    dataset = _dataset_for_user(dataset.id, user_id)
+        return jsonify({"message": str(exc)}), 400
     return jsonify(
         {
-            "summary": {
-                "importedCount": imported_count,
-                "skippedCount": len(skipped_files),
-                "skippedFiles": skipped_files[:10],
-            },
-            "task": build_dataset_task_summary_payload(task),
-            "dataset": build_dataset_detail_payload(dataset, include_images=False),
+            "summary": summary,
+            "dataset": build_dataset_detail_payload(
+                _dataset_for_user(dataset.id, user_id), include_images=False
+            ),
         }
     )
 
@@ -758,39 +667,77 @@ def import_roboflow_dataset_images(dataset_id: str):
     user_id = get_jwt_identity()
     payload = RoboflowImportSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
-    api_key = payload["apiKey"].strip()
+    connection_id = str(payload.get("connectionId") or "").strip()
+    api_key = str(payload.get("apiKey") or "").strip()
     workspace = payload["workspace"].strip()
     project = payload["project"].strip()
     version = payload["version"].strip()
-    if not api_key or not workspace or not project or not version:
-        return jsonify({"message": "请填写 Roboflow API Key、workspace、project 和 version。"}), 400
+    if not workspace or not project or not version:
+        return jsonify({"message": "请填写 workspace、project 和 version。"}), 400
 
-    try:
-        summary = import_roboflow_dataset(
-            dataset=dataset,
-            user_id=user_id,
-            api_key=api_key,
-            workspace=workspace,
-            project=project,
-            version=version,
-            model_format=payload["format"],
-        )
-    except RoboflowImportError as exc:
-        db.session.rollback()
-        return jsonify({"message": str(exc)}), 400
+    connection = None
+    if connection_id:
+        connection = ExternalConnection.query.filter_by(
+            id=connection_id, user_id=user_id, provider="roboflow"
+        ).first_or_404()
+        if connection.status != "valid":
+            return jsonify({"message": "Roboflow 连接不可用，请先重新验证。"}), 409
 
-    dataset = _dataset_for_user(dataset.id, user_id)
-    task = (
-        DatasetTask.query.filter_by(dataset_id=dataset.id, task_type="import")
-        .order_by(DatasetTask.created_at.desc(), DatasetTask.id.desc())
-        .first()
+    task = DatasetTask(
+        dataset_id=dataset.id,
+        user_id=user_id,
+        task_type="import",
+        task_name=f"Roboflow 导入批次 {int(dataset.task_count or 0) + 1}",
+        subject=dataset.name,
+        image_count=0,
+        categories=dataset.categories,
+        config_json={
+            "source": "roboflow",
+            "connectionId": connection.id if connection else None,
+            "workspace": workspace,
+            "project": project,
+            "version": version,
+            "format": payload.get("format") or ROBOFLOW_IMPORT_FORMAT,
+        },
+        prompt_json={},
+        status="running",
+        progress_percent=0,
+        api_provider="roboflow",
+        api_key_encrypted=(
+            encrypt_secret(api_key, current_app.config["ENCRYPTION_KEY"])
+            if api_key and connection is None
+            else None
+        ),
+        started_at=now_utc(),
     )
-    return jsonify(
+    db.session.add(task)
+    db.session.flush()
+    sync_dataset_stats_from_db(dataset, commit=False)
+    from app.worker_tasks import import_roboflow_dataset_task
+
+    _dispatch_background_task(import_roboflow_dataset_task, task.id)
+    db.session.commit()
+    task = _task_for_dataset(_dataset_for_user(dataset.id, user_id), task.id)
+    return (
+        jsonify(
         {
-            "summary": summary,
+            "summary": {
+                "status": task.status,
+                "source": "roboflow",
+                "importedCount": task.images_generated,
+                **(
+                    (task.config_json or {}).get("resultSummary")
+                    if isinstance((task.config_json or {}).get("resultSummary"), dict)
+                    else {}
+                ),
+            },
             "task": build_dataset_task_summary_payload(task),
-            "dataset": build_dataset_detail_payload(dataset, include_images=False),
+            "dataset": build_dataset_detail_payload(
+                _dataset_for_user(dataset.id, user_id), include_images=False
+            ),
         }
+        ),
+        200,
     )
 
 

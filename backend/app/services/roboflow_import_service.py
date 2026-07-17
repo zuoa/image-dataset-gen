@@ -48,6 +48,7 @@ def import_roboflow_dataset(
     project: str,
     version: str,
     model_format: str = ROBOFLOW_IMPORT_FORMAT,
+    task: DatasetTask | None = None,
 ) -> dict[str, Any]:
     if model_format != ROBOFLOW_IMPORT_FORMAT:
         raise RoboflowImportError("当前只支持导入 Roboflow YOLOv8 格式。")
@@ -76,6 +77,7 @@ def import_roboflow_dataset(
             project=project,
             version=version,
             model_format=model_format,
+            task=task,
         )
 
 
@@ -98,7 +100,12 @@ def _download_roboflow_version(
             .download(model_format=model_format, location=str(download_dir), overwrite=True)
         )
     except Exception as exc:
-        current_app.logger.exception("Roboflow dataset download failed")
+        current_app.logger.warning(
+            "Roboflow dataset download failed for %s/%s version %s",
+            workspace,
+            project,
+            version,
+        )
         raise RoboflowImportError("Roboflow 数据集下载失败，请检查 workspace、project、version 和 API Key。") from exc
 
     location = getattr(downloaded, "location", None)
@@ -190,29 +197,34 @@ def _persist_prepared_images(
     project: str,
     version: str,
     model_format: str,
+    task: DatasetTask | None = None,
 ) -> dict[str, Any]:
-    task = DatasetTask(
-        dataset_id=dataset.id,
-        user_id=user_id,
-        task_type="import",
-        task_name=f"Roboflow 导入批次 {int(dataset.task_count or 0) + 1}",
-        subject=dataset.name,
-        image_count=0,
-        categories=categories,
-        config_json={
-            "source": "roboflow",
-            "workspace": workspace,
-            "project": project,
-            "version": version,
-            "format": model_format,
-        },
-        prompt_json={},
-        status="running",
-        progress_percent=0,
-        api_provider="roboflow",
-        started_at=now_utc(),
-    )
-    db.session.add(task)
+    if task is None:
+        task = DatasetTask(
+            dataset_id=dataset.id,
+            user_id=user_id,
+            task_type="import",
+            task_name=f"Roboflow 导入批次 {int(dataset.task_count or 0) + 1}",
+            subject=dataset.name,
+            image_count=0,
+            categories=categories,
+            config_json={
+                "source": "roboflow",
+                "workspace": workspace,
+                "project": project,
+                "version": version,
+                "format": model_format,
+            },
+            prompt_json={},
+            status="running",
+            progress_percent=0,
+            api_provider="roboflow",
+            started_at=now_utc(),
+        )
+        db.session.add(task)
+    else:
+        task.categories = categories
+        task.status = "running"
     dataset.categories = categories
     sync_dataset_category_rows(dataset)
     db.session.flush()
@@ -292,15 +304,16 @@ def _persist_prepared_images(
         "emptyLabels": empty_annotation_count,
         "updatedAt": now_utc().isoformat(),
     }
-    db.session.commit()
-
-    return {
+    result_summary = {
         "importedCount": len(prepared_images),
         "annotatedCount": annotated_count,
         "emptyAnnotationCount": empty_annotation_count,
         "skippedCount": len(skipped_files),
         "skippedFiles": skipped_files[:10],
     }
+    task.config_json = {**(task.config_json or {}), "resultSummary": result_summary}
+    db.session.commit()
+    return result_summary
 
 
 def _find_dataset_root(export_root: Path) -> Path:

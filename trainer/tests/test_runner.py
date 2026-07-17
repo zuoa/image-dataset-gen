@@ -7,7 +7,14 @@ import types
 import zipfile
 from pathlib import Path
 
-from app.runner import _resolve_model_name, _training_workers, train_yolov8
+from PIL import Image
+
+from app.runner import (
+    _evaluate_with_supervision,
+    _resolve_model_name,
+    _training_workers,
+    train_yolov8,
+)
 
 
 class _FakeTrainer:
@@ -67,6 +74,67 @@ class _FakeDownloadResponse:
 
     def iter_content(self, chunk_size: int) -> list[bytes]:
         return [self.body]
+
+
+class _EmptyPredictionModel:
+    def predict(self, **_: object) -> list[object]:
+        return []
+
+
+def test_supervision_evaluation_emits_metrics_matrix_and_issues(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    images_dir = dataset_root / "images" / "val"
+    labels_dir = dataset_root / "labels" / "val"
+    images_dir.mkdir(parents=True)
+    labels_dir.mkdir(parents=True)
+    image_path = images_dir / "widget_000001.png"
+    Image.new("RGB", (100, 80), color=(120, 140, 160)).save(image_path)
+    (labels_dir / "widget_000001.txt").write_text(
+        "0 0.5 0.5 0.4 0.5\n", encoding="utf-8"
+    )
+    data_yaml = dataset_root / "data.yaml"
+    data_yaml.write_text(
+        "train: images/val\nval: images/val\nnames: [widget]\n",
+        encoding="utf-8",
+    )
+    (dataset_root / "dataset-manifest.json").write_text(
+        json.dumps(
+            {
+                "images": [
+                    {
+                        "imageId": "image-1",
+                        "annotationRevision": 2,
+                        "imagePath": "images/val/widget_000001.png",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    confusion_matrix = tmp_path / "confusion.png"
+
+    report = _evaluate_with_supervision(
+        _EmptyPredictionModel(),
+        data_yaml,
+        confidence_threshold=0.25,
+        iou_threshold=0.5,
+        confusion_matrix_path=confusion_matrix,
+    )
+
+    assert report["metrics"] == {"mAP50": 0.0, "mAP50_95": 0.0}
+    assert report["confusionMatrixLabels"] == ["widget", "background"]
+    assert report["issues"] == [
+        {
+            "imageId": "image-1",
+            "annotationRevision": 2,
+            "imagePath": "images/val/widget_000001.png",
+            "issueType": "false_negative",
+            "severity": "error",
+            "score": 1.0,
+            "details": {"class": "widget"},
+        }
+    ]
+    assert confusion_matrix.exists()
 
 
 def test_train_yolov8_preserves_downloaded_dataset_zip(tmp_path: Path, monkeypatch) -> None:

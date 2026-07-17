@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
+import yaml
 
 
 ProgressCallback = Callable[[int], None]
@@ -90,7 +91,33 @@ def train_yolov8(job: dict[str, Any], dataset_zip: Path, work_root: Path, on_pro
     metrics_path = run_dir / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    artifacts = _collect_artifacts(run_dir, metrics_path)
+    evaluation_report = run_dir / "evaluation_report.json"
+    confusion_matrix_path = run_dir / "confusion_matrix.png"
+    best_model = run_dir / "weights" / "best.pt"
+    if best_model.exists():
+        try:
+            evaluation = _evaluate_with_supervision(
+                _load_model(YOLO, str(best_model)),
+                data_yaml,
+                confidence_threshold=0.25,
+                iou_threshold=0.5,
+                confusion_matrix_path=confusion_matrix_path,
+            )
+        except Exception:
+            evaluation = None
+        if evaluation is not None:
+            evaluation_report.write_text(
+                json.dumps(evaluation, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            metrics = {**metrics, **(evaluation.get("metrics") or {})}
+            metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    artifacts = _collect_artifacts(
+        run_dir,
+        metrics_path,
+        evaluation_report=evaluation_report,
+        confusion_matrix_path=confusion_matrix_path,
+    )
     return {"metrics": metrics, "artifacts": artifacts}
 
 
@@ -344,7 +371,13 @@ def _as_number(value: str | None) -> float | int | None:
     return round(number, 6)
 
 
-def _collect_artifacts(run_dir: Path, metrics_path: Path) -> list[tuple[str, Path]]:
+def _collect_artifacts(
+    run_dir: Path,
+    metrics_path: Path,
+    *,
+    evaluation_report: Path | None = None,
+    confusion_matrix_path: Path | None = None,
+) -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Path]] = []
     best = run_dir / "weights" / "best.pt"
     last = run_dir / "weights" / "last.pt"
@@ -357,7 +390,329 @@ def _collect_artifacts(run_dir: Path, metrics_path: Path) -> list[tuple[str, Pat
         candidates.append(("results_csv", results))
     if metrics_path.exists():
         candidates.append(("metrics", metrics_path))
+    if evaluation_report is not None and evaluation_report.exists():
+        candidates.append(("evaluation_report", evaluation_report))
+    if confusion_matrix_path is not None and confusion_matrix_path.exists():
+        candidates.append(("confusion_matrix", confusion_matrix_path))
     return candidates
+
+
+def _evaluate_with_supervision(
+    model: Any,
+    data_yaml: Path,
+    *,
+    confidence_threshold: float,
+    iou_threshold: float,
+    confusion_matrix_path: Path,
+) -> dict[str, Any]:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import numpy as np
+    from PIL import Image
+    import supervision as sv
+    from supervision.metrics import MeanAveragePrecision
+
+    config = yaml.safe_load(data_yaml.read_text(encoding="utf-8")) or {}
+    categories = _yaml_categories(config.get("names"))
+    split_name = "test" if config.get("test") and _split_has_images(data_yaml.parent, str(config["test"])) else "val"
+    split_value = str(config.get(split_name) or config.get("train") or "")
+    image_paths = _split_image_paths(data_yaml.parent, split_value)
+    manifest = _load_export_manifest(data_yaml.parent)
+    manifest_by_path = {
+        str(item.get("imagePath") or "").replace("\\", "/"): item
+        for item in manifest.get("images", [])
+        if isinstance(item, dict)
+    }
+
+    predictions: list[Any] = []
+    targets: list[Any] = []
+    image_contexts: list[dict[str, Any]] = []
+    for image_path in image_paths:
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
+        target = _load_yolo_target(
+            image_path, data_yaml.parent, image_width, image_height
+        )
+        result_list = list(
+            model.predict(
+                source=str(image_path),
+                conf=confidence_threshold,
+                verbose=False,
+            )
+            or []
+        )
+        prediction = (
+            sv.Detections.from_ultralytics(result_list[0])
+            if result_list
+            else sv.Detections.empty()
+        )
+        predictions.append(prediction)
+        targets.append(target)
+        relative_path = image_path.relative_to(data_yaml.parent).as_posix()
+        manifest_item = manifest_by_path.get(relative_path, {})
+        image_contexts.append(
+            {
+                "imageId": manifest_item.get("imageId"),
+                "annotationRevision": manifest_item.get("annotationRevision"),
+                "imagePath": relative_path,
+            }
+        )
+
+    if not predictions:
+        return {
+            "schemaVersion": 1,
+            "supervisionVersion": sv.__version__,
+            "split": split_name,
+            "metrics": {},
+            "perClass": [],
+            "confusionMatrix": [],
+            "issues": [],
+        }
+
+    map_result = MeanAveragePrecision().update(predictions, targets).compute()
+    confusion = sv.ConfusionMatrix.from_detections(
+        predictions,
+        targets,
+        categories,
+        conf_threshold=confidence_threshold,
+        iou_threshold=iou_threshold,
+    )
+    confusion.plot(
+        save_path=str(confusion_matrix_path),
+        title=f"{split_name.title()} confusion matrix",
+        normalize=True,
+    )
+    per_class, issues = _evaluation_details(
+        predictions,
+        targets,
+        categories,
+        image_contexts,
+        iou_threshold,
+    )
+    return {
+        "schemaVersion": 1,
+        "supervisionVersion": sv.__version__,
+        "split": split_name,
+        "config": {
+            "confidenceThreshold": confidence_threshold,
+            "iouThreshold": iou_threshold,
+        },
+        "metrics": {
+            "mAP50": round(float(map_result.map50), 6),
+            "mAP50_95": round(float(map_result.map50_95), 6),
+        },
+        "perClass": per_class,
+        "confusionMatrix": np.asarray(confusion.matrix, dtype=int).tolist(),
+        "confusionMatrixLabels": [*categories, "background"],
+        "issues": issues,
+    }
+
+
+def _yaml_categories(names: Any) -> list[str]:
+    if isinstance(names, dict):
+        return [str(value) for _, value in sorted(names.items(), key=lambda item: int(item[0]))]
+    if isinstance(names, list):
+        return [str(value) for value in names]
+    return []
+
+
+def _split_image_paths(dataset_root: Path, split_value: str) -> list[Path]:
+    split_path = Path(split_value)
+    if not split_path.is_absolute():
+        split_path = dataset_root / split_path
+    if split_path.is_file():
+        return [
+            Path(line.strip()) if Path(line.strip()).is_absolute() else dataset_root / line.strip()
+            for line in split_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    return sorted(
+        path
+        for path in split_path.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+    ) if split_path.exists() else []
+
+
+def _load_export_manifest(dataset_root: Path) -> dict[str, Any]:
+    path = dataset_root / "dataset-manifest.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_yolo_target(
+    image_path: Path,
+    dataset_root: Path,
+    image_width: int,
+    image_height: int,
+):
+    import numpy as np
+    import supervision as sv
+
+    relative = image_path.relative_to(dataset_root)
+    parts = list(relative.parts)
+    if "images" in parts:
+        parts[parts.index("images")] = "labels"
+    label_path = (dataset_root / Path(*parts)).with_suffix(".txt")
+    boxes: list[list[float]] = []
+    class_ids: list[int] = []
+    if label_path.exists():
+        for line in label_path.read_text(encoding="utf-8").splitlines():
+            values = line.split()
+            if len(values) < 5:
+                continue
+            class_id = int(float(values[0]))
+            x_center, y_center, width, height = [float(value) for value in values[1:5]]
+            boxes.append(
+                [
+                    (x_center - width / 2) * image_width,
+                    (y_center - height / 2) * image_height,
+                    (x_center + width / 2) * image_width,
+                    (y_center + height / 2) * image_height,
+                ]
+            )
+            class_ids.append(class_id)
+    return sv.Detections(
+        xyxy=np.asarray(boxes, dtype=float).reshape((-1, 4)),
+        class_id=np.asarray(class_ids, dtype=int),
+    )
+
+
+def _evaluation_details(
+    predictions: list[Any],
+    targets: list[Any],
+    categories: list[str],
+    image_contexts: list[dict[str, Any]],
+    iou_threshold: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    import numpy as np
+    import supervision as sv
+
+    counts = {
+        index: {"tp": 0, "fp": 0, "fn": 0}
+        for index in range(len(categories))
+    }
+    issues: list[dict[str, Any]] = []
+
+    def add_issue(
+        context: dict[str, Any],
+        issue_type: str,
+        score: float,
+        details: dict[str, Any],
+    ) -> None:
+        if not context.get("imageId"):
+            return
+        issues.append(
+            {
+                **context,
+                "issueType": issue_type,
+                "severity": "error" if issue_type in {"false_negative", "class_confusion"} else "warning",
+                "score": round(min(max(float(score), 0.0), 1.0), 6),
+                "details": details,
+            }
+        )
+
+    for prediction, target, context in zip(predictions, targets, image_contexts):
+        ious = (
+            np.asarray(sv.box_iou_batch(target.xyxy, prediction.xyxy), dtype=float)
+            if len(target) and len(prediction)
+            else np.empty((len(target), len(prediction)), dtype=float)
+        )
+        matched_predictions: set[int] = set()
+        for target_index in range(len(target)):
+            target_class = int(target.class_id[target_index])
+            if not 0 <= target_class < len(categories):
+                continue
+            best_index = int(np.argmax(ious[target_index])) if len(prediction) else -1
+            best_iou = float(ious[target_index, best_index]) if best_index >= 0 else 0.0
+            if best_index >= 0 and best_iou >= iou_threshold and best_index not in matched_predictions:
+                prediction_class = int(prediction.class_id[best_index])
+                matched_predictions.add(best_index)
+                predicted_name = (
+                    categories[prediction_class]
+                    if 0 <= prediction_class < len(categories)
+                    else f"class_{prediction_class}"
+                )
+                if prediction_class == target_class:
+                    counts[target_class]["tp"] += 1
+                else:
+                    counts[target_class]["fn"] += 1
+                    counts.setdefault(prediction_class, {"tp": 0, "fp": 0, "fn": 0})["fp"] += 1
+                    add_issue(
+                        context,
+                        "class_confusion",
+                        best_iou,
+                        {
+                            "expectedClass": categories[target_class],
+                            "predictedClass": predicted_name,
+                            "iou": round(best_iou, 4),
+                        },
+                    )
+            else:
+                counts[target_class]["fn"] += 1
+                same_class_indexes = [
+                    index
+                    for index in range(len(prediction))
+                    if int(prediction.class_id[index]) == target_class
+                ]
+                same_class_iou = max(
+                    (float(ious[target_index, index]) for index in same_class_indexes),
+                    default=0.0,
+                )
+                if same_class_iou >= 0.1:
+                    add_issue(
+                        context,
+                        "low_iou",
+                        1 - same_class_iou,
+                        {"class": categories[target_class], "iou": round(same_class_iou, 4)},
+                    )
+                else:
+                    add_issue(
+                        context,
+                        "false_negative",
+                        1.0,
+                        {"class": categories[target_class]},
+                    )
+        for prediction_index in range(len(prediction)):
+            if prediction_index in matched_predictions:
+                continue
+            prediction_class = int(prediction.class_id[prediction_index])
+            counts.setdefault(prediction_class, {"tp": 0, "fp": 0, "fn": 0})["fp"] += 1
+            confidence = (
+                float(prediction.confidence[prediction_index])
+                if prediction.confidence is not None
+                else 0.0
+            )
+            add_issue(
+                context,
+                "false_positive",
+                confidence,
+                {
+                    "class": (
+                        categories[prediction_class]
+                        if 0 <= prediction_class < len(categories)
+                        else f"class_{prediction_class}"
+                    ),
+                    "confidence": round(confidence, 6),
+                },
+            )
+
+    per_class: list[dict[str, Any]] = []
+    for class_id, category in enumerate(categories):
+        class_counts = counts[class_id]
+        precision_denominator = class_counts["tp"] + class_counts["fp"]
+        recall_denominator = class_counts["tp"] + class_counts["fn"]
+        per_class.append(
+            {
+                "classId": class_id,
+                "category": category,
+                **class_counts,
+                "precision": round(class_counts["tp"] / precision_denominator, 6) if precision_denominator else 0,
+                "recall": round(class_counts["tp"] / recall_denominator, 6) if recall_denominator else 0,
+            }
+        )
+    return per_class, issues
 
 
 def _detections_from_ultralytics_results(results: object, categories: list[str]) -> list[dict[str, Any]]:

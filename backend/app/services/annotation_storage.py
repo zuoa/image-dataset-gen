@@ -179,6 +179,9 @@ def _save_annotation_revision_if_possible(
             is_current=True,
         )
         db.session.add(revision)
+        from app.services.quality_service import resolve_annotation_quality_issues
+
+        resolve_annotation_quality_issues(image.id)
         for detection in normalized["detections"]:
             category_name = str(detection.get("category") or "").strip()
             category = categories_by_name.get(category_name)

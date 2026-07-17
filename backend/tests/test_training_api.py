@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 from pathlib import Path
 import zipfile
 
@@ -7,7 +8,15 @@ from PIL import Image
 from app import create_app
 from app.config import TestConfig
 from app.extensions import db
-from app.models import DatasetImage, TrainingArtifact, TrainingInferenceJob, TrainingJob, TrainingWorker
+from app.models import (
+    DatasetImage,
+    QualityIssue,
+    QualityRun,
+    TrainingArtifact,
+    TrainingInferenceJob,
+    TrainingJob,
+    TrainingWorker,
+)
 from app.services.image_storage import save_generated_image
 
 
@@ -256,6 +265,77 @@ def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Pat
         assert stored_job is not None and stored_job.status == "completed"
         assert stored_worker is not None and stored_worker.status == "idle"
         assert stored_artifact is not None and Path(stored_artifact.storage_path).exists()
+
+
+def test_training_evaluation_report_creates_model_quality_run(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-quality-report")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+    job = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"epochs": 1},
+    ).get_json()["job"]
+    with app.app_context():
+        image_id = DatasetImage.query.filter_by(dataset_id=dataset_id).one().id
+
+    report = {
+        "schemaVersion": 1,
+        "supervisionVersion": "0.28.0",
+        "split": "val",
+        "config": {"confidenceThreshold": 0.25, "iouThreshold": 0.5},
+        "metrics": {"mAP50": 0.72, "mAP50_95": 0.51},
+        "perClass": [{"category": "widget", "precision": 0.8, "recall": 0.7}],
+        "confusionMatrix": [[3, 1], [2, 0]],
+        "confusionMatrixLabels": ["widget", "background"],
+        "issues": [
+            {
+                "imageId": image_id,
+                "annotationRevision": None,
+                "issueType": "false_negative",
+                "severity": "error",
+                "score": 1.0,
+                "details": {"class": "widget"},
+            }
+        ],
+    }
+    uploaded = client.post(
+        f"/api/v1/training/jobs/{job['id']}/artifacts",
+        headers=_worker_headers(),
+        data={
+            "artifact_type": "evaluation_report",
+            "artifact": (
+                BytesIO(json.dumps(report).encode("utf-8")),
+                "evaluation_report.json",
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 201
+
+    completed = client.patch(
+        f"/api/v1/training/jobs/{job['id']}/status",
+        headers=_worker_headers(),
+        json={"status": "completed"},
+    )
+    assert completed.status_code == 200
+
+    quality_runs = client.get(
+        f"/api/v1/datasets/{dataset_id}/quality-runs", headers=headers
+    ).get_json()["qualityRuns"]
+    assert quality_runs[0]["runType"] == "model"
+    assert quality_runs[0]["summary"]["metrics"]["mAP50"] == 0.72
+    assert quality_runs[0]["issueCounts"]["open"] == 1
+    with app.app_context():
+        run = QualityRun.query.filter_by(training_job_id=job["id"]).one()
+        issue = QualityIssue.query.filter_by(quality_run_id=run.id).one()
+        assert issue.image_id == image_id
+        assert issue.issue_type == "false_negative"
 
 
 def test_training_model_test_uses_registered_worker_queue(tmp_path: Path):

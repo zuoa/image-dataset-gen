@@ -12,6 +12,8 @@ import type {
   TaskConfig,
   TrainingInferenceTest,
   TrainingJob,
+  QualityIssue,
+  QualityRun,
 } from "../lib/types";
 
 function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
@@ -179,7 +181,8 @@ export function importDatasetFromRoboflow(
   datasetId: string,
   token: string,
   payload: {
-    apiKey: string;
+    connectionId?: string;
+    apiKey?: string;
     workspace: string;
     project: string;
     version: string;
@@ -194,6 +197,52 @@ export function importDatasetFromRoboflow(
       body: JSON.stringify({ ...payload, format: payload.format ?? "yolov8" }),
     },
   );
+}
+
+export function createDatasetQualityRun(
+  datasetId: string,
+  token: string,
+  payload: { confidenceThreshold?: number; iouThreshold?: number } = {},
+) {
+  return apiRequest<{ qualityRun: QualityRun }>(`/datasets/${datasetId}/quality-runs`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listDatasetQualityRuns(datasetId: string, token: string) {
+  return apiRequest<{ qualityRuns: QualityRun[] }>(`/datasets/${datasetId}/quality-runs`, { token });
+}
+
+export function listDatasetQualityIssues(
+  datasetId: string,
+  runId: string,
+  token: string,
+  options?: { status?: string; issueType?: string; limit?: number },
+) {
+  const params = new URLSearchParams();
+  if (options?.status) params.set("status", options.status);
+  if (options?.issueType) params.set("issue_type", options.issueType);
+  if (options?.limit) params.set("limit", String(options.limit));
+  const query = params.toString();
+  return apiRequest<{ issues: QualityIssue[]; total: number }>(
+    `/datasets/${datasetId}/quality-runs/${runId}/issues${query ? `?${query}` : ""}`,
+    { token },
+  );
+}
+
+export function updateDatasetQualityIssue(
+  datasetId: string,
+  issueId: string,
+  token: string,
+  status: "open" | "resolved" | "dismissed",
+) {
+  return apiRequest<{ issue: QualityIssue }>(`/datasets/${datasetId}/quality-issues/${issueId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ status }),
+  });
 }
 
 export function augmentDataset(

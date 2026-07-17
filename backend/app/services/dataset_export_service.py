@@ -54,6 +54,16 @@ def build_dataset_export_archive(
 
         if export_format == "yolo":
             _write_data_yaml(temp_root, categories, split_assignments)
+        _write_manifest(
+            temp_root,
+            dataset,
+            selected_images,
+            split_assignments,
+            categories,
+            export_format,
+            image_format,
+            storage_root,
+        )
 
         with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for file_path in temp_root.rglob("*"):
@@ -134,6 +144,28 @@ def _resolved_image_format_summary(
 
 def _build_splits(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
     ordered = sorted(images, key=lambda image: image.ordinal)
+    imported_splits = {
+        image.id: str((image.diversity_vars or {}).get("importSplit") or "")
+        for image in ordered
+    }
+    if any(value in {"train", "val", "test"} for value in imported_splits.values()):
+        result: dict[str, list[DatasetImage]] = {"train": [], "val": [], "test": []}
+        unassigned: list[DatasetImage] = []
+        for image in ordered:
+            split = imported_splits.get(image.id, "")
+            if split in result:
+                result[split].append(image)
+            else:
+                unassigned.append(image)
+        fallback = _build_splits_without_imports(unassigned)
+        for split, split_images in fallback.items():
+            result[split].extend(split_images)
+        return result
+    return _build_splits_without_imports(ordered)
+
+
+def _build_splits_without_imports(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
+    ordered = sorted(images, key=lambda image: image.ordinal)
     total = len(ordered)
     if total <= 1:
         return {"train": ordered, "val": [], "test": []}
@@ -162,7 +194,11 @@ def _safe_filename_stem(value: str) -> str:
     return "-".join(filter(None, sanitized.split("-"))) or "frame"
 
 
-def _primary_detection(storage_root: str, dataset: Dataset, dataset_image: DatasetImage) -> dict[str, Any] | None:
+def _detections(
+    storage_root: str,
+    dataset: Dataset,
+    dataset_image: DatasetImage,
+) -> list[dict[str, Any]]:
     stored = load_annotation_result(
         storage_root,
         dataset.id,
@@ -170,10 +206,24 @@ def _primary_detection(storage_root: str, dataset: Dataset, dataset_image: Datas
         default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
     )
     if stored is not None:
-        detections = stored.get("detections", [])
-        return detections[0] if detections else None
+        return list(stored.get("detections", []))
+    return []
 
-    return None
+
+def _image_dimensions(
+    storage_root: str,
+    dataset: Dataset,
+    dataset_image: DatasetImage,
+) -> tuple[int, int]:
+    if dataset_image.asset and dataset_image.asset.width and dataset_image.asset.height:
+        return int(dataset_image.asset.width), int(dataset_image.asset.height)
+    generated_path = existing_generated_image(
+        storage_root, dataset.id, f"image-{dataset_image.ordinal:06d}"
+    )
+    if generated_path is not None:
+        with Image.open(generated_path) as image:
+            return image.size
+    return IMAGE_SIZE
 
 
 def _save_preview_image(
@@ -196,8 +246,7 @@ def _save_preview_image(
 
     border_color = 180 + (seed % 40)
     draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=32, outline=(border_color,) * 3, width=2)
-    detection = _primary_detection(storage_root, dataset, dataset_image)
-    if detection:
+    for detection in _detections(storage_root, dataset, dataset_image):
         x_center, y_center, box_width, box_height = detection["bbox"]
         x1 = int((x_center - box_width / 2) * width)
         y1 = int((y_center - box_height / 2) * height)
@@ -217,16 +266,23 @@ def _save_preview_image(
         image.save(output_path, format="PNG")
 
 
-def _write_yolo_label(label_path: Path, class_id: int, bbox: tuple[float, float, float, float] | None) -> None:
+def _write_yolo_label(
+    label_path: Path,
+    detections: list[dict[str, Any]],
+    category_to_id: dict[str, int],
+) -> None:
     label_path.parent.mkdir(parents=True, exist_ok=True)
-    if not bbox:
-        label_path.write_text("", encoding="utf-8")
-        return
-    x_center, y_center, width, height = bbox
-    label_path.write_text(
-        f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n",
-        encoding="utf-8",
-    )
+    lines: list[str] = []
+    for detection in detections:
+        category = str(detection.get("category") or "")
+        if category not in category_to_id:
+            continue
+        x_center, y_center, width, height = detection["bbox"]
+        lines.append(
+            f"{category_to_id[category]} {x_center:.6f} {y_center:.6f} "
+            f"{width:.6f} {height:.6f}"
+        )
+    label_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _write_yolo_dataset(
@@ -242,8 +298,8 @@ def _write_yolo_dataset(
 
     for split_name, split_images in split_assignments.items():
         for dataset_image in split_images:
-            detection = _primary_detection(storage_root, dataset, dataset_image)
-            category = str(detection["category"]) if detection and detection.get("category") in category_to_id else categories[0]
+            detections = _detections(storage_root, dataset, dataset_image)
+            category = _filename_category(detections, categories)
             actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
                 dataset, dataset_image, image_format, storage_root
             )
@@ -257,8 +313,8 @@ def _write_yolo_dataset(
             )
             _write_yolo_label(
                 temp_root / "labels" / split_name / f"{Path(image_name).stem}.txt",
-                category_to_id[category],
-                tuple(detection["bbox"]) if detection else None,
+                detections,
+                category_to_id,
             )
 
 
@@ -273,14 +329,15 @@ def _write_coco_dataset(
     category_to_id = {name: index + 1 for index, name in enumerate(categories)}
     categories_payload = [{"id": category_id, "name": name} for name, category_id in category_to_id.items()]
 
-    for split_name in ("train", "val"):
+    for split_name in ("train", "val", "test"):
         split_images = split_assignments.get(split_name, [])
         images_payload: list[dict[str, Any]] = []
         annotations_payload: list[dict[str, Any]] = []
 
         for image_id, dataset_image in enumerate(split_images, start=1):
-            detection = _primary_detection(storage_root, dataset, dataset_image)
-            category = str(detection["category"]) if detection and detection.get("category") in category_to_id else categories[0]
+            detections = _detections(storage_root, dataset, dataset_image)
+            category = _filename_category(detections, categories)
+            image_width, image_height = _image_dimensions(storage_root, dataset, dataset_image)
             actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
                 dataset, dataset_image, image_format, storage_root
             )
@@ -296,23 +353,26 @@ def _write_coco_dataset(
                 {
                     "id": image_id,
                     "file_name": image_name,
-                    "width": IMAGE_SIZE[0],
-                    "height": IMAGE_SIZE[1],
+                    "width": image_width,
+                    "height": image_height,
                 }
             )
-            if detection:
+            for detection in detections:
+                detection_category = str(detection.get("category") or "")
+                if detection_category not in category_to_id:
+                    continue
                 x_center, y_center, width, height = detection["bbox"]
                 bbox = [
-                    round((x_center - width / 2) * IMAGE_SIZE[0], 2),
-                    round((y_center - height / 2) * IMAGE_SIZE[1], 2),
-                    round(width * IMAGE_SIZE[0], 2),
-                    round(height * IMAGE_SIZE[1], 2),
+                    round((x_center - width / 2) * image_width, 2),
+                    round((y_center - height / 2) * image_height, 2),
+                    round(width * image_width, 2),
+                    round(height * image_height, 2),
                 ]
                 annotations_payload.append(
                     {
                         "id": len(annotations_payload) + 1,
                         "image_id": image_id,
-                        "category_id": category_to_id[category],
+                        "category_id": category_to_id[detection_category],
                         "bbox": bbox,
                         "area": round(bbox[2] * bbox[3], 2),
                         "iscrowd": 0,
@@ -352,12 +412,9 @@ def _write_voc_dataset(
     for split_name, split_images in split_assignments.items():
         ids: list[str] = []
         for dataset_image in split_images:
-            detection = _primary_detection(storage_root, dataset, dataset_image)
-            category = (
-                str(detection["category"])
-                if detection and detection.get("category")
-                else (dataset.categories[0] if dataset.categories else "default")
-            )
+            detections = _detections(storage_root, dataset, dataset_image)
+            category = _filename_category(detections, dataset.categories or ["default"])
+            image_width, image_height = _image_dimensions(storage_root, dataset, dataset_image)
             actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
                 dataset, dataset_image, image_format, storage_root
             )
@@ -375,16 +432,16 @@ def _write_voc_dataset(
             SubElement(annotation, "folder").text = "JPEGImages"
             SubElement(annotation, "filename").text = f"{image_stem}.{image_ext}"
             size = SubElement(annotation, "size")
-            SubElement(size, "width").text = str(IMAGE_SIZE[0])
-            SubElement(size, "height").text = str(IMAGE_SIZE[1])
+            SubElement(size, "width").text = str(image_width)
+            SubElement(size, "height").text = str(image_height)
             SubElement(size, "depth").text = "3"
 
-            if detection:
+            for detection in detections:
                 x_center, y_center, width, height = detection["bbox"]
-                x1 = max(1, int((x_center - width / 2) * IMAGE_SIZE[0]))
-                y1 = max(1, int((y_center - height / 2) * IMAGE_SIZE[1]))
-                x2 = min(IMAGE_SIZE[0], int((x_center + width / 2) * IMAGE_SIZE[0]))
-                y2 = min(IMAGE_SIZE[1], int((y_center + height / 2) * IMAGE_SIZE[1]))
+                x1 = max(1, int((x_center - width / 2) * image_width))
+                y1 = max(1, int((y_center - height / 2) * image_height))
+                x2 = min(image_width, int((x_center + width / 2) * image_width))
+                y2 = min(image_height, int((y_center + height / 2) * image_height))
                 obj = SubElement(annotation, "object")
                 SubElement(obj, "name").text = str(detection["category"])
                 bbox = SubElement(obj, "bndbox")
@@ -409,8 +466,8 @@ def _write_csv_dataset(
     images_dir = temp_root / "images"
     rows: list[dict[str, Any]] = []
     for dataset_image in images:
-        detection = _primary_detection(storage_root, dataset, dataset_image)
-        category = str(detection["category"]) if detection and detection.get("category") in categories else categories[0]
+        detections = _detections(storage_root, dataset, dataset_image)
+        category = _filename_category(detections, categories)
         actual_image_format, image_ext = _resolved_image_format_for_dataset_image(
             dataset, dataset_image, image_format, storage_root
         )
@@ -422,16 +479,18 @@ def _write_csv_dataset(
             actual_image_format,
             storage_root,
         )
-        rows.append(
-            {
-                "image_name": image_name,
-                "category": category,
-                "selected": dataset_image.selected,
-                "annotation_status": dataset_image.annotation_status,
-                "bbox": json.dumps(detection["bbox"]) if detection else "",
-                "confidence": detection["confidence"] if detection else "",
-            }
-        )
+        row_detections = detections or [None]
+        for detection in row_detections:
+            rows.append(
+                {
+                    "image_name": image_name,
+                    "category": detection.get("category", "") if detection else "",
+                    "selected": dataset_image.selected,
+                    "annotation_status": dataset_image.annotation_status,
+                    "bbox": json.dumps(detection["bbox"]) if detection else "",
+                    "confidence": detection["confidence"] if detection else "",
+                }
+            )
 
     with (temp_root / "labels.csv").open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
@@ -478,3 +537,75 @@ def _write_data_yaml(
     if split_assignments.get("test"):
         lines.insert(2, "test: images/test")
     (temp_root / "data.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _filename_category(
+    detections: list[dict[str, Any]], categories: list[str]
+) -> str:
+    category_set = set(categories)
+    for detection in detections:
+        category = str(detection.get("category") or "")
+        if category in category_set:
+            return category
+    return categories[0] if categories else "default"
+
+
+def _write_manifest(
+    temp_root: Path,
+    dataset: Dataset,
+    images: list[DatasetImage],
+    split_assignments: dict[str, list[DatasetImage]],
+    categories: list[str],
+    export_format: str,
+    image_format: str,
+    storage_root: str,
+) -> None:
+    split_by_id = {
+        image.id: split_name
+        for split_name, split_images in split_assignments.items()
+        for image in split_images
+    }
+    entries: list[dict[str, Any]] = []
+    for dataset_image in images:
+        detections = _detections(storage_root, dataset, dataset_image)
+        category = _filename_category(detections, categories)
+        _, image_ext = _resolved_image_format_for_dataset_image(
+            dataset, dataset_image, image_format, storage_root
+        )
+        image_name = _image_name(dataset_image, category, image_ext)
+        split_name = split_by_id.get(dataset_image.id, "train")
+        if export_format == "yolo":
+            image_path = f"images/{split_name}/{image_name}"
+        elif export_format == "coco":
+            image_path = f"{split_name}/{image_name}"
+        elif export_format == "voc":
+            image_path = f"JPEGImages/{image_name}"
+        else:
+            image_path = f"images/{image_name}"
+        current_revision = next(
+            (revision for revision in dataset_image.annotation_revisions if revision.is_current),
+            None,
+        )
+        entries.append(
+            {
+                "imageId": dataset_image.id,
+                "ordinal": dataset_image.ordinal,
+                "imagePath": image_path,
+                "split": split_name,
+                "annotationRevision": current_revision.revision if current_revision else None,
+                "detectionCount": len(detections),
+            }
+        )
+    (temp_root / "dataset-manifest.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "datasetId": dataset.id,
+                "categories": categories,
+                "images": entries,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )

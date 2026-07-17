@@ -4,6 +4,11 @@ import { Link, useParams } from "react-router-dom";
 
 import { downloadWithToken } from "../api/client";
 import {
+  createRoboflowConnection,
+  deleteRoboflowConnection,
+  listRoboflowConnections,
+} from "../api/integrations";
+import {
   annotateDataset,
   augmentDataset,
   createTrainingJob,
@@ -24,9 +29,11 @@ import type { ImageFilter, SamplePoolSplit } from "../lib/types";
 import { AuthImage } from "../components/AuthImage";
 import { TrainingModelTestPanel } from "../components/TrainingModelTestPanel";
 import { TrainingResultsPanel } from "../components/TrainingResultsPanel";
+import { DatasetQualityPanel } from "../components/DatasetQualityPanel";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 import { SectionCard } from "../components/ui/SectionCard";
 import { segmentedButtonClasses, segmentedGroupClasses } from "../components/ui/segmentedStyles";
 import {
@@ -40,7 +47,7 @@ import {
   type ImageViewport,
   type ResizeCorner,
 } from "../lib/annotation";
-import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage, TrainingJob } from "../lib/types";
+import type { AugmentationMethod, AugmentationSettings, Dataset, DatasetImage, ExternalConnection, TrainingJob } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
@@ -246,7 +253,13 @@ export function DatasetDetailPage() {
   const [videoFilenamePrefix, setVideoFilenamePrefix] = useState("frame");
   const [videoTargetSize, setVideoTargetSize] = useState<VideoTargetSize>("original");
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
-  const [roboflowApiKey, setRoboflowApiKey] = useState("");
+  const [roboflowConnections, setRoboflowConnections] = useState<ExternalConnection[]>([]);
+  const [selectedRoboflowConnectionId, setSelectedRoboflowConnectionId] = useState("");
+  const [newRoboflowConnectionName, setNewRoboflowConnectionName] = useState("Roboflow");
+  const [newRoboflowApiKey, setNewRoboflowApiKey] = useState("");
+  const [showRoboflowConnectionForm, setShowRoboflowConnectionForm] = useState(false);
+  const [isLoadingRoboflowConnections, setIsLoadingRoboflowConnections] = useState(false);
+  const [isSavingRoboflowConnection, setIsSavingRoboflowConnection] = useState(false);
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
   const [roboflowVersion, setRoboflowVersion] = useState("");
@@ -706,6 +719,61 @@ export function DatasetDetailPage() {
     setIsAugmentationModalOpen(false);
     setIsAnnotationModalOpen(false);
     setIsExportModalOpen(false);
+    if (token) void loadRoboflowConnections();
+  }
+
+  async function loadRoboflowConnections() {
+    if (!token) return;
+    setIsLoadingRoboflowConnections(true);
+    try {
+      const response = await listRoboflowConnections(token);
+      setRoboflowConnections(response.connections);
+      setSelectedRoboflowConnectionId((current) =>
+        response.connections.some((connection) => connection.id === current)
+          ? current
+          : response.connections[0]?.id ?? "",
+      );
+      setShowRoboflowConnectionForm(response.connections.length === 0);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setIsLoadingRoboflowConnections(false);
+    }
+  }
+
+  async function saveRoboflowConnection() {
+    if (!token || !newRoboflowConnectionName.trim() || !newRoboflowApiKey.trim()) return;
+    setIsSavingRoboflowConnection(true);
+    try {
+      const response = await createRoboflowConnection(
+        token,
+        newRoboflowConnectionName.trim(),
+        newRoboflowApiKey.trim(),
+      );
+      setRoboflowConnections((current) => [...current, response.connection]);
+      setSelectedRoboflowConnectionId(response.connection.id);
+      setNewRoboflowApiKey("");
+      setShowRoboflowConnectionForm(false);
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setIsSavingRoboflowConnection(false);
+    }
+  }
+
+  async function removeSelectedRoboflowConnection() {
+    if (!token || !selectedRoboflowConnectionId) return;
+    if (!window.confirm("删除这个 Roboflow 连接？已导入的数据不会受到影响。")) return;
+    try {
+      await deleteRoboflowConnection(token, selectedRoboflowConnectionId);
+      const remaining = roboflowConnections.filter((connection) => connection.id !== selectedRoboflowConnectionId);
+      setRoboflowConnections(remaining);
+      setSelectedRoboflowConnectionId(remaining[0]?.id ?? "");
+      setShowRoboflowConnectionForm(remaining.length === 0);
+    } catch (error) {
+      setActionError((error as Error).message);
+    }
   }
 
   async function createAugmentationTask() {
@@ -980,12 +1048,12 @@ export function DatasetDetailPage() {
 
   async function handleRoboflowImport() {
     if (!token || !datasetId) return;
-    const apiKey = roboflowApiKey.trim();
+    const connectionId = selectedRoboflowConnectionId;
     const workspace = roboflowWorkspace.trim();
     const project = roboflowProject.trim();
     const version = roboflowVersion.trim();
-    if (!apiKey || !workspace || !project || !version) {
-      setActionError("请填写 Roboflow API Key、workspace、project 和 version。");
+    if (!connectionId || !workspace || !project || !version) {
+      setActionError("请选择 Roboflow 连接，并填写 workspace、project 和 version。");
       return;
     }
 
@@ -993,7 +1061,7 @@ export function DatasetDetailPage() {
     setImportSummary(null);
     try {
       const response = await importDatasetFromRoboflow(datasetId, token, {
-        apiKey,
+        connectionId,
         workspace,
         project,
         version,
@@ -1001,12 +1069,12 @@ export function DatasetDetailPage() {
       });
       mergeDatasetMetadata(response.dataset);
       setActionError(null);
-      setImportSummary(
-        `已从 Roboflow 导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
-          `，带标注 ${String(response.summary.annotatedCount ?? 0)} 张` +
+      setImportSummary(response.summary.status === "running"
+        ? "已创建 Roboflow 下载任务，可在批次任务中查看进度。"
+        : `已从 Roboflow 导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
+          (Number(response.summary.annotatedCount ?? 0) > 0 ? `，带标注 ${String(response.summary.annotatedCount ?? 0)} 张` : "") +
           (Number(response.summary.emptyAnnotationCount ?? 0) > 0 ? `，空标注 ${String(response.summary.emptyAnnotationCount ?? 0)} 张` : "") +
-          (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""),
-      );
+          (Number(response.summary.skippedCount ?? 0) > 0 ? `，跳过 ${String(response.summary.skippedCount ?? 0)} 个无效文件` : ""));
       setIsImportModalOpen(false);
       void pageLoadersRef.current.refreshLoadedRange(currentFilterRef.current);
     } catch (error) {
@@ -1290,6 +1358,8 @@ export function DatasetDetailPage() {
           <div className="text-sm text-red-700 dark:text-red-100">{actionError}</div>
         </SectionCard>
       ) : null}
+
+      <DatasetQualityPanel datasetId={dataset.id} token={token} imageCount={dataset.imageCount} />
 
       {isTrainingPanelOpen ? (
       <SectionCard>
@@ -1931,6 +2001,7 @@ export function DatasetDetailPage() {
               </div>
               <button
                 type="button"
+                aria-label="关闭导入面板"
                 onClick={() => setIsImportModalOpen(false)}
                 disabled={isAnyImporting}
                 className="rounded-full p-1 hover:bg-neutral-100 disabled:opacity-50 dark:hover:bg-white/10"
@@ -2148,7 +2219,7 @@ export function DatasetDetailPage() {
                         本地 ZIP
                       </div>
                       <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                        兼容现有导入方式，只导入压缩包中的图片。
+                        自动识别 YOLO、COCO、Pascal VOC，也兼容只含图片的 ZIP。
                       </p>
                     </div>
                     <Button
@@ -2176,17 +2247,43 @@ export function DatasetDetailPage() {
                     Roboflow
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <label className="space-y-2 sm:col-span-2">
-                      <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">API Key</span>
-                      <Input
-                        type="password"
-                        value={roboflowApiKey}
-                        onChange={(event) => setRoboflowApiKey(event.target.value)}
-                        placeholder="roboflow_api_key"
-                        autoComplete="off"
-                        disabled={isImportingRoboflow}
-                      />
-                    </label>
+                    <div className="space-y-2 sm:col-span-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">加密连接</span>
+                        <button type="button" className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-white" onClick={() => setShowRoboflowConnectionForm((current) => !current)}>
+                          {showRoboflowConnectionForm ? "收起" : "添加连接"}
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <Select
+                          className="flex-1"
+                          value={selectedRoboflowConnectionId}
+                          onChange={(event) => setSelectedRoboflowConnectionId(event.target.value)}
+                          disabled={isLoadingRoboflowConnections || isImportingRoboflow}
+                        >
+                          <option value="">{isLoadingRoboflowConnections ? "读取连接中..." : "选择 Roboflow 连接"}</option>
+                          {roboflowConnections.map((connection) => (
+                            <option key={connection.id} value={connection.id}>{connection.name} · {connection.status === "valid" ? "已验证" : "需验证"}</option>
+                          ))}
+                        </Select>
+                        <Button variant="secondary" onClick={() => void removeSelectedRoboflowConnection()} disabled={!selectedRoboflowConnectionId || isImportingRoboflow}>删除</Button>
+                      </div>
+                    </div>
+                    {showRoboflowConnectionForm ? (
+                      <div className="grid gap-3 rounded-2xl border border-dashed border-neutral-300 p-4 sm:col-span-2 sm:grid-cols-2 dark:border-white/15">
+                        <label className="space-y-2">
+                          <span className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">连接名称</span>
+                          <Input value={newRoboflowConnectionName} onChange={(event) => setNewRoboflowConnectionName(event.target.value)} placeholder="团队 Roboflow" />
+                        </label>
+                        <label className="space-y-2">
+                          <span className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">API Key</span>
+                          <Input type="password" value={newRoboflowApiKey} onChange={(event) => setNewRoboflowApiKey(event.target.value)} placeholder="只在保存时发送" autoComplete="off" />
+                        </label>
+                        <Button className="justify-center sm:col-span-2" onClick={() => void saveRoboflowConnection()} disabled={isSavingRoboflowConnection || !newRoboflowApiKey.trim() || !newRoboflowConnectionName.trim()}>
+                          {isSavingRoboflowConnection ? "验证并保存中..." : "验证并保存连接"}
+                        </Button>
+                      </div>
+                    ) : null}
                     <label className="space-y-2">
                       <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Workspace</span>
                       <Input
@@ -2224,7 +2321,7 @@ export function DatasetDetailPage() {
                     onClick={() => void handleRoboflowImport()}
                     disabled={
                       isAnyImporting ||
-                      !roboflowApiKey.trim() ||
+                      !selectedRoboflowConnectionId ||
                       !roboflowWorkspace.trim() ||
                       !roboflowProject.trim() ||
                       !roboflowVersion.trim()

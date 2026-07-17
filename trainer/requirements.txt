@@ -1,3 +1,4 @@
 Flask==3.0.3
 requests==2.32.3
 ultralytics==8.3.49
+supervision[metrics]==0.28.0

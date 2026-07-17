@@ -143,11 +143,42 @@ class DatasetExportSchema(Schema):
 
 
 class RoboflowImportSchema(Schema):
-    apiKey = fields.String(required=True, validate=validate.Length(min=1, max=255))
+    connectionId = fields.String(load_default="", validate=validate.Length(max=64))
+    apiKey = fields.String(load_default="", validate=validate.Length(max=255))
     workspace = fields.String(required=True, validate=validate.Length(min=1, max=120))
     project = fields.String(required=True, validate=validate.Length(min=1, max=120))
     version = fields.String(required=True, validate=validate.Length(min=1, max=120))
     format = fields.String(load_default="yolov8", validate=validate.OneOf(["yolov8"]))
+
+    @validates_schema
+    def validate_credentials(self, data: dict, **_: object) -> None:
+        if not str(data.get("connectionId") or "").strip() and not str(data.get("apiKey") or "").strip():
+            raise ValidationError(
+                {
+                    "connectionId": ["connectionId or apiKey is required"],
+                    "apiKey": ["connectionId or apiKey is required"],
+                }
+            )
+
+
+class ExternalConnectionSchema(Schema):
+    name = fields.String(required=True, validate=validate.Length(min=1, max=120))
+    apiKey = fields.String(load_default="", validate=validate.Length(max=255))
+
+
+class QualityRunCreateSchema(Schema):
+    confidenceThreshold = fields.Float(
+        load_default=0.25, validate=validate.Range(min=0, max=1)
+    )
+    iouThreshold = fields.Float(
+        load_default=0.5, validate=validate.Range(min=0.1, max=0.95)
+    )
+
+
+class QualityIssueUpdateSchema(Schema):
+    status = fields.String(
+        required=True, validate=validate.OneOf(["open", "resolved", "dismissed"])
+    )
 
 
 class VideoImportSchema(Schema):

@@ -808,6 +808,10 @@ def update_training_job_status(job_id: str):
         if job.worker is not None:
             job.worker.current_job_id = None
             job.worker.status = "idle"
+    if next_status == "completed":
+        from app.services.training_evaluation_service import ingest_training_evaluation
+
+        ingest_training_evaluation(job)
     db.session.commit()
     return jsonify({"job": _build_training_job_payload(job)})
 

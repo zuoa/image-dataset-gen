@@ -83,6 +83,65 @@ export type ModelProfile = {
   updatedAt?: string | null;
 };
 
+export type ExternalConnection = {
+  id: string;
+  provider: "roboflow" | string;
+  name: string;
+  hasApiKey: boolean;
+  status: "valid" | "invalid" | "unverified" | string;
+  metadata: Record<string, unknown>;
+  lastValidatedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type QualityIssue = {
+  id: string;
+  qualityRunId: string;
+  imageId: string;
+  annotationRevisionId?: string | null;
+  issueType: string;
+  severity: "error" | "warning" | "info" | string;
+  score: number;
+  status: "open" | "resolved" | "dismissed" | string;
+  details: Record<string, unknown>;
+  image?: { id: string; ordinal: number; annotationStatus: string };
+  resolvedAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type QualityRun = {
+  id: string;
+  datasetId: string;
+  trainingJobId?: string | null;
+  exportId?: string | null;
+  runType: "dataset" | "model" | string;
+  status: "queued" | "running" | "completed" | "failed" | string;
+  config: Record<string, unknown>;
+  summary: {
+    qualityScore?: number;
+    imageCount?: number;
+    objectCount?: number;
+    issueCount?: number;
+    issuesByType?: Record<string, number>;
+    issuesBySeverity?: Record<string, number>;
+    classCounts?: Record<string, number>;
+    classShares?: Record<string, number>;
+    missingClassesBySplit?: Record<string, string[]>;
+    metrics?: Record<string, number>;
+    perClass?: Array<Record<string, number | string>>;
+    confusionMatrix?: number[][];
+    confusionMatrixLabels?: string[];
+    split?: string;
+  };
+  supervisionVersion: string;
+  error: string;
+  issueCounts: { total: number; open: number; resolved: number; dismissed: number };
+  createdAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
 export type PromptPreview = {
   positive_prompt: string;
   negative_prompt: string;

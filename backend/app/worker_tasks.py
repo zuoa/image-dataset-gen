@@ -19,7 +19,16 @@ from app.clients.gemini_client import (
 )
 from app.clients.jimeng_client import JimengGenerationError, generate_image as generate_jimeng_image
 from app.extensions import celery, db
-from app.models import Dataset, DatasetExport, DatasetImage, DatasetTask, TaskItem, generate_uuid
+from app.models import (
+    Dataset,
+    DatasetExport,
+    DatasetImage,
+    DatasetTask,
+    ExternalConnection,
+    QualityRun,
+    TaskItem,
+    generate_uuid,
+)
 from app.services.annotation_storage import (
     extract_detection_categories,
     infer_default_bbox_semantics,
@@ -37,6 +46,7 @@ from app.services.dataset_service import (
 )
 from app.services.image_storage import augment_generated_image, preview_data_url, save_generated_image
 from app.services.storage_backend import register_local_asset
+from app.services.external_connection_service import connection_secret
 from app.services.outbox_service import enqueue_background_task
 from app.services.video_import_service import (
     DEFAULT_VIDEO_FRAME_INTERVAL,
@@ -756,6 +766,117 @@ def extract_dataset_video_frames(self, task_id: str) -> None:
         _mark_video_import_failed(task_id, str(exc))
         _finish_task_execution(execution_item_id, "failed", str(exc))
         db.session.commit()
+    finally:
+        _maybe_remove_session(self.request.is_eager)
+
+
+@celery.task(bind=True, max_retries=2)
+def import_roboflow_dataset_task(self, task_id: str) -> None:
+    task = db.session.get(DatasetTask, task_id)
+    if (
+        task is None
+        or task.task_type != "import"
+        or (task.config_json or {}).get("source") != "roboflow"
+        or task.status != "running"
+    ):
+        return
+    execution_item_id = _claim_task_execution(task_id, "roboflow_import")
+    if execution_item_id is None:
+        return
+
+    try:
+        config = task.config_json or {}
+        connection_id = str(config.get("connectionId") or "")
+        if connection_id:
+            connection = ExternalConnection.query.filter_by(
+                id=connection_id,
+                user_id=task.user_id,
+                provider="roboflow",
+            ).first()
+            if connection is None or connection.status != "valid":
+                raise RuntimeError("Roboflow 连接已删除或不可用。")
+            api_key = connection_secret(connection)
+        elif task.api_key_encrypted:
+            api_key = decrypt_secret(
+                task.api_key_encrypted, current_app.config["ENCRYPTION_KEY"]
+            )
+        else:
+            raise RuntimeError("Roboflow 导入任务缺少有效连接。")
+
+        from app.services.roboflow_import_service import import_roboflow_dataset
+
+        import_roboflow_dataset(
+            dataset=task.dataset,
+            user_id=task.user_id,
+            api_key=api_key,
+            workspace=str(config.get("workspace") or ""),
+            project=str(config.get("project") or ""),
+            version=str(config.get("version") or ""),
+            model_format=str(config.get("format") or "yolov8"),
+            task=task,
+        )
+        task = db.session.get(DatasetTask, task_id)
+        if task is not None:
+            task.api_key_encrypted = None
+        _finish_task_execution(execution_item_id, "completed")
+        db.session.commit()
+    except SoftTimeLimitExceeded as exc:
+        _release_dataset_task_execution_for_retry(task_id, "soft time limit reached")
+        raise self.retry(exc=exc, countdown=5)
+    except Exception as exc:
+        current_app.logger.warning("Roboflow import task %s failed", task_id)
+        _mark_dataset_task_execution_failed(task_id, str(exc))
+        raise
+    finally:
+        _maybe_remove_session(self.request.is_eager)
+
+
+@celery.task(bind=True, max_retries=2)
+def analyze_dataset_quality(self, run_id: str) -> None:
+    run = db.session.execute(
+        select(QualityRun).where(QualityRun.id == run_id).with_for_update()
+    ).scalar_one_or_none()
+    if run is None or run.status not in {"queued", "failed"}:
+        db.session.rollback()
+        return
+    run.status = "running"
+    run.started_at = now_utc()
+    run.completed_at = None
+    run.error_message = ""
+    run.attempt_count = int(run.attempt_count or 0) + 1
+    db.session.commit()
+
+    try:
+        from app.services.quality_service import run_dataset_quality_analysis
+        from app.services.supervision_adapter import supervision_version
+
+        run = db.session.get(QualityRun, run_id)
+        run.summary_json = run_dataset_quality_analysis(run)
+        run.supervision_version = supervision_version()
+        run.status = "completed"
+        run.completed_at = now_utc()
+        db.session.commit()
+    except SoftTimeLimitExceeded as exc:
+        run = db.session.get(QualityRun, run_id)
+        if run is not None:
+            run.status = "queued"
+            run.error_message = "soft time limit reached"
+            db.session.commit()
+        raise self.retry(exc=exc, countdown=5)
+    except Exception as exc:
+        db.session.rollback()
+        run = db.session.get(QualityRun, run_id)
+        if run is not None:
+            run.status = "failed"
+            run.error_message = str(exc)[:2000]
+            run.completed_at = now_utc()
+            db.session.commit()
+        current_app.logger.exception("Quality analysis failed for run %s", run_id)
+        if int(getattr(self.request, "retries", 0)) < 2:
+            if run is not None:
+                run.status = "queued"
+                db.session.commit()
+            raise self.retry(exc=exc, countdown=5)
     finally:
         _maybe_remove_session(self.request.is_eager)
 

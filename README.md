@@ -2,6 +2,14 @@
 
 面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。
 
+## Supervision 质量闭环
+
+- 本地 ZIP 可自动识别并导入 YOLO、COCO、Pascal VOC，也继续支持纯图片压缩包；标注和数据集划分会一并保留。
+- YOLO、COCO、Pascal VOC、CSV 导出支持单图多目标，并附带 `dataset-manifest.json`，将训练样本映射回平台图片与标注版本。
+- 数据集详情页可手动运行质量检查，识别缺失/空标注、越界与异常框、重复框、重复或损坏图片，并维护问题状态。
+- YOLOv8 训练完成后由 trainer 自动运行 Supervision 评测，生成 mAP、分类指标、混淆矩阵及误检/漏检/类别混淆问题，回流到同一质量面板。
+- Roboflow 下载能力保留。API Key 通过“Roboflow 连接”一次验证后加密保存，后续下载只提交连接 ID；后台导入任务不会把明文密钥写入响应或日志。
+
 详细设计见 [架构说明](docs/architecture.md)，部署、备份和故障处理见 [运维手册](docs/operations.md)。
 
 ## 服务结构
@@ -57,7 +65,7 @@ cd frontend && npm ci && npm run build
 ## 数据库与迁移
 
 - 生产数据库固定使用 PostgreSQL；UUID、JSONB、数值精度、外键、唯一约束和检查约束由数据库保证。
-- 当前 `20260717_01` 同时支持空库初始化和旧 Compose PostgreSQL 库接管：若检测到由 `AUTO_CREATE_SCHEMA` 创建、但没有 `alembic_version` 的旧表，会先转换 UUID/JSONB/金额字段，补齐新列和表，回填计数器与分类，再由 Alembic 记录版本。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
+- `20260717_01` 支持空库初始化和旧 Compose PostgreSQL 库接管；当前 head `20260717_02` 增加外部连接、质量运行与质量问题表。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
 - 修改模型后必须生成并审阅迁移，再运行：
 
 ```bash

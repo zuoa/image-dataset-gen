@@ -70,5 +70,5 @@ def test_initial_migration_adopts_unversioned_auto_created_schema(tmp_path: Path
     worker_columns = {column["name"] for column in inspector.get_columns("training_workers")}
     assert {"token_hash", "token_scopes"} <= worker_columns
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260717_01"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260717_02"
         assert connection.scalar(sa.text("SELECT id FROM users WHERE email = 'legacy-user'")) == user_id
