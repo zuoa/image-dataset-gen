@@ -26,8 +26,8 @@ function previewSvg(index: number) {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function makeImages() {
-  return Array.from({ length: imageCount }, (_, index) => ({
+function makeImages(count = imageCount) {
+  return Array.from({ length: count }, (_, index) => ({
     id: `image-${index + 1}`,
     datasetId: "demo",
     sourceType: index % 3 === 0 ? "generated" : "imported",
@@ -201,6 +201,106 @@ async function mockWorkbenchApi(
   };
 }
 
+async function mockPaginatedWorkbenchApi(page: Page) {
+  let images = makeImages(101).map((image) => ({ ...image, annotationStatus: "pending" }));
+  const requestedCursors: string[] = [];
+
+  const dataset = (
+    pageImages: ReturnType<typeof makeImages>,
+    nextCursor: string | null,
+    filteredTotal = images.length,
+  ) => ({
+    id: "demo",
+    name: "分页标注数据集",
+    description: "用于验证标注队列分页前进",
+    categories: ["truck", "wheel", "person"],
+    status: "ready",
+    imageCount: images.length,
+    selectedCount: images.length,
+    taskCount: 0,
+    spentCost: 0,
+    annotation: {},
+    segmentAssistAvailable: false,
+    images: pageImages,
+    imagesTotal: filteredTotal,
+    imagesNextCursor: nextCursor,
+    imageAnnotationCounts: {
+      annotated: images.filter((image) => image.annotationStatus === "annotated" || image.annotationStatus === "empty").length,
+      unannotated: images.filter((image) => image.annotationStatus !== "annotated" && image.annotationStatus !== "empty").length,
+    },
+    tasks: [],
+    exports: [],
+    latestTask: null,
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+
+    if (url.pathname === "/api/v1/auth/refresh") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          token: "e2e-token",
+          user: { id: "e2e-user", username: "reviewer", plan: "pro" },
+        }),
+      });
+      return;
+    }
+
+    if (request.method() === "GET" && url.pathname === "/api/v1/datasets/demo") {
+      const annotationFilter = url.searchParams.get("filter_annotation");
+      const filteredImages = annotationFilter
+        ? images.filter((image) => {
+            const processed = image.annotationStatus === "annotated" || image.annotationStatus === "empty";
+            return annotationFilter === "annotated" ? processed : !processed;
+          })
+        : images;
+      const cursor = url.searchParams.get("images_cursor");
+      if (cursor) requestedCursors.push(cursor);
+      const cursorOrdinal = cursor ? Number(cursor.replace("image-", "")) : null;
+      const cursorOffset = cursorOrdinal === null
+        ? -1
+        : filteredImages.findIndex((image) => image.ordinal > cursorOrdinal);
+      const offset = cursorOrdinal !== null
+        ? cursorOffset >= 0 ? cursorOffset : filteredImages.length
+        : Number(url.searchParams.get("images_offset") ?? 0);
+      const limit = Number(url.searchParams.get("images_limit") ?? 100);
+      const pageImages = filteredImages.slice(offset, offset + limit);
+      const nextCursor = offset + pageImages.length < filteredImages.length
+        ? pageImages[pageImages.length - 1]?.id ?? null
+        : null;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ dataset: dataset(pageImages, nextCursor, filteredImages.length) }),
+      });
+      return;
+    }
+
+    const annotationMatch = url.pathname.match(/^\/api\/v1\/datasets\/demo\/images\/(image-\d+)\/annotations$/);
+    if (request.method() === "PATCH" && annotationMatch) {
+      const payload = request.postDataJSON() as {
+        detections: Array<{ category: string; confidence: number; bbox: [number, number, number, number] }>;
+      };
+      const updatedImage = {
+        ...images.find((image) => image.id === annotationMatch[1])!,
+        detections: payload.detections,
+        annotationStatus: payload.detections.length > 0 ? "annotated" : "empty",
+      };
+      images = images.map((image) => (image.id === updatedImage.id ? updatedImage : image));
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ dataset: dataset([], null), image: updatedImage }),
+      });
+      return;
+    }
+
+    await route.abort();
+  });
+
+  return { requestedCursors: () => requestedCursors };
+}
+
 test("smart select previews a mask, accepts correction points, and confirms a regular box", async ({ page }) => {
   const api = await mockWorkbenchApi(page, { segmentAssist: true, rotateTokenOnPredict: true });
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -291,6 +391,46 @@ test("desktop workbench keeps queue, canvas, and inspector in separate columns",
   await page.getByRole("button", { name: "标记为空" }).click();
   await expect(page.getByText("样本 #2", { exact: true })).toBeVisible();
   await expect(page.getByRole("status")).toContainText("标注已保存，已进入下一张");
+});
+
+test("save and next loads the next page at the queue boundary", async ({ page }) => {
+  const api = await mockPaginatedWorkbenchApi(page);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/datasets/demo/annotate");
+
+  const queue = page.getByRole("region", { name: "标注队列" });
+  const image100Button = queue.locator("button").filter({ hasText: "#100" });
+  await expect(image100Button).toBeAttached();
+  await image100Button.evaluate((element: HTMLButtonElement) => element.click());
+  await expect(page.getByText("样本 #100", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "保存并下一张" }).click();
+
+  await expect(page.getByText("样本 #101", { exact: true })).toBeVisible();
+  await expect(page.getByText("101/101", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("标注已保存，已进入下一张");
+  await expect.poll(api.requestedCursors).toEqual(["image-100"]);
+});
+
+test("save and next loads the next pending image when the saved image leaves the filtered queue", async ({ page }) => {
+  const api = await mockPaginatedWorkbenchApi(page);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/datasets/demo/annotate");
+
+  const queue = page.getByRole("region", { name: "标注队列" });
+  await queue.getByRole("radio", { name: "待处理 101" }).click();
+  await expect(queue.getByText("101 张待处理", { exact: true })).toBeVisible();
+  const image100Button = queue.locator("button").filter({ hasText: "#100" });
+  await expect(image100Button).toBeAttached();
+  await image100Button.evaluate((element: HTMLButtonElement) => element.click());
+  await expect(page.getByText("样本 #100", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "保存并下一张" }).click();
+
+  await expect(page.getByText("样本 #101", { exact: true })).toBeVisible();
+  await expect(page.getByText("100/100", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("标注已保存，已进入下一张待处理图片");
+  await expect.poll(api.requestedCursors).toEqual(["image-100"]);
 });
 
 test("tablet and mobile expose queue and inspector as on-demand drawers", async ({ page }, testInfo: TestInfo) => {
