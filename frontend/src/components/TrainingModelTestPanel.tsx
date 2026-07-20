@@ -508,10 +508,10 @@ function AnnotatedResultImage({
                 type="button"
                 aria-label={`选择 ${detection.category}，置信度 ${formatConfidence(detection.confidence)}`}
                 className={cn(
-                  "absolute rounded-lg border-2 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-white",
+                  "absolute appearance-none rounded-lg border-2 bg-transparent p-0 text-left shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition focus:outline-none focus:ring-2 focus:ring-white",
                   selected ? "z-10 shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "hover:shadow-[0_0_0_2px_rgba(0,0,0,0.28)]",
                 )}
-                style={{ ...detectionStyle(detection.bbox), borderColor: color }}
+                style={{ ...detectionStyle(detection.bbox), borderColor: color, backgroundColor: "transparent" }}
                 onClick={(event) => {
                   event.stopPropagation();
                   onSelectDetection(index);
