@@ -594,10 +594,14 @@ export function DatasetAnnotatePage() {
         if (activeImage) void saveAnnotations();
         return;
       }
+      if (key === "a" && segmentPrediction && !isInteractiveTarget(event.target)) {
+        event.preventDefault();
+        confirmSegmentPrediction();
+        return;
+      }
       if (event.key === "Enter" && !isInteractiveTarget(event.target)) {
         event.preventDefault();
-        if (segmentPrediction) confirmSegmentPrediction();
-        else if (activeImage) void confirmAndAdvance();
+        if (activeImage && !segmentPrediction) void confirmAndAdvance();
         return;
       }
 
@@ -1216,7 +1220,8 @@ export function DatasetAnnotatePage() {
     { keys: "← / →", action: "上一张 / 下一张" },
     { keys: "B", action: "切换画框模式" },
     ...(segmentAssistAvailable ? [{ keys: "S", action: "启用一次智能点选" }] : []),
-    { keys: "Enter", action: segmentPrediction ? "确认智能候选框" : "保存并进入下一张" },
+    ...(segmentAssistAvailable ? [{ keys: "A", action: "确认智能候选框" }] : []),
+    { keys: "Enter", action: "保存并进入下一张" },
     { keys: "Ctrl / ⌘ + S", action: "保存当前图片" },
     { keys: "Ctrl / ⌘ + Z", action: "撤销" },
     { keys: "Ctrl / ⌘ + Shift + Z", action: "重做" },
@@ -1653,7 +1658,7 @@ export function DatasetAnnotatePage() {
               className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
-              {segmentAssistAvailable ? "S 智能点选一次 · B 画框" : "B 画框"} · Enter {segmentPrediction ? "确认候选" : "保存下一张"}
+              {segmentAssistAvailable ? "S 智能点选一次 · B 画框" : "B 画框"} · {segmentPrediction ? "A 确认候选" : "Enter 保存下一张"}
             </button>
           </div>
 

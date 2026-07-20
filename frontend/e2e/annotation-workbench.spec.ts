@@ -326,7 +326,11 @@ test("smart select previews a mask, accepts correction points, and confirms a re
   await page.getByRole("button", { name: "添加排除点" }).click();
   await viewport.click({ position: { x: 700, y: 320 } });
   await expect(confirmCandidate).toBeEnabled();
-  await confirmCandidate.click();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Enter");
+  await expect(confirmCandidate).toBeEnabled();
+  await expect(smartSelect).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("a");
 
   await expect(page.getByRole("button", { name: "选择检测框 3，类别 truck" })).toBeAttached();
   await expect(smartSelect).toHaveAttribute("aria-pressed", "false");
