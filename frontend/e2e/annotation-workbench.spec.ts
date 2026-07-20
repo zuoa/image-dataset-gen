@@ -306,11 +306,16 @@ test("smart select previews a mask, accepts correction points, and confirms a re
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/datasets/demo/annotate");
 
-  const smartSelect = page.getByRole("button", { name: "智能点选" });
+  const smartSelect = page.getByRole("button", { name: "智能点选", exact: true });
   await expect(smartSelect).toBeVisible();
-  await expect(smartSelect).toHaveAttribute("aria-pressed", "true");
+  await expect(smartSelect).toHaveAttribute("aria-pressed", "false");
 
   const viewport = page.getByTestId("annotation-viewport");
+  await viewport.click({ position: { x: 450, y: 330 } });
+  expect(api.segmentCreateCount()).toBe(0);
+
+  await page.keyboard.press("s");
+  await expect(smartSelect).toHaveAttribute("aria-pressed", "true");
   await viewport.click({ position: { x: 450, y: 330 } });
   const confirmCandidate = page.getByRole("button", { name: "确认智能候选框" });
   await expect(confirmCandidate).toBeEnabled();
@@ -324,7 +329,12 @@ test("smart select previews a mask, accepts correction points, and confirms a re
   await confirmCandidate.click();
 
   await expect(page.getByRole("button", { name: "选择检测框 3，类别 truck" })).toBeAttached();
-  await expect(page.getByRole("button", { name: "取消智能候选框" })).toBeDisabled();
+  await expect(smartSelect).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: "取消智能候选框" })).toBeHidden();
+  await expect.poll(api.segmentDeleteCount).toBe(1);
+
+  await viewport.click({ position: { x: 450, y: 330 } });
+  expect(api.segmentCreateCount()).toBe(1);
 });
 
 test("leaving during session creation deletes the late GPU session", async ({ page }) => {
@@ -332,6 +342,8 @@ test("leaving during session creation deletes the late GPU session", async ({ pa
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/datasets/demo/annotate");
 
+  await expect(page.getByRole("button", { name: "智能点选", exact: true })).toBeVisible();
+  await page.keyboard.press("s");
   await page.getByTestId("annotation-viewport").click({ position: { x: 450, y: 330 } });
   await expect.poll(api.segmentCreateCount).toBe(1);
   await page.getByRole("link", { name: "返回数据集" }).click();

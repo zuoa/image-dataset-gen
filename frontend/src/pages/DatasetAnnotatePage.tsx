@@ -156,7 +156,7 @@ export function DatasetAnnotatePage() {
   const [draftDetections, setDraftDetections] = useState<Detection[]>([]);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [isAddingDetection, setIsAddingDetection] = useState(false);
-  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("smart-select");
+  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("box");
   const [segmentSession, setSegmentSession] = useState<ActiveSegmentSession | null>(null);
   const [segmentPoints, setSegmentPoints] = useState<SegmentAssistPoint[]>([]);
   const [segmentPointLabel, setSegmentPointLabel] = useState<SegmentAssistPoint["label"]>("positive");
@@ -447,6 +447,8 @@ export function DatasetAnnotatePage() {
       draftOwnerImageIdRef.current = null;
       setDraftDetections([]);
       setDraftRecovered(false);
+      setIsAddingDetection(false);
+      setAnnotationTool("box");
       return;
     }
 
@@ -472,6 +474,7 @@ export function DatasetAnnotatePage() {
     setDraftRecovered(recovered);
     setSelectedDetectionIndex(null);
     setIsAddingDetection(false);
+    setAnnotationTool("box");
     setBoxesVisible(true);
     setZoom(1);
     undoStackRef.current = [];
@@ -636,8 +639,8 @@ export function DatasetAnnotatePage() {
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        if (segmentPoints.length > 0 || segmentPrediction) {
-          clearSegmentPrediction();
+        if (activeAnnotationTool === "smart-select") {
+          finishSmartSelect();
           return;
         }
         setIsAddingDetection(false);
@@ -689,7 +692,6 @@ export function DatasetAnnotatePage() {
     draftDetections,
     isSaving,
     segmentAssistAvailable,
-    segmentPoints.length,
     segmentPrediction,
     selectedDetectionIndex,
   ]);
@@ -1034,6 +1036,12 @@ export function DatasetAnnotatePage() {
     if (tool === "box") closeSegmentAssistSession();
   }
 
+  function finishSmartSelect() {
+    setAnnotationTool("box");
+    setIsAddingDetection(false);
+    closeSegmentAssistSession();
+  }
+
   async function addSegmentPoint(point: SegmentAssistPoint) {
     if (!activeImage || !token || !datasetId || segmentBusyRef.current) return;
     segmentBusyRef.current = true;
@@ -1107,7 +1115,7 @@ export function DatasetAnnotatePage() {
     recordHistorySnapshot(draftDetections);
     setDraftDetections((current) => [...current, nextDetection]);
     setSelectedDetectionIndex(draftDetections.length);
-    clearSegmentPrediction();
+    finishSmartSelect();
     setSaveAnnouncement("智能候选框已确认并加入当前标注。");
   }
 
@@ -1207,7 +1215,7 @@ export function DatasetAnnotatePage() {
   const shortcuts = [
     { keys: "← / →", action: "上一张 / 下一张" },
     { keys: "B", action: "切换画框模式" },
-    ...(segmentAssistAvailable ? [{ keys: "S", action: "切换智能点选" }] : []),
+    ...(segmentAssistAvailable ? [{ keys: "S", action: "启用一次智能点选" }] : []),
     { keys: "Enter", action: segmentPrediction ? "确认智能候选框" : "保存并进入下一张" },
     { keys: "Ctrl / ⌘ + S", action: "保存当前图片" },
     { keys: "Ctrl / ⌘ + Z", action: "撤销" },
@@ -1392,11 +1400,14 @@ export function DatasetAnnotatePage() {
                 />
               </Tooltip>
               {segmentAssistAvailable ? (
-                <Tooltip title="点击目标生成紧框（S）">
+                <Tooltip title="启用一次智能点选（S）">
                   <Button
                     type={activeAnnotationTool === "smart-select" ? "primary" : "default"}
                     icon={<ScanSearch aria-hidden="true" className="h-4 w-4" />}
-                    onClick={() => changeAnnotationTool("smart-select")}
+                    onClick={() => {
+                      if (activeAnnotationTool === "smart-select") finishSmartSelect();
+                      else changeAnnotationTool("smart-select");
+                    }}
                     disabled={!activeImage}
                     aria-pressed={activeAnnotationTool === "smart-select"}
                     aria-label="智能点选"
@@ -1487,8 +1498,7 @@ export function DatasetAnnotatePage() {
                     type="text"
                     size="small"
                     icon={<X aria-hidden="true" className="h-3.5 w-3.5" />}
-                    onClick={clearSegmentPrediction}
-                    disabled={segmentPoints.length === 0 && !segmentPrediction}
+                    onClick={finishSmartSelect}
                     className="!text-neutral-200 hover:!bg-white/10"
                     aria-label="取消智能候选框"
                   />
@@ -1643,7 +1653,7 @@ export function DatasetAnnotatePage() {
               className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
-              {segmentAssistAvailable ? "S 点选 · B 画框" : "B 画框"} · Enter {segmentPrediction ? "确认候选" : "保存下一张"}
+              {segmentAssistAvailable ? "S 智能点选一次 · B 画框" : "B 画框"} · Enter {segmentPrediction ? "确认候选" : "保存下一张"}
             </button>
           </div>
 
