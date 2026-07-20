@@ -45,6 +45,7 @@ jobs:
           cache-dependency-path: |
             backend/requirements.txt
             annotator/requirements.txt
+            segmenter/requirements.txt
             trainer/requirements.txt
       - run: pip install -r backend/requirements.txt
       - name: Verify PostgreSQL migrations
@@ -63,6 +64,11 @@ jobs:
         run: PYTHONPATH=. pytest -q
       - name: Annotator tests
         working-directory: annotator
+        run: |
+          pip install -r requirements.txt
+          PYTHONPATH=. pytest -q
+      - name: Segmenter tests
+        working-directory: segmenter
         run: |
           pip install -r requirements.txt
           PYTHONPATH=. pytest -q

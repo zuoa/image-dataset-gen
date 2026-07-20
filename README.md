@@ -1,6 +1,6 @@
 # Dataset Forge
 
-面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。
+面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer/segmenter 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。
 
 ## Supervision 质量闭环
 
@@ -18,6 +18,7 @@
 frontend/   React 18 + TypeScript + Vite；Nginx 统一入口和受保护文件转发
 backend/    Flask API、SQLAlchemy 领域模型、Alembic 迁移、Celery worker
 trainer/    可部署到 GPU 主机的 YOLOv8 worker
+segmenter/  可选的 SAM 2.1 交互分割服务，为目标检测标注提供点击选框
 annotator/  旧的 mock 标注服务，仅保留兼容测试，不进入生产 Compose
 ```
 
@@ -54,12 +55,30 @@ docker compose run --rm backend flask --app manage.py create-admin \
 独立 GPU 主机使用 `docker-compose.trainer.yml` 启动 trainer。trainer 会按
 `TRAINER_HEARTBEAT_INTERVAL_SECONDS`（默认 15 秒）主动向平台保活；Forge 的“训练节点”页面会展示已注册节点、忙闲状态和最近心跳。平台默认在 60 秒未收到心跳后将节点标记为离线，可通过 `TRAINING_WORKER_OFFLINE_SECONDS` 调整。
 
+### 可选的智能点选
+
+标注工作台可使用 SAM 2.1 small 将正点/排除点生成临时 mask，人工确认后只保存现有矩形框，不改变训练和导出格式。启用同机 GPU 服务时，先为 `SEGMENTER_SHARED_TOKEN` 生成至少 32 位随机值，并设置：
+
+```dotenv
+SEGMENTER_URL=http://segmenter:8100
+SEGMENTER_SHARED_TOKEN=replace-with-at-least-32-random-characters
+```
+
+然后启动可选 profile：
+
+```bash
+docker compose --profile segmentation up --build -d
+```
+
+该 profile 需要 NVIDIA Container Toolkit 和一块可用 GPU。模型源码固定到 Dockerfile 中的 SAM 2 commit，SAM 2.1 small 权重在镜像构建阶段从 Meta 的版本化地址下载并校验 SHA-256；生产启动不会联网下载。独立 GPU 主机可运行 `docker compose -f docker-compose.segmenter.yml up -d`，将同一令牌配置到两端，按需把 `SEGMENTER_BIND_ADDRESS` 改为 GPU 主机的内网地址，并把平台的 `SEGMENTER_URL` 指向该地址。不要把 8100 端口暴露到公网。未配置 URL 时，前端不显示智能点选入口，手动画框保持可用。
+
 ## 开发与测试
 
 ```bash
 cd backend && pip install -r requirements.txt
 cd backend && PYTHONPATH=. pytest
 cd annotator && PYTHONPATH=. pytest
+cd segmenter && PYTHONPATH=. pytest
 cd trainer && PYTHONPATH=. pytest
 cd frontend && npm ci && npm run build
 ```

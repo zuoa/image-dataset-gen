@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import raiseload
 from werkzeug.utils import secure_filename
@@ -29,6 +31,7 @@ from app.schemas import (
     GenerationTaskSchema,
     PromptPreviewSchema,
     RoboflowImportSchema,
+    SegmentAssistPredictSchema,
     SubjectAssistSchema,
     TaskActionSchema,
     VideoImportSchema,
@@ -77,6 +80,14 @@ from app.services.outbox_service import enqueue_background_task
 from app.services.prompt_engine import build_prompt_preview, estimate_cost
 from app.services.roboflow_import_service import ROBOFLOW_IMPORT_FORMAT
 from app.services.subject_assist_service import suggest_subject_fields
+from app.clients.segmenter_client import (
+    SegmenterClientError,
+    SegmenterSessionExpiredError,
+    SegmenterUnavailableError,
+    create_segmenter_session,
+    delete_segmenter_session,
+    predict_segmenter_session,
+)
 from app.services.video_import_service import (
     DEFAULT_VIDEO_FILENAME_PREFIX,
     DEFAULT_VIDEO_FRAME_INTERVAL,
@@ -98,10 +109,64 @@ from app.utils.crypto import encrypt_secret
 
 datasets_bp = Blueprint("datasets", __name__)
 
+SEGMENT_SESSION_SALT = "dataset-forge-segment-assist-v1"
+
 
 
 def _dataset_for_user(dataset_id: str, user_id: str) -> Dataset:
     return Dataset.query.filter_by(id=dataset_id, user_id=user_id).first_or_404()
+
+
+def _segmenter_config() -> dict[str, Any]:
+    base_url = str(current_app.config.get("SEGMENTER_URL") or "").strip()
+    shared_token = str(current_app.config.get("SEGMENTER_SHARED_TOKEN") or "")
+    if not base_url or not shared_token:
+        raise SegmenterUnavailableError("segment assist is not configured")
+    return {
+        "base_url": base_url,
+        "shared_token": shared_token,
+        "connect_timeout": float(current_app.config["SEGMENTER_CONNECT_TIMEOUT_SECONDS"]),
+        "read_timeout": float(current_app.config["SEGMENTER_READ_TIMEOUT_SECONDS"]),
+    }
+
+
+def _encode_segment_session(*, remote_session_id: str, dataset_id: str, image_id: str, user_id: str) -> str:
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt=SEGMENT_SESSION_SALT)
+    return serializer.dumps(
+        {
+            "remote": remote_session_id,
+            "dataset": dataset_id,
+            "image": image_id,
+            "user": user_id,
+        }
+    )
+
+
+def _decode_segment_session(session_id: str, *, dataset_id: str, image_id: str, user_id: str) -> str:
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt=SEGMENT_SESSION_SALT)
+    try:
+        payload = serializer.loads(
+            session_id,
+            max_age=int(current_app.config["SEGMENTER_SESSION_TTL_SECONDS"]),
+        )
+    except SignatureExpired as exc:
+        raise SegmenterSessionExpiredError("segment assist session expired") from exc
+    except BadSignature as exc:
+        raise SegmenterSessionExpiredError("invalid segment assist session") from exc
+    if not isinstance(payload, dict) or (
+        payload.get("dataset") != dataset_id
+        or payload.get("image") != image_id
+        or payload.get("user") != user_id
+    ):
+        raise SegmenterSessionExpiredError("segment assist session does not belong to this image")
+    remote_session_id = str(payload.get("remote") or "")
+    if not remote_session_id:
+        raise SegmenterSessionExpiredError("invalid segment assist session")
+    return remote_session_id
+
+
+def _segment_client_error_response(error: SegmenterClientError):
+    return jsonify({"message": str(error)}), error.status_code
 
 
 def _task_for_dataset(dataset: Dataset, task_id: str) -> DatasetTask:
@@ -913,6 +978,123 @@ def preview_dataset_image(dataset_id: str, image_id: str):
         return jsonify({"message": "image file not found"}), 404
     mimetype = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
     return deliver_local_file(path, mimetype=mimetype)
+
+
+@datasets_bp.post("/<dataset_id>/images/<image_id>/segment-assist/sessions")
+@jwt_required()
+def create_dataset_image_segment_session(dataset_id: str, image_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    image = DatasetImage.query.filter_by(id=image_id, dataset_id=dataset.id).first()
+    if image is None:
+        return jsonify({"message": "image not found"}), 404
+    image_path = existing_generated_image(
+        current_app.config["STORAGE_ROOT"],
+        dataset.id,
+        f"image-{image.ordinal:06d}",
+    )
+    if image_path is None:
+        return jsonify({"message": "image file not found"}), 404
+
+    try:
+        result = create_segmenter_session(image_path=image_path, **_segmenter_config())
+        remote_session_id = str(result.get("sessionId") or "")
+        if not remote_session_id:
+            raise SegmenterClientError("segment assist returned an invalid session")
+    except SegmenterClientError as exc:
+        return _segment_client_error_response(exc)
+
+    return (
+        jsonify(
+            {
+                "sessionId": _encode_segment_session(
+                    remote_session_id=remote_session_id,
+                    dataset_id=dataset.id,
+                    image_id=image.id,
+                    user_id=user_id,
+                ),
+                "imageWidth": result.get("imageWidth"),
+                "imageHeight": result.get("imageHeight"),
+                "expiresIn": result.get("expiresIn"),
+                "model": result.get("model", ""),
+            }
+        ),
+        201,
+    )
+
+
+@datasets_bp.post("/<dataset_id>/images/<image_id>/segment-assist/sessions/<session_id>/predict")
+@jwt_required()
+def predict_dataset_image_segment_session(dataset_id: str, image_id: str, session_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    image = DatasetImage.query.filter_by(id=image_id, dataset_id=dataset.id).first()
+    if image is None:
+        return jsonify({"message": "image not found"}), 404
+    payload = SegmentAssistPredictSchema().load(request.get_json() or {})
+
+    try:
+        remote_session_id = _decode_segment_session(
+            session_id,
+            dataset_id=dataset.id,
+            image_id=image.id,
+            user_id=user_id,
+        )
+        result = predict_segmenter_session(
+            session_id=remote_session_id,
+            points=payload["points"],
+            **_segmenter_config(),
+        )
+        normalized = _normalize_segment_prediction(result)
+    except SegmenterClientError as exc:
+        return _segment_client_error_response(exc)
+    return jsonify(normalized)
+
+
+@datasets_bp.delete("/<dataset_id>/images/<image_id>/segment-assist/sessions/<session_id>")
+@jwt_required()
+def delete_dataset_image_segment_session(dataset_id: str, image_id: str, session_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    image = DatasetImage.query.filter_by(id=image_id, dataset_id=dataset.id).first()
+    if image is None:
+        return jsonify({"message": "image not found"}), 404
+    try:
+        remote_session_id = _decode_segment_session(
+            session_id,
+            dataset_id=dataset.id,
+            image_id=image.id,
+            user_id=user_id,
+        )
+        delete_segmenter_session(session_id=remote_session_id, **_segmenter_config())
+    except SegmenterClientError as exc:
+        current_app.logger.info("Unable to clean up segment assist session: %s", exc)
+    return "", 204
+
+
+def _normalize_segment_prediction(result: dict[str, Any]) -> dict[str, Any]:
+    bbox = result.get("bbox")
+    mask_data_url = result.get("maskDataUrl")
+    mask_score = result.get("maskScore")
+    if (
+        not isinstance(bbox, list)
+        or len(bbox) != 4
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in bbox)
+        or any(not 0 <= float(value) <= 1 for value in bbox)
+        or float(bbox[2]) <= 0
+        or float(bbox[3]) <= 0
+        or not isinstance(mask_data_url, str)
+        or not mask_data_url.startswith("data:image/png;base64,")
+        or isinstance(mask_score, bool)
+        or not isinstance(mask_score, (int, float))
+        or not math.isfinite(float(mask_score))
+    ):
+        raise SegmenterClientError("segment assist returned an invalid prediction")
+    return {
+        "bbox": [float(value) for value in bbox],
+        "maskDataUrl": mask_data_url,
+        "maskScore": min(max(float(mask_score), 0.0), 1.0),
+    }
 
 
 @datasets_bp.delete("/<dataset_id>/images/<image_id>")

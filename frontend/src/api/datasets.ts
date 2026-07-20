@@ -15,6 +15,9 @@ import type {
   TrainingJob,
   QualityIssue,
   QualityRun,
+  SegmentAssistPoint,
+  SegmentAssistPrediction,
+  SegmentAssistSession,
 } from "../lib/types";
 
 function serializeTaskConfig(config: TaskConfig | Partial<TaskConfig>) {
@@ -401,5 +404,41 @@ export function updateDatasetImageAnnotations(
       token,
       body: JSON.stringify({ detections }),
     },
+  );
+}
+
+export function createSegmentAssistSession(datasetId: string, imageId: string, token: string) {
+  return apiRequest<SegmentAssistSession>(
+    `/datasets/${datasetId}/images/${imageId}/segment-assist/sessions`,
+    { method: "POST", token },
+  );
+}
+
+export function predictSegmentAssistSession(
+  datasetId: string,
+  imageId: string,
+  sessionId: string,
+  token: string,
+  points: SegmentAssistPoint[],
+) {
+  return apiRequest<SegmentAssistPrediction>(
+    `/datasets/${datasetId}/images/${imageId}/segment-assist/sessions/${encodeURIComponent(sessionId)}/predict`,
+    {
+      method: "POST",
+      token,
+      body: JSON.stringify({ points }),
+    },
+  );
+}
+
+export function deleteSegmentAssistSession(
+  datasetId: string,
+  imageId: string,
+  sessionId: string,
+  token: string,
+) {
+  return apiRequest<void>(
+    `/datasets/${datasetId}/images/${imageId}/segment-assist/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE", token },
   );
 }

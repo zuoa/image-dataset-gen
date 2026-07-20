@@ -714,6 +714,10 @@ def build_dataset_detail_payload(
 
     payload = {
         **_dataset_base_payload(dataset),
+        "segmentAssistAvailable": bool(
+            current_app.config.get("SEGMENTER_URL")
+            and current_app.config.get("SEGMENTER_SHARED_TOKEN")
+        ),
         "images": _build_dataset_image_payloads(dataset, page_images, page_split_map) if include_images else [],
         "imagesTotal": filtered_total,
         "imagesNextCursor": next_cursor,

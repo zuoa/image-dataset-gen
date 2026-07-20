@@ -26,6 +26,11 @@ x-backend-env: &backend-env
   TASK_ITEM_LEASE_SECONDS: ${TASK_ITEM_LEASE_SECONDS:-900}
   ASSET_GC_RETENTION_HOURS: ${ASSET_GC_RETENTION_HOURS:-24}
   IDEMPOTENCY_TTL_HOURS: ${IDEMPOTENCY_TTL_HOURS:-24}
+  SEGMENTER_URL: ${SEGMENTER_URL:-}
+  SEGMENTER_SHARED_TOKEN: ${SEGMENTER_SHARED_TOKEN:-}
+  SEGMENTER_CONNECT_TIMEOUT_SECONDS: ${SEGMENTER_CONNECT_TIMEOUT_SECONDS:-2}
+  SEGMENTER_READ_TIMEOUT_SECONDS: ${SEGMENTER_READ_TIMEOUT_SECONDS:-15}
+  SEGMENTER_SESSION_TTL_SECONDS: ${SEGMENTER_SESSION_TTL_SECONDS:-600}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
   DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
   DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-60000}
@@ -155,6 +160,40 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.celery_worker", "worker", "-Q", "media", "--concurrency=1", "--loglevel=info"]
+
+  segmenter:
+    profiles: ["segmentation"]
+    image: ${SEGMENTER_IMAGE:-ghcr.io/zuoa/dataset-gen-segmenter:latest}
+    build:
+      context: ./segmenter
+    init: true
+    restart: unless-stopped
+    environment:
+      SEGMENTER_SHARED_TOKEN: ${SEGMENTER_SHARED_TOKEN:-}
+      SEGMENTER_MODEL_NAME: ${SEGMENTER_MODEL_NAME:-sam2.1_hiera_small}
+      SEGMENTER_SESSION_TTL_SECONDS: ${SEGMENTER_SESSION_TTL_SECONDS:-600}
+      SEGMENTER_MAX_SESSIONS: ${SEGMENTER_MAX_SESSIONS:-16}
+      SEGMENTER_MAX_IMAGE_PIXELS: ${SEGMENTER_MAX_IMAGE_PIXELS:-40000000}
+    ports:
+      - "${SEGMENTER_BIND_ADDRESS:-127.0.0.1}:${SEGMENTER_PORT:-8100}:8100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8100/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
 
   maintenance:
     <<: *backend-service

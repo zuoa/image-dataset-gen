@@ -392,6 +392,7 @@ export type Dataset = {
   taskCount: number;
   spentCost: number;
   annotation: Record<string, unknown>;
+  segmentAssistAvailable?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
   images: DatasetImage[];
@@ -406,6 +407,26 @@ export type Dataset = {
   tasks: DatasetTask[];
   exports: DatasetExport[];
   latestTask?: DatasetTask | null;
+};
+
+export type SegmentAssistPoint = {
+  x: number;
+  y: number;
+  label: "positive" | "negative";
+};
+
+export type SegmentAssistSession = {
+  sessionId: string;
+  imageWidth: number;
+  imageHeight: number;
+  expiresIn: number;
+  model: string;
+};
+
+export type SegmentAssistPrediction = {
+  bbox: [number, number, number, number];
+  maskDataUrl: string;
+  maskScore: number;
 };
 
 export type DatasetTaskSummary = DatasetTask;

@@ -80,6 +80,15 @@ class Config:
     MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
     MAX_IMPORTED_IMAGES: int = int(os.getenv("MAX_IMPORTED_IMAGES", "2000"))
     ANNOTATOR_URL: str = os.getenv("ANNOTATOR_URL", "")
+    SEGMENTER_URL: str = os.getenv("SEGMENTER_URL", "")
+    SEGMENTER_SHARED_TOKEN: str = os.getenv("SEGMENTER_SHARED_TOKEN", "")
+    SEGMENTER_CONNECT_TIMEOUT_SECONDS: float = float(
+        os.getenv("SEGMENTER_CONNECT_TIMEOUT_SECONDS", "2")
+    )
+    SEGMENTER_READ_TIMEOUT_SECONDS: float = float(
+        os.getenv("SEGMENTER_READ_TIMEOUT_SECONDS", "15")
+    )
+    SEGMENTER_SESSION_TTL_SECONDS: int = int(os.getenv("SEGMENTER_SESSION_TTL_SECONDS", "600"))
     VL_ANNOTATOR_PROVIDER: str = os.getenv("VL_ANNOTATOR_PROVIDER", "gemini")
     VL_ANNOTATOR_MODEL: str = os.getenv("VL_ANNOTATOR_MODEL", "gemini-2.0-flash")
     VL_ANNOTATOR_API_KEY: str = os.getenv("VL_ANNOTATOR_API_KEY", "")

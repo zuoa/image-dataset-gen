@@ -1,0 +1,33 @@
+services:
+  segmenter:
+    image: ${SEGMENTER_IMAGE:-ghcr.io/zuoa/dataset-gen-segmenter:latest}
+    init: true
+    restart: unless-stopped
+    environment:
+      SEGMENTER_SHARED_TOKEN: ${SEGMENTER_SHARED_TOKEN:?set SEGMENTER_SHARED_TOKEN to match the backend}
+      SEGMENTER_MODEL_NAME: ${SEGMENTER_MODEL_NAME:-sam2.1_hiera_small}
+      SEGMENTER_SESSION_TTL_SECONDS: ${SEGMENTER_SESSION_TTL_SECONDS:-600}
+      SEGMENTER_MAX_SESSIONS: ${SEGMENTER_MAX_SESSIONS:-16}
+      SEGMENTER_MAX_IMAGE_PIXELS: ${SEGMENTER_MAX_IMAGE_PIXELS:-40000000}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    ports:
+      - "${SEGMENTER_BIND_ADDRESS:-127.0.0.1}:${SEGMENTER_PORT:-8100}:8100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8100/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"

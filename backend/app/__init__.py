@@ -142,6 +142,10 @@ def _validate_production_config(app: Flask) -> None:
     worker_token = str(app.config.get("TRAINING_WORKER_TOKEN", ""))
     if len(worker_token) < 32 or "change-me" in worker_token:
         errors.append("TRAINING_WORKER_TOKEN must be a unique value of at least 32 characters")
+    segmenter_url = str(app.config.get("SEGMENTER_URL", "")).strip()
+    segmenter_token = str(app.config.get("SEGMENTER_SHARED_TOKEN", ""))
+    if segmenter_url and len(segmenter_token) < 32:
+        errors.append("SEGMENTER_SHARED_TOKEN must be at least 32 characters when SEGMENTER_URL is configured")
     if str(app.config.get("ENCRYPTION_KEY", "")) == "ZGF0YXNldC1nZW4tZGVtby1rZXktMzItYnl0ZXMhISE=":
         errors.append("ENCRYPTION_KEY must not use the repository demo value")
     try:

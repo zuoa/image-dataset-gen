@@ -987,6 +987,127 @@ def test_annotation_update_rejects_unknown_category_without_writing_revision(tmp
     assert not (Path(tmp_path) / "annotations" / dataset_id / f"{image['id']}.json").exists()
 
 
+def test_segment_assist_proxies_authenticated_session_without_changing_annotations(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        SEGMENTER_URL = "http://segmenter:8100"
+        SEGMENTER_SHARED_TOKEN = "segmenter-test-token"
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-segment-assist")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample.png", _png_bytes())
+    archive_buffer.seek(0)
+    imported = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 200
+    dataset = client.get(f"/api/v1/datasets/{dataset_id}", headers=headers).get_json()["dataset"]
+    image = dataset["images"][0]
+    assert dataset["segmentAssistAvailable"] is True
+
+    with patch(
+        "app.api.datasets.create_segmenter_session",
+        return_value={
+            "sessionId": "gpu-session-1",
+            "imageWidth": 4,
+            "imageHeight": 4,
+            "expiresIn": 600,
+            "model": "sam2.1_hiera_small",
+        },
+    ) as create_remote:
+        created = client.post(
+            f"/api/v1/datasets/{dataset_id}/images/{image['id']}/segment-assist/sessions",
+            headers=headers,
+        )
+    assert created.status_code == 201
+    session_id = created.get_json()["sessionId"]
+    assert session_id != "gpu-session-1"
+    assert create_remote.call_args.kwargs["image_path"].is_file()
+
+    points = [
+        {"x": 0.4, "y": 0.5, "label": "positive"},
+        {"x": 0.7, "y": 0.5, "label": "negative"},
+    ]
+    with patch(
+        "app.api.datasets.predict_segmenter_session",
+        return_value={
+            "bbox": [0.5, 0.5, 0.25, 0.5],
+            "maskDataUrl": "data:image/png;base64,eA==",
+            "maskScore": 0.91,
+        },
+    ) as predict_remote:
+        predicted = client.post(
+            f"/api/v1/datasets/{dataset_id}/images/{image['id']}/segment-assist/sessions/{session_id}/predict",
+            headers=headers,
+            json={"points": points},
+        )
+    assert predicted.status_code == 200
+    assert predicted.get_json()["bbox"] == [0.5, 0.5, 0.25, 0.5]
+    assert predict_remote.call_args.kwargs["session_id"] == "gpu-session-1"
+    assert predict_remote.call_args.kwargs["points"] == points
+
+    after = client.get(f"/api/v1/datasets/{dataset_id}", headers=headers).get_json()["dataset"]
+    assert after["images"][0]["detections"] == []
+
+    with patch("app.api.datasets.delete_segmenter_session") as delete_remote:
+        deleted = client.delete(
+            f"/api/v1/datasets/{dataset_id}/images/{image['id']}/segment-assist/sessions/{session_id}",
+            headers=headers,
+        )
+    assert deleted.status_code == 204
+    assert delete_remote.call_args.kwargs["session_id"] == "gpu-session-1"
+
+
+def test_segment_assist_rejects_invalid_points_and_tampered_session(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        SEGMENTER_URL = "http://segmenter:8100"
+        SEGMENTER_SHARED_TOKEN = "segmenter-test-token"
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-segment-assist-validation")
+    dataset_id = _create_dataset(client, headers)
+
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("sample.png", _png_bytes())
+    archive_buffer.seek(0)
+    client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import",
+        headers=headers,
+        data={"archive": (archive_buffer, "dataset.zip")},
+        content_type="multipart/form-data",
+    )
+    image = _fetch_images(client, dataset_id, headers)[0]
+    endpoint = (
+        f"/api/v1/datasets/{dataset_id}/images/{image['id']}"
+        "/segment-assist/sessions/not-a-valid-session/predict"
+    )
+
+    invalid_points = client.post(
+        endpoint,
+        headers=headers,
+        json={"points": [{"x": 0.5, "y": 0.5, "label": "negative"}]},
+    )
+    assert invalid_points.status_code == 422
+
+    tampered = client.post(
+        endpoint,
+        headers=headers,
+        json={"points": [{"x": 0.5, "y": 0.5, "label": "positive"}]},
+    )
+    assert tampered.status_code == 410
+
+
 def test_generation_soft_limit_releases_lease_for_resume(tmp_path: Path):
     class DatasetConfig(TestConfig):
         STORAGE_ROOT = str(tmp_path)

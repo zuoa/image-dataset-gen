@@ -18,3 +18,4 @@ supervision[metrics]==0.28.0
 prometheus-client==0.21.1
 python-json-logger==3.2.1
 pytest==8.3.4
+requests==2.32.3

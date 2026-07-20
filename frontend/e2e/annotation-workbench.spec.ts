@@ -54,8 +54,14 @@ function makeImages() {
   }));
 }
 
-async function mockWorkbenchApi(page: Page) {
+async function mockWorkbenchApi(
+  page: Page,
+  options: { segmentAssist?: boolean; rotateTokenOnPredict?: boolean; sessionCreateDelayMs?: number } = {},
+) {
   let images = makeImages();
+  let refreshCount = 0;
+  let segmentCreateCount = 0;
+  let segmentDeleteCount = 0;
 
   const dataset = () => ({
     id: "demo",
@@ -68,6 +74,7 @@ async function mockWorkbenchApi(page: Page) {
     taskCount: 1,
     spentCost: 1.24,
     annotation: {},
+    segmentAssistAvailable: options.segmentAssist ?? false,
     images,
     imagesTotal: imageCount,
     imagesNextCursor: null,
@@ -85,10 +92,11 @@ async function mockWorkbenchApi(page: Page) {
     const url = new URL(request.url());
 
     if (url.pathname === "/api/v1/auth/refresh") {
+      refreshCount += 1;
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
-          token: "e2e-token",
+          token: `e2e-token-${refreshCount}`,
           user: { id: "e2e-user", username: "reviewer", plan: "pro" },
         }),
       });
@@ -126,9 +134,110 @@ async function mockWorkbenchApi(page: Page) {
       return;
     }
 
+    const segmentSessionMatch = url.pathname.match(
+      /^\/api\/v1\/datasets\/demo\/images\/(image-\d+)\/segment-assist\/sessions$/,
+    );
+    if (request.method() === "POST" && segmentSessionMatch) {
+      segmentCreateCount += 1;
+      if (options.sessionCreateDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.sessionCreateDelayMs));
+      }
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sessionId: `signed-${segmentSessionMatch[1]}`,
+          imageWidth: 960,
+          imageHeight: 640,
+          expiresIn: 600,
+          model: "sam2.1_hiera_small",
+        }),
+      });
+      return;
+    }
+
+    const segmentPredictMatch = url.pathname.match(
+      /^\/api\/v1\/datasets\/demo\/images\/(image-\d+)\/segment-assist\/sessions\/[^/]+\/predict$/,
+    );
+    if (request.method() === "POST" && segmentPredictMatch) {
+      if (
+        options.rotateTokenOnPredict
+        && request.headers()["authorization"] === "Bearer e2e-token-1"
+      ) {
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "access token expired" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          bbox: [0.49, 0.6, 0.64, 0.48],
+          maskDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+XDYbGQAAAABJRU5ErkJggg==",
+          maskScore: 0.93,
+        }),
+      });
+      return;
+    }
+
+    const segmentDeleteMatch = url.pathname.match(
+      /^\/api\/v1\/datasets\/demo\/images\/(image-\d+)\/segment-assist\/sessions\/[^/]+$/,
+    );
+    if (request.method() === "DELETE" && segmentDeleteMatch) {
+      segmentDeleteCount += 1;
+      await route.fulfill({ status: 204 });
+      return;
+    }
+
     await route.abort();
   });
+
+  return {
+    refreshCount: () => refreshCount,
+    segmentCreateCount: () => segmentCreateCount,
+    segmentDeleteCount: () => segmentDeleteCount,
+  };
 }
+
+test("smart select previews a mask, accepts correction points, and confirms a regular box", async ({ page }) => {
+  const api = await mockWorkbenchApi(page, { segmentAssist: true, rotateTokenOnPredict: true });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/datasets/demo/annotate");
+
+  const smartSelect = page.getByRole("button", { name: "智能点选" });
+  await expect(smartSelect).toBeVisible();
+  await expect(smartSelect).toHaveAttribute("aria-pressed", "true");
+
+  const viewport = page.getByTestId("annotation-viewport");
+  await viewport.click({ position: { x: 450, y: 330 } });
+  const confirmCandidate = page.getByRole("button", { name: "确认智能候选框" });
+  await expect(confirmCandidate).toBeEnabled();
+  await expect.poll(api.refreshCount).toBe(2);
+  expect(api.segmentDeleteCount()).toBe(0);
+  await expect(page.locator('img[src^="data:image/png;base64,"]')).toBeVisible();
+
+  await page.getByRole("button", { name: "添加排除点" }).click();
+  await viewport.click({ position: { x: 700, y: 320 } });
+  await expect(confirmCandidate).toBeEnabled();
+  await confirmCandidate.click();
+
+  await expect(page.getByRole("button", { name: "选择检测框 3，类别 truck" })).toBeAttached();
+  await expect(page.getByRole("button", { name: "取消智能候选框" })).toBeDisabled();
+});
+
+test("leaving during session creation deletes the late GPU session", async ({ page }) => {
+  const api = await mockWorkbenchApi(page, { segmentAssist: true, sessionCreateDelayMs: 300 });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/datasets/demo/annotate");
+
+  await page.getByTestId("annotation-viewport").click({ position: { x: 450, y: 330 } });
+  await expect.poll(api.segmentCreateCount).toBe(1);
+  await page.getByRole("link", { name: "返回数据集" }).click();
+  await expect(page).toHaveURL(/\/datasets\/demo$/);
+  await expect.poll(api.segmentDeleteCount).toBe(1);
+});
 
 async function expectNoHorizontalOverflow(page: Page) {
   await expect

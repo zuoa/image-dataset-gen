@@ -1,8 +1,11 @@
 import { useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   ArrowLeft,
+  Check,
   ChevronLeft,
   ChevronRight,
+  CircleMinus,
+  CirclePlus,
   Eye,
   EyeOff,
   ImageOff,
@@ -16,10 +19,12 @@ import {
   PencilRuler,
   Redo2,
   Save,
+  ScanSearch,
   Trash2,
   Undo2,
   ZoomIn,
   ZoomOut,
+  X,
 } from "lucide-react";
 import { Link, UNSAFE_NavigationContext, useNavigate, useParams } from "react-router-dom";
 import {
@@ -35,7 +40,14 @@ import {
   Typography,
 } from "antd";
 
-import { deleteDatasetImage, getDataset, updateDatasetImageAnnotations } from "../api/datasets";
+import {
+  createSegmentAssistSession,
+  deleteDatasetImage,
+  deleteSegmentAssistSession,
+  getDataset,
+  predictSegmentAssistSession,
+  updateDatasetImageAnnotations,
+} from "../api/datasets";
 import { AuthImage } from "../components/AuthImage";
 import { AnnotationInspectorPanel } from "../components/annotation/AnnotationInspectorPanel";
 import { AnnotationQueuePanel } from "../components/annotation/AnnotationQueuePanel";
@@ -55,7 +67,14 @@ import {
   type ImageViewport,
   type ResizeCorner,
 } from "../lib/annotation";
-import type { Dataset, DatasetImage, ImageFilter } from "../lib/types";
+import type {
+  Dataset,
+  DatasetImage,
+  ImageFilter,
+  SegmentAssistPoint,
+  SegmentAssistPrediction,
+  SegmentAssistSession,
+} from "../lib/types";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
@@ -66,6 +85,9 @@ const MAX_HISTORY_LENGTH = 50;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 3;
 const ZOOM_STEP = 0.25;
+
+type AnnotationTool = "smart-select" | "box";
+type ActiveSegmentSession = SegmentAssistSession & { imageId: string };
 
 function annotationStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -135,6 +157,13 @@ export function DatasetAnnotatePage() {
   const [draftDetections, setDraftDetections] = useState<Detection[]>([]);
   const [selectedDetectionIndex, setSelectedDetectionIndex] = useState<number | null>(null);
   const [isAddingDetection, setIsAddingDetection] = useState(false);
+  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("smart-select");
+  const [segmentSession, setSegmentSession] = useState<ActiveSegmentSession | null>(null);
+  const [segmentPoints, setSegmentPoints] = useState<SegmentAssistPoint[]>([]);
+  const [segmentPointLabel, setSegmentPointLabel] = useState<SegmentAssistPoint["label"]>("positive");
+  const [segmentPrediction, setSegmentPrediction] = useState<SegmentAssistPrediction | null>(null);
+  const [isPreparingSegment, setIsPreparingSegment] = useState(false);
+  const [isPredictingSegment, setIsPredictingSegment] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -167,6 +196,11 @@ export function DatasetAnnotatePage() {
   annotationFilterRef.current = annotationFilter;
   const undoStackRef = useRef<Detection[][]>([]);
   const redoStackRef = useRef<Detection[][]>([]);
+  const segmentSessionRef = useRef<ActiveSegmentSession | null>(null);
+  const segmentRequestRevisionRef = useRef(0);
+  const segmentBusyRef = useRef(false);
+  const activeImageIdRef = useRef<string | null>(null);
+  const tokenRef = useRef<string | null>(null);
   const draftOwnerImageIdRef = useRef<string | null>(null);
   const loadersRef = useRef<{
     reloadFirstPage: (preferredImageId?: string | null) => Promise<DatasetImage[] | null>;
@@ -191,12 +225,56 @@ export function DatasetAnnotatePage() {
   const isTablet = Boolean(screens.md);
   const canUndo = undoStackRef.current.length > 0;
   const canRedo = redoStackRef.current.length > 0;
+  const segmentAssistAvailable = Boolean(dataset?.segmentAssistAvailable);
+  const activeAnnotationTool: AnnotationTool = segmentAssistAvailable ? annotationTool : "box";
   const draftStorageKey = activeImage && datasetId ? `dataset-forge:annotation-draft:${datasetId}:${activeImage.id}` : null;
+
+  segmentSessionRef.current = segmentSession;
+  activeImageIdRef.current = activeImage?.id ?? null;
+  tokenRef.current = token;
 
   useEffect(() => {
     setQueueOpen(false);
     setInspectorOpen(false);
   }, [isDesktop, isTablet]);
+
+  useEffect(() => {
+    const existingSession = segmentSessionRef.current;
+    segmentRequestRevisionRef.current += 1;
+    segmentBusyRef.current = false;
+    segmentSessionRef.current = null;
+    setSegmentSession(null);
+    setSegmentPoints([]);
+    setSegmentPrediction(null);
+    setSegmentPointLabel("positive");
+    setIsPreparingSegment(false);
+    setIsPredictingSegment(false);
+    const cleanupToken = tokenRef.current;
+    if (existingSession && cleanupToken && datasetId) {
+      void deleteSegmentAssistSession(
+        datasetId,
+        existingSession.imageId,
+        existingSession.sessionId,
+        cleanupToken,
+      ).catch(() => undefined);
+    }
+  }, [activeImage?.id, datasetId]);
+
+  useEffect(() => () => {
+    segmentRequestRevisionRef.current += 1;
+    segmentBusyRef.current = false;
+    activeImageIdRef.current = null;
+    const existingSession = segmentSessionRef.current;
+    const cleanupToken = tokenRef.current;
+    if (existingSession && cleanupToken && datasetId) {
+      void deleteSegmentAssistSession(
+        datasetId,
+        existingSession.imageId,
+        existingSession.sessionId,
+        cleanupToken,
+      ).catch(() => undefined);
+    }
+  }, [datasetId]);
 
   function applyDatasetPage(nextDataset: Dataset, preferredImageId?: string | null) {
     const pageImages = nextDataset.images ?? [];
@@ -470,7 +548,8 @@ export function DatasetAnnotatePage() {
       }
       if (event.key === "Enter" && !isInteractiveTarget(event.target)) {
         event.preventDefault();
-        if (activeImage) void confirmAndAdvance();
+        if (segmentPrediction) confirmSegmentPrediction();
+        else if (activeImage) void confirmAndAdvance();
         return;
       }
 
@@ -485,7 +564,14 @@ export function DatasetAnnotatePage() {
         event.preventDefault();
         if (!activeImage) return;
         if (event.repeat) return;
-        setIsAddingDetection((current) => !current);
+        if (activeAnnotationTool !== "box") changeAnnotationTool("box");
+        else setIsAddingDetection((current) => !current);
+        return;
+      }
+      if (key === "s" && segmentAssistAvailable) {
+        event.preventDefault();
+        if (!activeImage || event.repeat) return;
+        changeAnnotationTool("smart-select");
         return;
       }
       if (key === "=" || key === "+") {
@@ -505,6 +591,10 @@ export function DatasetAnnotatePage() {
       }
       if (event.key === "Escape") {
         event.preventDefault();
+        if (segmentPoints.length > 0 || segmentPrediction) {
+          clearSegmentPrediction();
+          return;
+        }
         setIsAddingDetection(false);
         setSelectedDetectionIndex(null);
         return;
@@ -545,7 +635,19 @@ export function DatasetAnnotatePage() {
 
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [activeImage, annotationFilter, canSave, categories, draftDetections, isSaving, selectedDetectionIndex]);
+  }, [
+    activeAnnotationTool,
+    activeImage,
+    annotationFilter,
+    canSave,
+    categories,
+    draftDetections,
+    isSaving,
+    segmentAssistAvailable,
+    segmentPoints.length,
+    segmentPrediction,
+    selectedDetectionIndex,
+  ]);
 
   async function confirmDiscardChanges(): Promise<boolean> {
     if (!hasAnnotationChanges) return true;
@@ -860,8 +962,126 @@ export function DatasetAnnotatePage() {
     window.addEventListener("pointercancel", handleUp);
   }
 
+  function clearSegmentPrediction() {
+    segmentRequestRevisionRef.current += 1;
+    segmentBusyRef.current = false;
+    setSegmentPoints([]);
+    setSegmentPrediction(null);
+    setSegmentPointLabel("positive");
+    setIsPreparingSegment(false);
+    setIsPredictingSegment(false);
+  }
+
+  function closeSegmentAssistSession() {
+    const existingSession = segmentSessionRef.current;
+    segmentSessionRef.current = null;
+    setSegmentSession(null);
+    clearSegmentPrediction();
+    if (existingSession && token && datasetId) {
+      void deleteSegmentAssistSession(
+        datasetId,
+        existingSession.imageId,
+        existingSession.sessionId,
+        token,
+      ).catch(() => undefined);
+    }
+  }
+
+  function changeAnnotationTool(tool: AnnotationTool) {
+    if (tool === activeAnnotationTool) return;
+    setAnnotationTool(tool);
+    setSelectedDetectionIndex(null);
+    setIsAddingDetection(tool === "box");
+    if (tool === "box") closeSegmentAssistSession();
+  }
+
+  async function addSegmentPoint(point: SegmentAssistPoint) {
+    if (!activeImage || !token || !datasetId || segmentBusyRef.current) return;
+    segmentBusyRef.current = true;
+    const requestImageId = activeImage.id;
+    const requestRevision = segmentRequestRevisionRef.current + 1;
+    segmentRequestRevisionRef.current = requestRevision;
+    let activeSession = segmentSessionRef.current;
+    const nextPoints = [...segmentPoints, point];
+    setSegmentPoints(nextPoints);
+
+    try {
+      if (!activeSession || activeSession.imageId !== requestImageId) {
+        setIsPreparingSegment(true);
+        const created = await createSegmentAssistSession(datasetId, requestImageId, token);
+        const nextSession = { ...created, imageId: requestImageId };
+        if (segmentRequestRevisionRef.current !== requestRevision || activeImageIdRef.current !== requestImageId) {
+          const cleanupToken = tokenRef.current ?? token;
+          void deleteSegmentAssistSession(
+            datasetId,
+            requestImageId,
+            created.sessionId,
+            cleanupToken,
+          ).catch(() => undefined);
+          return;
+        }
+        activeSession = nextSession;
+        segmentSessionRef.current = nextSession;
+        setSegmentSession(nextSession);
+        setIsPreparingSegment(false);
+      }
+
+      setIsPredictingSegment(true);
+      const prediction = await predictSegmentAssistSession(
+        datasetId,
+        requestImageId,
+        activeSession.sessionId,
+        token,
+        nextPoints,
+      );
+      if (segmentRequestRevisionRef.current !== requestRevision || activeImageIdRef.current !== requestImageId) return;
+      setSegmentPrediction(prediction);
+      setActionError(null);
+      setSaveAnnouncement(`智能点选已生成候选框，mask 评分 ${Math.round(prediction.maskScore * 100)}%。`);
+    } catch (error) {
+      if (segmentRequestRevisionRef.current !== requestRevision) return;
+      const message = (error as Error).message;
+      setActionError(`智能点选失败：${message}`);
+      setSaveAnnouncement("智能点选失败，可重试或切换为手动画框。");
+      if (/session|会话|expired/i.test(message)) {
+        segmentSessionRef.current = null;
+        setSegmentSession(null);
+        setSegmentPoints([]);
+        setSegmentPrediction(null);
+      }
+    } finally {
+      if (segmentRequestRevisionRef.current === requestRevision) {
+        segmentBusyRef.current = false;
+        setIsPreparingSegment(false);
+        setIsPredictingSegment(false);
+      }
+    }
+  }
+
+  function confirmSegmentPrediction() {
+    if (!segmentPrediction || !activeImage || isPredictingSegment) return;
+    const nextDetection: Detection = {
+      category: activeCategory,
+      confidence: 1,
+      bbox: segmentPrediction.bbox,
+    };
+    recordHistorySnapshot(draftDetections);
+    setDraftDetections((current) => [...current, nextDetection]);
+    setSelectedDetectionIndex(draftDetections.length);
+    clearSegmentPrediction();
+    setSaveAnnouncement("智能候选框已确认并加入当前标注。");
+  }
+
   function handleStagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!viewportRef.current) return;
+    if (activeAnnotationTool === "smart-select") {
+      if (isPreparingSegment || isPredictingSegment) return;
+      event.preventDefault();
+      const rect = viewportRef.current.getBoundingClientRect();
+      const point = pointerToStage(rect, event.clientX, event.clientY);
+      void addSegmentPoint({ ...point, label: segmentPointLabel });
+      return;
+    }
     if (!isAddingDetection) {
       setSelectedDetectionIndex(null);
       return;
@@ -948,12 +1168,13 @@ export function DatasetAnnotatePage() {
   const shortcuts = [
     { keys: "← / →", action: "上一张 / 下一张" },
     { keys: "B", action: "切换画框模式" },
-    { keys: "Enter", action: "保存并进入下一张" },
+    ...(segmentAssistAvailable ? [{ keys: "S", action: "切换智能点选" }] : []),
+    { keys: "Enter", action: segmentPrediction ? "确认智能候选框" : "保存并进入下一张" },
     { keys: "Ctrl / ⌘ + S", action: "保存当前图片" },
     { keys: "Ctrl / ⌘ + Z", action: "撤销" },
     { keys: "Ctrl / ⌘ + Shift + Z", action: "重做" },
     { keys: "Delete / Backspace", action: "删除选中的检测框" },
-    { keys: "Esc", action: "取消画框 / 取消选择" },
+    { keys: "Esc", action: "取消候选 / 画框 / 选择" },
     { keys: "1-9", action: "选择对应编号的类别" },
     { keys: "U", action: "切换未标注筛选" },
     { keys: "+ / - / 0", action: "放大 / 缩小 / 适应画布" },
@@ -1131,15 +1352,34 @@ export function DatasetAnnotatePage() {
                   aria-label={boxesVisible ? "隐藏检测框" : "显示检测框"}
                 />
               </Tooltip>
+              {segmentAssistAvailable ? (
+                <Tooltip title="点击目标生成紧框（S）">
+                  <Button
+                    type={activeAnnotationTool === "smart-select" ? "primary" : "default"}
+                    icon={<ScanSearch aria-hidden="true" className="h-4 w-4" />}
+                    onClick={() => changeAnnotationTool("smart-select")}
+                    disabled={!activeImage}
+                    aria-pressed={activeAnnotationTool === "smart-select"}
+                    aria-label="智能点选"
+                  >
+                    <span className="hidden 2xl:inline">智能点选</span>
+                  </Button>
+                </Tooltip>
+              ) : null}
               <Button
-                type={isAddingDetection ? "primary" : "default"}
+                type={activeAnnotationTool === "box" && isAddingDetection ? "primary" : "default"}
                 icon={<PencilRuler aria-hidden="true" className="h-4 w-4" />}
-                onClick={() => setIsAddingDetection((current) => !current)}
+                onClick={() => {
+                  if (activeAnnotationTool !== "box") changeAnnotationTool("box");
+                  else setIsAddingDetection((current) => !current);
+                }}
                 disabled={!activeImage}
-                aria-pressed={isAddingDetection}
-                aria-label={isAddingDetection ? "结束画框" : "新增框"}
+                aria-pressed={activeAnnotationTool === "box" && isAddingDetection}
+                aria-label={activeAnnotationTool === "box" && isAddingDetection ? "结束画框" : "新增框"}
               >
-                <span className="hidden sm:inline">{isAddingDetection ? "拖动画框" : "新增框"}</span>
+                <span className="hidden sm:inline">
+                  {activeAnnotationTool === "box" && isAddingDetection ? "拖动画框" : "新增框"}
+                </span>
                 <span className="ml-1 rounded bg-black/10 px-1.5 font-mono text-xs tabular-nums dark:bg-white/10">
                   {draftDetections.length}
                 </span>
@@ -1155,13 +1395,75 @@ export function DatasetAnnotatePage() {
           </div>
 
           <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto overscroll-contain bg-[#0b0f14]">
+            {activeAnnotationTool === "smart-select" && activeImage ? (
+              <div className="pointer-events-none sticky left-0 top-3 z-20 flex h-0 w-full justify-center px-3">
+                <div className="pointer-events-auto flex max-w-full items-center gap-1.5 rounded-xl border border-white/10 bg-black/70 p-1.5 text-xs text-neutral-200 shadow-xl backdrop-blur-md">
+                  <Tooltip title="在目标内部添加选择点">
+                    <Button
+                      type={segmentPointLabel === "positive" ? "primary" : "text"}
+                      size="small"
+                      icon={<CirclePlus aria-hidden="true" className="h-3.5 w-3.5" />}
+                      onClick={() => setSegmentPointLabel("positive")}
+                      className={segmentPointLabel === "positive" ? "" : "!text-neutral-200 hover:!bg-white/10"}
+                      aria-label="添加正点"
+                    >
+                      <span className="hidden sm:inline">选择</span>
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title="点击需要从目标中排除的区域">
+                    <Button
+                      type={segmentPointLabel === "negative" ? "primary" : "text"}
+                      size="small"
+                      icon={<CircleMinus aria-hidden="true" className="h-3.5 w-3.5" />}
+                      onClick={() => setSegmentPointLabel("negative")}
+                      disabled={!segmentPoints.some((point) => point.label === "positive")}
+                      className={segmentPointLabel === "negative" ? "" : "!text-neutral-200 hover:!bg-white/10"}
+                      aria-label="添加排除点"
+                    >
+                      <span className="hidden sm:inline">排除</span>
+                    </Button>
+                  </Tooltip>
+                  <span className="hidden min-w-24 px-1 text-center text-neutral-300 md:inline">
+                    {isPreparingSegment
+                      ? "正在准备模型…"
+                      : isPredictingSegment
+                        ? "正在更新候选…"
+                        : segmentPrediction
+                          ? `候选 ${Math.round(segmentPrediction.maskScore * 100)}%`
+                          : "点击图片中的目标"}
+                  </span>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={isPreparingSegment || isPredictingSegment
+                      ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                      : <Check aria-hidden="true" className="h-3.5 w-3.5" />}
+                    onClick={confirmSegmentPrediction}
+                    disabled={!segmentPrediction || isPreparingSegment || isPredictingSegment}
+                    aria-label="确认智能候选框"
+                  >
+                    确认
+                  </Button>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<X aria-hidden="true" className="h-3.5 w-3.5" />}
+                    onClick={clearSegmentPrediction}
+                    disabled={segmentPoints.length === 0 && !segmentPrediction}
+                    className="!text-neutral-200 hover:!bg-white/10"
+                    aria-label="取消智能候选框"
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="flex min-h-full min-w-full items-center justify-center p-4">
               {activeImage && scaledViewport && scaledViewport.width > 0 && scaledViewport.height > 0 ? (
                 <div
                   ref={viewportRef}
+                  data-testid="annotation-viewport"
                   className={cn(
                     "relative shrink-0 select-none touch-none bg-neutral-900 shadow-2xl",
-                    isAddingDetection ? "cursor-crosshair" : "cursor-default",
+                    activeAnnotationTool === "smart-select" || isAddingDetection ? "cursor-crosshair" : "cursor-default",
                   )}
                   style={{ width: scaledViewport.width, height: scaledViewport.height }}
                   onPointerDown={handleStagePointerDown}
@@ -1178,6 +1480,33 @@ export function DatasetAnnotatePage() {
                       setPreviewImageNaturalSize({ width: target.naturalWidth, height: target.naturalHeight });
                     }}
                   />
+                  {segmentPrediction ? (
+                    <img
+                      src={segmentPrediction.maskDataUrl}
+                      alt=""
+                      aria-hidden="true"
+                      draggable={false}
+                      className="pointer-events-none absolute inset-0 h-full w-full"
+                    />
+                  ) : null}
+                  {segmentPrediction ? (
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute border-2 border-dashed border-teal-300 shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+                      style={detectionStyle(segmentPrediction.bbox)}
+                    />
+                  ) : null}
+                  {segmentPoints.map((point, index) => (
+                    <span
+                      key={`${point.label}-${index}`}
+                      aria-hidden="true"
+                      className={cn(
+                        "pointer-events-none absolute z-10 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md",
+                        point.label === "positive" ? "bg-emerald-500" : "bg-rose-500",
+                      )}
+                      style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }}
+                    />
+                  ))}
                   {boxesVisible ? (
                     <div className="pointer-events-none absolute inset-0">
                       {draftDetections.map((detection, index) => {
@@ -1190,7 +1519,8 @@ export function DatasetAnnotatePage() {
                             tabIndex={0}
                             aria-label={`选择检测框 ${index + 1}，类别 ${detection.category}`}
                             className={cn(
-                              "pointer-events-auto absolute border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                              "absolute border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.45)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                              activeAnnotationTool === "smart-select" ? "pointer-events-none" : "pointer-events-auto",
                               suggestedDetections ? "border-dashed" : "border-solid",
                               selected ? "shadow-[0_0_0_9999px_rgba(0,0,0,0.10)]" : "",
                             )}
@@ -1274,7 +1604,7 @@ export function DatasetAnnotatePage() {
               className="pointer-events-auto flex cursor-pointer appearance-none items-center gap-1.5 rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-xs text-neutral-300 shadow-lg backdrop-blur-md transition-colors duration-200 hover:bg-black/75 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
-              B 画框 · Enter 保存下一张
+              {segmentAssistAvailable ? "S 点选 · B 画框" : "B 画框"} · Enter {segmentPrediction ? "确认候选" : "保存下一张"}
             </button>
           </div>
 

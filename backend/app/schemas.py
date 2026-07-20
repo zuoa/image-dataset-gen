@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
@@ -41,6 +42,11 @@ def _validate_uuid(value: str) -> None:
         uuid.UUID(value)
     except (AttributeError, TypeError, ValueError) as error:
         raise ValidationError("invalid UUID") from error
+
+
+def _validate_normalized_coordinate(value: float) -> None:
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValidationError("coordinate must be a finite number between 0 and 1")
 
 
 class CredentialSchema(Schema):
@@ -364,3 +370,22 @@ class AnnotationUpdateSchema(Schema):
         required=True,
         validate=validate.Length(max=50),
     )
+
+
+class SegmentAssistPointSchema(Schema):
+    x = fields.Float(required=True, validate=_validate_normalized_coordinate)
+    y = fields.Float(required=True, validate=_validate_normalized_coordinate)
+    label = fields.String(required=True, validate=validate.OneOf(["positive", "negative"]))
+
+
+class SegmentAssistPredictSchema(Schema):
+    points = fields.List(
+        fields.Nested(SegmentAssistPointSchema),
+        required=True,
+        validate=validate.Length(min=1, max=20),
+    )
+
+    @validates_schema
+    def validate_positive_point(self, data: dict, **_: object) -> None:
+        if not any(point["label"] == "positive" for point in data["points"]):
+            raise ValidationError({"points": ["at least one positive point is required"]})
