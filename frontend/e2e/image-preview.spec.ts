@@ -133,7 +133,9 @@ async function openPreview(page: Page) {
   const previewButton = page.getByRole("button", { name: "查看样本 #1 详情" });
   await expect(previewButton).toBeVisible();
   await previewButton.click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("dialog").filter({
+    has: page.getByRole("region", { name: "图片画布" }),
+  });
   await expect(dialog).toBeVisible();
   return dialog;
 }
@@ -260,6 +262,27 @@ test("sample pool replaces images when changing pages", async ({ page }) => {
   await expect(page.getByRole("button", { name: "查看样本 #1 详情" })).toBeHidden();
 });
 
+test("image preview only confirms discard after annotations change", async ({ page }) => {
+  await mockDatasetDetailApi(page);
+  let dialog = await openPreview(page);
+
+  await expect(dialog.getByRole("button", { name: "删除检测框 1" })).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭图片详情" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("放弃标注改动", { exact: true })).toBeHidden();
+
+  dialog = await openPreview(page);
+  await dialog.getByRole("button", { name: "删除检测框 1" }).click();
+  await dialog.getByRole("button", { name: "关闭图片详情" }).click();
+
+  const discardDialog = page.locator(".ant-modal-confirm").filter({ hasText: "放弃标注改动" });
+  await expect(discardDialog).toBeVisible();
+  await discardDialog.locator(".ant-btn-default").click();
+  await expect(discardDialog).toBeHidden();
+  await expect(dialog).toBeVisible();
+});
+
 test("desktop image preview is bounded and lets the image use the canvas", async ({ page }, testInfo: TestInfo) => {
   await mockDatasetDetailApi(page);
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -286,6 +309,9 @@ test("desktop image preview is bounded and lets the image use the canvas", async
   expect(dialogBox!.height).toBeLessThan(960);
   expect(canvasBox!.width).toBeGreaterThan(inspectorBox!.width * 2);
   expect(imageBox!.width).toBeGreaterThan(760);
+  await expect(stage.getByText("truck", { exact: true })).toBeVisible();
+  await dialog.getByRole("region", { name: "检测框 1" }).click();
+  await expect(dialog.getByRole("button", { name: "从nw方向缩放检测框 1" })).toBeVisible();
   await expect(page.getByRole("button", { name: "关闭图片详情" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("image-preview-desktop.png"), fullPage: true });
 });

@@ -6,6 +6,7 @@ import { AuthImage } from "../AuthImage";
 import {
   boxFromCorners,
   DEFAULT_BOX_SIZE,
+  detectionColor,
   detectionStyle,
   fitImageViewport,
   minimumBoxSizeForImage,
@@ -433,48 +434,65 @@ export function ImagePreviewModal({
                   }}
                 />
                 <div className="pointer-events-none absolute inset-0">
-                  {draftDetections.map((detection, index) => (
-                    <div
-                      key={`${detection.category}-${index}`}
-                      className={`pointer-events-auto absolute rounded-sm border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.65)] ${
-                        selectedDetectionIndex === index
-                          ? "border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.12)]"
-                          : "border-slate-400"
-                      }`}
-                      style={detectionStyle(detection.bbox)}
-                      onMouseDown={(event) => beginDragDetection(index, event)}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedDetectionIndex(index);
-                      }}
-                    >
-                      <div className="absolute left-0 top-0 -translate-y-full rounded-t-lg bg-black/72 px-2 py-1 text-[11px] text-white">
-                        {detection.category} ·{" "}
-                        {(detection.confidence * 100).toFixed(0)}%
+                  {draftDetections.map((detection, index) => {
+                    const color = detectionColor(detection.category);
+                    const isSelected = selectedDetectionIndex === index;
+                    return (
+                      <div
+                        key={`${detection.category}-${index}`}
+                        className={`pointer-events-auto absolute rounded-[3px] border-solid ${
+                          isSelected ? "z-10" : "z-0"
+                        }`}
+                        style={{
+                          ...detectionStyle(detection.bbox),
+                          borderColor: color,
+                          borderWidth: isSelected ? 3 : 2,
+                          boxShadow: isSelected
+                            ? `0 0 0 2px rgba(255,255,255,0.95), 0 0 0 4px ${color}80, 0 6px 24px rgba(0,0,0,0.4)`
+                            : `0 0 0 1px rgba(0,0,0,0.72), 0 2px 10px ${color}70`,
+                        }}
+                        onMouseDown={(event) => beginDragDetection(index, event)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedDetectionIndex(index);
+                        }}
+                      >
+                        <div
+                          className="pointer-events-none absolute -left-[3px] -top-[3px] flex max-w-[min(280px,70vw)] items-center gap-1.5 rounded-br-md px-2 py-1 text-xs font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.55)]"
+                          style={{ backgroundColor: color }}
+                        >
+                          <span className="truncate">{detection.category}</span>
+                          <span className="shrink-0 border-l border-white/35 pl-1.5 font-mono text-[11px] tabular-nums text-white/90">
+                            {(detection.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        {isSelected
+                          ? (["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
+                              <button
+                                key={corner}
+                                type="button"
+                                aria-label={`从${corner}方向缩放检测框 ${index + 1}`}
+                                className={`absolute h-11 w-11 rounded-full border-0 bg-transparent p-0 ${
+                                  corner === "nw"
+                                    ? "-left-[22px] -top-[22px]"
+                                    : corner === "ne"
+                                      ? "-right-[22px] -top-[22px]"
+                                      : corner === "sw"
+                                        ? "-bottom-[22px] -left-[22px]"
+                                        : "-bottom-[22px] -right-[22px]"
+                                }`}
+                                onMouseDown={(event) => beginResizeDetection(index, corner, event)}
+                              >
+                                <span
+                                  className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-[0_1px_5px_rgba(0,0,0,0.65)]"
+                                  style={{ backgroundColor: color }}
+                                />
+                              </button>
+                            ))
+                          : null}
                       </div>
-                      {selectedDetectionIndex === index
-                        ? (["nw", "ne", "sw", "se"] as ResizeCorner[]).map((corner) => (
-                            <button
-                              key={corner}
-                              type="button"
-                              aria-label={`从${corner}方向缩放检测框 ${index + 1}`}
-                              className={`absolute h-11 w-11 rounded-full border-0 bg-transparent p-0 ${
-                                corner === "nw"
-                                  ? "-left-[22px] -top-[22px]"
-                                  : corner === "ne"
-                                    ? "-right-[22px] -top-[22px]"
-                                    : corner === "sw"
-                                      ? "-bottom-[22px] -left-[22px]"
-                                      : "-bottom-[22px] -right-[22px]"
-                              }`}
-                              onMouseDown={(event) => beginResizeDetection(index, corner, event)}
-                            >
-                              <span className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-neutral-950" />
-                            </button>
-                          ))
-                        : null}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : (
@@ -570,6 +588,11 @@ export function ImagePreviewModal({
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-neutral-100 font-mono text-xs dark:bg-white/10">
                       {index + 1}
                     </span>
+                    <span
+                      aria-hidden="true"
+                      className="h-2.5 w-2.5 shrink-0 rounded-sm shadow-[0_0_0_1px_rgba(0,0,0,0.12)]"
+                      style={{ backgroundColor: detectionColor(detection.category) }}
+                    />
                     <span className="truncate text-sm font-medium">{detection.category}</span>
                   </div>
                   <Button

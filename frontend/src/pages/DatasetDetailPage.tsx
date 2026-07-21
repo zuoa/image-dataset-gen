@@ -359,7 +359,7 @@ export function DatasetDetailPage() {
   }
 
   async function confirmDiscardChanges() {
-    if (!previewImage || !detectionsEqual(previewImage.detections, draftDetections))
+    if (!previewImage || detectionsEqual(previewImage.detections, draftDetections))
       return true;
     return confirm({
       title: "放弃标注改动",

@@ -14,6 +14,25 @@ export type ImageViewport = {
   height: number;
 };
 
+const DETECTION_COLORS = [
+  "#2563eb",
+  "#dc2626",
+  "#059669",
+  "#d97706",
+  "#7c3aed",
+  "#0891b2",
+  "#db2777",
+  "#65a30d",
+] as const;
+
+export function detectionColor(category: string) {
+  let hash = 0;
+  for (let index = 0; index < category.length; index += 1) {
+    hash = (hash * 31 + category.charCodeAt(index)) >>> 0;
+  }
+  return DETECTION_COLORS[hash % DETECTION_COLORS.length];
+}
+
 export function detectionStyle([xCenter, yCenter, width, height]: [number, number, number, number]): CSSProperties {
   return {
     left: `${(xCenter - width / 2) * 100}%`,
