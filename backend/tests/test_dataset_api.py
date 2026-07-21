@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+import re
 import zipfile
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -772,6 +773,10 @@ def test_import_and_export_operate_at_dataset_level(tmp_path: Path):
     )
     assert download.status_code == 200
     assert download.mimetype == "application/zip"
+    assert re.search(
+        r"street-pedestrian-dataset-yolo-\d{8}T\d{4}Z-n2-v001\.zip",
+        download.headers["Content-Disposition"],
+    )
 
     archive = zipfile.ZipFile(BytesIO(download.data))
     image_names = [name for name in archive.namelist() if name.endswith(".png")]

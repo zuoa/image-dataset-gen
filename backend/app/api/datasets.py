@@ -41,7 +41,7 @@ from app.services.annotation_storage import (
     extract_detection_categories,
     save_annotation_result,
 )
-from app.services.dataset_export_service import get_dataset_archive_path
+from app.services.dataset_export_service import dataset_export_download_name, get_dataset_archive_path
 from app.services.file_delivery import deliver_local_file
 from app.services.dataset_service import (
     IMAGE_SOURCE_FILTER_TYPES,
@@ -1265,6 +1265,7 @@ def export_dataset(dataset_id: str):
         summary_json={
             "imageFormat": action["image_format"],
             "includeReadme": action["include_readme"],
+            "imageCount": int(dataset.selected_count or 0),
             "structure": "yolov8" if action["export_format"] == "yolo" else action["export_format"],
             "estimatedSizeMb": round(max(dataset.image_count, 1) * 0.6, 1),
         },
@@ -1276,7 +1277,11 @@ def export_dataset(dataset_id: str):
 
     _dispatch_background_task(export_dataset_archive, export_job.id)
     response_body = {
-        "export": build_dataset_export_payload(export_job),
+        "export": build_dataset_export_payload(
+            export_job,
+            dataset_name=dataset.name,
+            fallback_image_count=int(dataset.selected_count or 0),
+        ),
         "dataset": build_dataset_detail_payload(dataset, include_images=False),
     }
     complete_idempotent_request(idempotency, response_body, 201)
@@ -1298,6 +1303,10 @@ def download_export(dataset_id: str, version: int):
     return deliver_local_file(
         archive_path,
         as_attachment=True,
-        download_name=f"{dataset.name.replace(' ', '-').lower()}-v{version}.zip",
+        download_name=dataset_export_download_name(
+            dataset.name,
+            export_job,
+            fallback_image_count=int(dataset.selected_count or 0),
+        ),
         mimetype="application/zip",
     )

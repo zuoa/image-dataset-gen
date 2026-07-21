@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import UTC
 import json
 import math
 import tempfile
@@ -18,6 +19,7 @@ from app.services.storage_backend import local_backend
 
 
 IMAGE_SIZE = (512, 512)
+EXPORT_FILENAME_DATASET_SLUG_MAX_LENGTH = 40
 
 
 def build_dataset_export_archive(
@@ -87,6 +89,41 @@ def build_dataset_export_archive(
 
 def get_dataset_archive_path(storage_root: str, export_job: DatasetExport) -> Path:
     return Path(storage_root) / "exports" / f"{export_job.id}.zip"
+
+
+def dataset_export_download_name(
+    dataset_name: str,
+    export_job: DatasetExport,
+    *,
+    fallback_image_count: int = 0,
+) -> str:
+    dataset_slug = _slugify(dataset_name or "dataset")
+    dataset_slug = dataset_slug[:EXPORT_FILENAME_DATASET_SLUG_MAX_LENGTH].rstrip("-") or "dataset"
+    format_slug = _slugify(export_job.export_format or "dataset")
+
+    created_at = export_job.created_at
+    if created_at is None:
+        created_stamp = "undated"
+    else:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        else:
+            created_at = created_at.astimezone(UTC)
+        created_stamp = created_at.strftime("%Y%m%dT%H%MZ")
+
+    image_count_value = (export_job.summary_json or {}).get(
+        "imageCount", fallback_image_count
+    )
+    try:
+        image_count = max(0, int(image_count_value))
+    except (TypeError, ValueError):
+        image_count = max(0, int(fallback_image_count or 0))
+
+    version = max(1, int(export_job.version or 1))
+    return (
+        f"{dataset_slug}-{format_slug}-{created_stamp}"
+        f"-n{image_count}-v{version:03d}.zip"
+    )
 
 
 def _slugify(value: str) -> str:

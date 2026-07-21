@@ -256,6 +256,7 @@ export type DatasetExport = {
   status: string;
   exportFormat: string;
   downloadUrl: string;
+  filename?: string;
   summary: Record<string, unknown>;
   createdAt: string;
 };

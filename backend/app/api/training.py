@@ -188,7 +188,15 @@ def _build_training_job_payload(
         "metrics": job.metrics_json or {},
         "error": job.error_message,
         "artifacts": artifacts,
-        "export": build_dataset_export_payload(job.export) if job.export else None,
+        "export": (
+            build_dataset_export_payload(
+                job.export,
+                dataset_name=job.dataset.name,
+                fallback_image_count=int(job.dataset.selected_count or 0),
+            )
+            if job.export
+            else None
+        ),
         "createdAt": job.created_at.isoformat() if job.created_at else None,
         "updatedAt": job.updated_at.isoformat() if job.updated_at else None,
         "startedAt": job.started_at.isoformat() if job.started_at else None,
@@ -291,6 +299,7 @@ def _create_yolo_export(dataset: Dataset) -> DatasetExport:
         summary_json={
             "imageFormat": "keep",
             "includeReadme": True,
+            "imageCount": int(dataset.selected_count or dataset.image_count or 0),
             "structure": "yolov8",
             "estimatedSizeMb": round(max(dataset.selected_count or dataset.image_count, 1) * 0.6, 1),
         },

@@ -63,6 +63,7 @@ import {
 import type {
   AugmentationMethod,
   AugmentationSettings,
+  DatasetExport,
   DatasetImage,
   ExternalConnection,
   ImageFilter,
@@ -235,6 +236,7 @@ export function DatasetDetailPage() {
     useState(false);
   const [isSubmittingAnnotation, setIsSubmittingAnnotation] = useState(false);
   const [isCreatingExport, setIsCreatingExport] = useState(false);
+  const [downloadingExportId, setDownloadingExportId] = useState<string | null>(null);
   const [isCreatingTrainingJob, setIsCreatingTrainingJob] = useState(false);
   const [deletingTrainingJobId, setDeletingTrainingJobId] = useState<
     string | null
@@ -349,8 +351,6 @@ export function DatasetDetailPage() {
     ).find((option) => option.value === videoTargetSize)?.label ?? "原图";
 
   const latestTrainingJob = trainingJobs[0];
-  const latestExport = dataset?.exports[0];
-
   async function invalidateDatasetData() {
     await queryClient.invalidateQueries({
       queryKey: ["dataset-tasks", datasetId, token],
@@ -526,6 +526,23 @@ export function DatasetDetailPage() {
       setActionError((error as Error).message);
     } finally {
       setIsCreatingExport(false);
+    }
+  }
+
+  async function downloadDatasetExport(exportJob: DatasetExport) {
+    if (!token || exportJob.status !== "ready") return;
+    setDownloadingExportId(exportJob.id);
+    try {
+      await downloadWithToken(
+        exportJob.downloadUrl,
+        token,
+        exportJob.filename || `dataset-export-v${exportJob.version}.zip`,
+      );
+      setActionError(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setDownloadingExportId(null);
     }
   }
 
@@ -1057,9 +1074,10 @@ export function DatasetDetailPage() {
         dataset={dataset}
         exportFormat={exportFormat}
         onExportFormatChange={setExportFormat}
-        latestExport={latestExport}
         isCreatingExport={isCreatingExport}
+        downloadingExportId={downloadingExportId}
         onCreate={createExportPackage}
+        onDownload={downloadDatasetExport}
       />
 
       <ImagePreviewModal

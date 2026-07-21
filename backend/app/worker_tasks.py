@@ -1080,7 +1080,10 @@ def export_dataset_archive(self, export_job_id: str) -> None:
     db.session.commit()
 
     try:
-        from app.services.dataset_export_service import build_dataset_export_archive
+        from app.services.dataset_export_service import (
+            build_dataset_export_archive,
+            dataset_export_download_name,
+        )
 
         summary_json = export_job.summary_json or {}
         archive_summary = build_dataset_export_archive(
@@ -1092,6 +1095,7 @@ def export_dataset_archive(self, export_job_id: str) -> None:
             storage_root=current_app.config["STORAGE_ROOT"],
         )
         archive_path = Path(str(archive_summary["archivePath"]))
+        export_job.summary_json = archive_summary
         export_job.asset = register_local_asset(
             current_app.config["STORAGE_ROOT"],
             archive_path,
@@ -1099,9 +1103,8 @@ def export_dataset_archive(self, export_job_id: str) -> None:
             dataset_id=dataset.id,
             kind="dataset_export",
             mime_type="application/zip",
-            original_filename=f"{dataset.name}-v{export_job.version}.zip",
+            original_filename=dataset_export_download_name(dataset.name, export_job),
         )
-        export_job.summary_json = archive_summary
         export_job.status = "ready"
         export_job.lease_expires_at = None
         db.session.commit()

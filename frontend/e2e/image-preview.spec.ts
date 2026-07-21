@@ -50,7 +50,10 @@ function makeImages() {
   }));
 }
 
-async function mockDatasetDetailApi(page: Page) {
+async function mockDatasetDetailApi(
+  page: Page,
+  exports: Array<Record<string, unknown>> = [],
+) {
   const images = makeImages();
   const dataset = {
     id: "demo",
@@ -73,7 +76,7 @@ async function mockDatasetDetailApi(page: Page) {
     selectedOriginalCount: images.length,
     unretainedUnannotatedImageCount: 0,
     tasks: [],
-    exports: [],
+    exports,
     latestTask: null,
   };
 
@@ -94,6 +97,11 @@ async function mockDatasetDetailApi(page: Page) {
 
     if (request.method() === "GET" && url.pathname === "/api/v1/datasets/demo") {
       await route.fulfill({ contentType: "application/json", body: JSON.stringify({ dataset }) });
+      return;
+    }
+
+    if (request.method() === "GET" && url.pathname.includes("/exports/") && url.pathname.endsWith("/download")) {
+      await route.fulfill({ contentType: "application/zip", body: "mock zip archive" });
       return;
     }
 
@@ -168,6 +176,48 @@ test("dataset detail groups operations and uses structured sample filters", asyn
     path: testInfo.outputPath("dataset-detail-desktop.png"),
     fullPage: true,
   });
+});
+
+test("export modal downloads ready historical versions with descriptive filenames", async ({ page }) => {
+  const filename = "城市道路车辆样本集-yolo-20260721T0630Z-n128-v002.zip";
+  await mockDatasetDetailApi(page, [
+    {
+      id: "export-2",
+      version: 2,
+      status: "ready",
+      exportFormat: "yolo",
+      downloadUrl: "/api/v1/datasets/demo/exports/2/download",
+      filename,
+      summary: { imageCount: 128, estimatedSizeMb: 24.5 },
+      createdAt: "2026-07-21T06:30:00+00:00",
+    },
+    {
+      id: "export-1",
+      version: 1,
+      status: "running",
+      exportFormat: "coco",
+      downloadUrl: "/api/v1/datasets/demo/exports/1/download",
+      filename: "城市道路车辆样本集-coco-20260720T0530Z-n96-v001.zip",
+      summary: { imageCount: 96, estimatedSizeMb: 18.2 },
+      createdAt: "2026-07-20T05:30:00+00:00",
+    },
+  ]);
+
+  await page.goto("/datasets/demo");
+  await page.getByRole("button", { name: "训练与导出" }).click();
+  await page.getByText("导出数据集", { exact: true }).click();
+
+  const dialog = page.getByRole("dialog").filter({ hasText: "导出历史" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(filename)).toBeVisible();
+  await expect(dialog.getByText("128 张样本")).toBeVisible();
+  await expect(dialog.getByText("生成中")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "下载导出版本 v1" })).toBeDisabled();
+
+  const downloadPromise = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "下载导出版本 v2" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(filename);
 });
 
 test("dataset detail remains usable on a narrow viewport", async ({ page }, testInfo: TestInfo) => {

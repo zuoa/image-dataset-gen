@@ -18,6 +18,7 @@ from app.services.annotation_storage import (
     load_annotation_result,
     load_current_annotation_results,
 )
+from app.services.dataset_export_service import dataset_export_download_name
 from app.services.image_storage import existing_generated_image
 
 
@@ -616,7 +617,14 @@ def build_dataset_payload(
         "selectedOriginalCount": selected_original_count,
         "unretainedUnannotatedImageCount": unretained_unannotated_count,
         "tasks": [build_dataset_task_payload(task) for task in dataset.tasks] if include_tasks else [],
-        "exports": [build_dataset_export_payload(export_job) for export_job in dataset.exports]
+        "exports": [
+            build_dataset_export_payload(
+                export_job,
+                dataset_name=dataset.name,
+                fallback_image_count=int(dataset.selected_count or 0),
+            )
+            for export_job in dataset.exports
+        ]
         if include_exports
         else [],
     }
@@ -735,7 +743,14 @@ def build_dataset_detail_payload(
         payload["tasks"] = [build_dataset_task_summary_payload(task) for task in tasks]
     if include_exports:
         exports = DatasetExport.query.filter_by(dataset_id=dataset.id).order_by(DatasetExport.version.desc()).all()
-        payload["exports"] = [build_dataset_export_payload(export_job) for export_job in exports]
+        payload["exports"] = [
+            build_dataset_export_payload(
+                export_job,
+                dataset_name=dataset.name,
+                fallback_image_count=selected_count,
+            )
+            for export_job in exports
+        ]
     return payload
 
 
@@ -917,13 +932,26 @@ def _build_dataset_image_payloads(
     ]
 
 
-def build_dataset_export_payload(export_job: DatasetExport) -> dict[str, Any]:
+def build_dataset_export_payload(
+    export_job: DatasetExport,
+    *,
+    dataset_name: str | None = None,
+    fallback_image_count: int = 0,
+) -> dict[str, Any]:
+    resolved_dataset_name = dataset_name
+    if resolved_dataset_name is None:
+        resolved_dataset_name = export_job.dataset.name if export_job.dataset else "dataset"
     return {
         "id": export_job.id,
         "version": export_job.version,
         "status": export_job.status,
         "exportFormat": export_job.export_format,
         "downloadUrl": export_job.download_url,
+        "filename": dataset_export_download_name(
+            resolved_dataset_name,
+            export_job,
+            fallback_image_count=fallback_image_count,
+        ),
         "summary": export_job.summary_json,
         "createdAt": export_job.created_at.isoformat() if export_job.created_at else None,
     }
