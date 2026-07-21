@@ -124,6 +124,77 @@ def test_authenticated_user_can_list_online_and_offline_training_workers(tmp_pat
     assert workers["gpu-stale"]["heartbeatAgeSeconds"] >= 61
 
 
+def test_training_models_use_presets_then_registered_worker_capabilities(
+    tmp_path: Path,
+):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-model-catalog")
+
+    preset_response = client.get("/api/v1/training/models", headers=headers)
+    assert preset_response.status_code == 200
+    preset = preset_response.get_json()
+    assert preset["source"] == "preset"
+    assert [model["id"] for model in preset["models"]] == [
+        "yolov8n.pt",
+        "yolov8s.pt",
+        "yolov8m.pt",
+        "yolov8l.pt",
+        "yolov8x.pt",
+        "yolo11n.pt",
+        "yolo11s.pt",
+        "yolo11m.pt",
+        "yolo11l.pt",
+        "yolo11x.pt",
+    ]
+    assert next(
+        model for model in preset["models"] if model["id"] == "yolo11n.pt"
+    )["framework"] == "yolo11"
+
+    client.post(
+        "/api/v1/training/workers/register",
+        headers=_worker_headers(),
+        json={
+            "worker_id": "gpu-models",
+            "name": "GPU Models",
+            "capabilities": {
+                "frameworks": ["yolov8"],
+                "tasks": ["detect"],
+                "models": [
+                    {
+                        "id": "yolov8s.pt",
+                        "label": "YOLOv8 Small",
+                        "recommended": True,
+                        "cached": True,
+                    }
+                ],
+            },
+        },
+    )
+
+    worker_response = client.get("/api/v1/training/models", headers=headers)
+    assert worker_response.status_code == 200
+    catalog = worker_response.get_json()
+    assert catalog["source"] == "workers"
+    assert catalog["onlineWorkerCount"] == 1
+    assert catalog["models"] == [
+        {
+            "id": "yolov8s.pt",
+            "label": "YOLOv8 Small",
+            "framework": "yolov8",
+            "task": "detect",
+            "recommended": True,
+            "cached": True,
+            "availableWorkerCount": 1,
+            "cachedWorkerCount": 1,
+        }
+    ]
+
+
 def _create_dataset_with_image(app, client, headers: dict[str, str]) -> str:
     response = client.post(
         "/api/v1/datasets",
@@ -232,6 +303,95 @@ def test_training_job_rejects_unknown_class_index(tmp_path: Path):
     )
 
     assert response.status_code == 400
+
+
+def test_training_rejects_model_not_reported_by_online_workers(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-invalid-model")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+    client.post(
+        "/api/v1/training/workers/register",
+        headers=_worker_headers(),
+        json={
+            "worker_id": "gpu-nano",
+            "name": "GPU Nano",
+            "capabilities": {
+                "frameworks": ["yolov8"],
+                "tasks": ["detect"],
+                "models": ["yolov8n.pt"],
+            },
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolov8s.pt"},
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["message"] == (
+        "model is not supported by available training workers"
+    )
+
+
+def test_training_poll_skips_jobs_for_unsupported_models(tmp_path: Path):
+    class TrainingConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+        TRAINING_WORKER_TOKEN = "worker-token"
+
+    app = create_app(TrainingConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "training-model-dispatch")
+    dataset_id = _create_dataset_with_image(app, client, headers)
+    job_response = client.post(
+        f"/api/v1/datasets/{dataset_id}/training-jobs",
+        headers=headers,
+        json={"model": "yolo11n.pt", "epochs": 1},
+    )
+    assert job_response.status_code == 201
+    job = job_response.get_json()["job"]
+    job_id = job["id"]
+    assert job["config"]["framework"] == "yolo11"
+
+    for worker_id, framework, model in (
+        ("gpu-v8", "yolov8", "yolov8n.pt"),
+        ("gpu-11", "yolo11", "yolo11n.pt"),
+    ):
+        client.post(
+            "/api/v1/training/workers/register",
+            headers=_worker_headers(),
+            json={
+                "worker_id": worker_id,
+                "name": worker_id,
+                "capabilities": {
+                    "frameworks": [framework],
+                    "tasks": ["detect"],
+                    "models": [model],
+                },
+            },
+        )
+
+    incompatible_poll = client.post(
+        "/api/v1/training/workers/gpu-v8/poll",
+        headers=_worker_headers(),
+        json={},
+    )
+    assert incompatible_poll.status_code == 200
+    assert incompatible_poll.get_json()["job"] is None
+
+    compatible_poll = client.post(
+        "/api/v1/training/workers/gpu-11/poll",
+        headers=_worker_headers(),
+        json={},
+    )
+    assert compatible_poll.status_code == 200
+    assert compatible_poll.get_json()["job"]["id"] == job_id
 
 
 def test_training_job_queue_worker_poll_status_and_artifact_upload(tmp_path: Path):

@@ -39,6 +39,12 @@ from app.services.training_inference_service import (
     create_training_inference_job,
     fail_training_inference_job,
 )
+from app.services.training_capability_service import (
+    online_worker_supports_custom_model,
+    training_framework_for_model,
+    training_model_catalog,
+    worker_supports_training_job,
+)
 from app.services.storage_backend import local_backend, register_local_asset
 from app.services.idempotency_service import (
     IdempotencyError,
@@ -319,6 +325,21 @@ def create_training_job(dataset_id: str):
     user_id = get_jwt_identity()
     payload = TrainingJobSchema().load(request.get_json() or {})
     dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    model = payload["model"].strip()
+    available_models, _, _ = training_model_catalog()
+    selected_model = next(
+        (item for item in available_models if item["id"] == model),
+        None,
+    )
+    online_custom_model_worker = online_worker_supports_custom_model()
+    if not model or (selected_model is None and not online_custom_model_worker):
+        return (
+            jsonify(
+                {"message": "model is not supported by available training workers"}
+            ),
+            422,
+        )
+    payload["model"] = model
     if not dataset_has_selected_images(dataset.id):
         return jsonify({"message": "no images selected for training"}), 400
     classes = sorted(dict.fromkeys(int(index) for index in payload["classes"]))
@@ -336,9 +357,13 @@ def create_training_job(dataset_id: str):
 
     export_job = _create_yolo_export(dataset)
     config_json = {
-        "framework": "yolov8",
+        "framework": (
+            str(selected_model.get("framework") or "").strip()
+            if selected_model is not None
+            else training_framework_for_model(model)
+        ),
         "task": "detect",
-        "model": payload["model"],
+        "model": model,
         "epochs": payload["epochs"],
         "imageSize": payload["image_size"],
         "batchSize": payload["batch_size"],
@@ -516,6 +541,21 @@ def list_training_workers():
     )
 
 
+@training_bp.get("/training/models")
+@jwt_required()
+def list_training_models():
+    observed_at = now_utc()
+    models, source, online_worker_count = training_model_catalog(observed_at)
+    return jsonify(
+        {
+            "models": models,
+            "source": source,
+            "onlineWorkerCount": online_worker_count,
+            "observedAt": observed_at.isoformat(),
+        }
+    )
+
+
 @training_bp.post("/training/workers/register")
 def register_training_worker():
     token_error = _require_worker_token(allow_bootstrap=True)
@@ -609,6 +649,8 @@ def poll_training_job(worker_id: str):
             job.status = "failed"
             job.error_message = "dataset_export_failed"
             job.completed_at = now_utc()
+            continue
+        if not worker_supports_training_job(worker, job):
             continue
         archive_path = get_dataset_archive_path(current_app.config["STORAGE_ROOT"], job.export)
         if job.export.status != "ready" or not archive_path.exists():

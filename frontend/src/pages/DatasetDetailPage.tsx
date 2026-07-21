@@ -544,12 +544,12 @@ export function DatasetDetailPage() {
     }
   }
 
-  async function startTrainingJob() {
+  async function startTrainingJob(selectedModel: string) {
     if (!token || !datasetId) return;
     setIsCreatingTrainingJob(true);
     try {
       await createTrainingJob(datasetId, token, {
-        model: trainingModel.trim() || "yolov8n.pt",
+        model: selectedModel,
         epochs: trainingEpochs,
         image_size: trainingImageSize,
         batch_size: trainingBatchSize,

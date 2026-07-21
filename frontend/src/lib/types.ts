@@ -291,6 +291,24 @@ export type TrainingWorkerList = {
   observedAt: string;
 };
 
+export type TrainingModelOption = {
+  id: string;
+  label: string;
+  framework: string;
+  task: string;
+  recommended: boolean;
+  cached: boolean;
+  availableWorkerCount: number;
+  cachedWorkerCount: number;
+};
+
+export type TrainingModelCatalog = {
+  models: TrainingModelOption[];
+  source: "workers" | "preset";
+  onlineWorkerCount: number;
+  observedAt: string;
+};
+
 export type TrainingArtifact = {
   id: string;
   type: string;
@@ -308,7 +326,7 @@ export type TrainingJob = {
   status: "queued" | "assigned" | "preparing" | "running" | "uploading" | "completed" | "failed" | string;
   progressPercent: number;
   config: {
-    framework: "yolov8" | string;
+    framework: string;
     task: "detect" | string;
     model: string;
     epochs: number;

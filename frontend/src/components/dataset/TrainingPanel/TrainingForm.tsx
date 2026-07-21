@@ -1,12 +1,15 @@
 import { Cpu, Play } from "lucide-react";
-import { Button, Col, Input, Row, Space } from "antd";
+import { Button, Col, Input, Row, Select, Space } from "antd";
 
-import type { Dataset } from "../../../lib/types";
+import type { Dataset, TrainingModelOption } from "../../../lib/types";
 
 interface TrainingFormProps {
   dataset: Dataset;
   trainingModel: string;
   onTrainingModelChange: (value: string) => void;
+  trainingModels: TrainingModelOption[];
+  trainingModelsLoading: boolean;
+  trainingModelHint: string;
   trainingEpochs: number;
   onTrainingEpochsChange: (value: number) => void;
   trainingImageSize: number;
@@ -32,6 +35,9 @@ export function TrainingForm({
   dataset,
   trainingModel,
   onTrainingModelChange,
+  trainingModels,
+  trainingModelsLoading,
+  trainingModelHint,
   trainingEpochs,
   onTrainingEpochsChange,
   trainingImageSize,
@@ -66,17 +72,26 @@ export function TrainingForm({
     <div>
       <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
         <Cpu className="h-4 w-4" />
-        YOLOv8 模型训练
+        YOLO 模型训练
       </div>
       <div className="mt-2 text-2xl">训练参数</div>
 
       <Row gutter={[12, 12]} className="mt-6">
         <Col xs={24} md={12} lg={8} xl={8}>
           <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">模型</div>
-          <Input
+          <Select
+            className="w-full"
             value={trainingModel}
-            onChange={(event) => onTrainingModelChange(event.target.value)}
+            onChange={onTrainingModelChange}
+            loading={trainingModelsLoading}
+            showSearch
+            optionFilterProp="label"
+            options={trainingModels.map((model) => ({
+              value: model.id,
+              label: `${model.label}（${model.id}${model.recommended ? "，推荐" : ""}）`,
+            }))}
           />
+          <div className="mt-1 text-xs text-neutral-500">{trainingModelHint}</div>
         </Col>
         <Col xs={24} md={12} lg={8} xl={4}>
           <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">训练轮数</div>

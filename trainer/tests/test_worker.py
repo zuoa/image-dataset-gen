@@ -4,7 +4,54 @@ import json
 import threading
 import urllib.request
 
-from app.worker import _run_inference, _start_health_server, _WorkerState, _worker_keepalive
+from app.worker import (
+    _run_inference,
+    _start_health_server,
+    _training_model_capabilities,
+    _WorkerState,
+    _worker_keepalive,
+)
+
+
+def test_training_model_capabilities_use_config_and_report_cache(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "yolo11s.pt").write_bytes(b"weights")
+    monkeypatch.setenv("TRAINER_SUPPORTED_MODELS", "yolo11s.pt,custom.pt")
+
+    models = _training_model_capabilities(tmp_path)
+
+    assert models == [
+        {
+            "id": "yolo11s.pt",
+            "label": "YOLO11 Small",
+            "framework": "yolo11",
+            "task": "detect",
+            "recommended": True,
+            "cached": True,
+        },
+        {
+            "id": "custom.pt",
+            "label": "custom.pt",
+            "framework": "ultralytics",
+            "task": "detect",
+            "recommended": False,
+            "cached": False,
+        },
+    ]
+
+
+def test_default_training_models_include_yolov8_and_yolo11(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.delenv("TRAINER_SUPPORTED_MODELS", raising=False)
+
+    models = _training_model_capabilities(tmp_path)
+
+    assert len(models) == 10
+    assert {model["framework"] for model in models} == {"yolov8", "yolo11"}
+    assert models[0]["id"] == "yolov8n.pt"
+    assert models[5]["id"] == "yolo11n.pt"
 
 
 def test_health_server_returns_trainer_status() -> None:

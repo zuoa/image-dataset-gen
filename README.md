@@ -8,7 +8,7 @@
 - YOLO、COCO、Pascal VOC、CSV 导出支持单图多目标，并附带 `dataset-manifest.json`，将训练样本映射回平台图片与标注版本。
 - 离线增强固定使用 MIT 许可的 Albumentations 2.0.8，同步变换图片与 YOLO 检测框并过滤低可见度目标；增强样本会记录源图谱系，导出时与源图保持在同一 train/val/test 集合。
 - 数据集详情页可手动运行质量检查，识别缺失/空标注、越界与异常框、重复框、重复或损坏图片，并维护问题状态。
-- YOLOv8 训练完成后由 trainer 自动运行 Supervision 评测，生成 mAP、分类指标、混淆矩阵及误检/漏检/类别混淆问题，回流到同一质量面板。
+- YOLOv8/YOLO11 训练完成后由 trainer 自动运行 Supervision 评测，生成 mAP、分类指标、混淆矩阵及误检/漏检/类别混淆问题，回流到同一质量面板。
 - Roboflow 下载能力保留。API Key 通过“Roboflow 连接”一次验证后加密保存，后续下载只提交连接 ID；后台导入任务不会把明文密钥写入响应或日志。
 
 详细设计见 [架构说明](docs/architecture.md)，部署、备份和故障处理见 [运维手册](docs/operations.md)。
@@ -18,7 +18,7 @@
 ```text
 frontend/   React 18 + TypeScript + Vite；Nginx 统一入口和受保护文件转发
 backend/    Flask API、SQLAlchemy 领域模型、Alembic 迁移、Celery worker
-trainer/    可部署到 GPU 主机的 YOLOv8 worker
+trainer/    可部署到 GPU 主机的 YOLO worker
 segmenter/  可选的 SAM 2.1 交互分割服务，为目标检测标注提供点击选框
 annotator/  旧的 mock 标注服务，仅保留兼容测试，不进入生产 Compose
 ```
@@ -55,6 +55,8 @@ docker compose run --rm backend flask --app manage.py create-admin \
 
 独立 GPU 主机使用 `docker-compose.trainer.yml` 启动 trainer。trainer 会按
 `TRAINER_HEARTBEAT_INTERVAL_SECONDS`（默认 15 秒）主动向平台保活；Forge 的“训练节点”页面会展示已注册节点、忙闲状态和最近心跳。平台默认在 60 秒未收到心跳后将节点标记为离线，可通过 `TRAINING_WORKER_OFFLINE_SECONDS` 调整。
+
+trainer 注册时会通过能力信息上报可训练模型，训练页面据此提供模型选择并把任务只分配给兼容节点。默认上报 YOLOv8 和 YOLO11 的 n/s/m/l/x 型号；可用逗号分隔的 `TRAINER_SUPPORTED_MODELS` 覆盖该列表。
 
 ### 可选的智能点选
 

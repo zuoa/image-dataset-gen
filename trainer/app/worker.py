@@ -15,6 +15,58 @@ from werkzeug.serving import make_server
 
 
 VERSION = "0.1.0"
+DEFAULT_TRAINING_MODELS = (
+    ("yolov8n.pt", "YOLOv8 Nano", "yolov8"),
+    ("yolov8s.pt", "YOLOv8 Small", "yolov8"),
+    ("yolov8m.pt", "YOLOv8 Medium", "yolov8"),
+    ("yolov8l.pt", "YOLOv8 Large", "yolov8"),
+    ("yolov8x.pt", "YOLOv8 XLarge", "yolov8"),
+    ("yolo11n.pt", "YOLO11 Nano", "yolo11"),
+    ("yolo11s.pt", "YOLO11 Small", "yolo11"),
+    ("yolo11m.pt", "YOLO11 Medium", "yolo11"),
+    ("yolo11l.pt", "YOLO11 Large", "yolo11"),
+    ("yolo11x.pt", "YOLO11 XLarge", "yolo11"),
+)
+
+
+def _training_model_framework(model_id: str) -> str:
+    filename = Path(model_id).name.lower()
+    if filename.startswith("yolo11"):
+        return "yolo11"
+    if filename.startswith("yolov8"):
+        return "yolov8"
+    return "ultralytics"
+
+
+def _training_model_capabilities(model_dir: Path) -> list[dict[str, object]]:
+    known_models = {
+        model_id: (label, framework)
+        for model_id, label, framework in DEFAULT_TRAINING_MODELS
+    }
+    configured = os.getenv("TRAINER_SUPPORTED_MODELS", "").strip()
+    model_ids = (
+        [item.strip() for item in configured.split(",") if item.strip()]
+        if configured
+        else list(known_models)
+    )
+    models: list[dict[str, object]] = []
+    for index, model_id in enumerate(model_ids):
+        metadata = known_models.get(model_id)
+        models.append(
+            {
+                "id": model_id,
+                "label": metadata[0] if metadata else model_id,
+                "framework": (
+                    metadata[1]
+                    if metadata
+                    else _training_model_framework(model_id)
+                ),
+                "task": "detect",
+                "recommended": index == 0,
+                "cached": (model_dir / Path(model_id).name).exists(),
+            }
+        )
+    return models
 
 
 def main() -> None:
@@ -45,8 +97,10 @@ def main() -> None:
         name=worker_name,
         version=VERSION,
         capabilities={
-            "frameworks": ["yolov8"],
+            "frameworks": ["yolov8", "yolo11"],
             "tasks": ["detect"],
+            "models": _training_model_capabilities(model_dir),
+            "supportsCustomModel": False,
             "inference": ["detect"],
             "artifacts": [
                 "best.pt",

@@ -6,6 +6,10 @@ import { TrainingModelTestPanel } from "../../TrainingModelTestPanel";
 import { TrainingForm } from "./TrainingForm";
 import { TrainingJobCard } from "./TrainingJobCard";
 import type { Dataset, TrainingArtifact, TrainingJob } from "../../../lib/types";
+import {
+  fallbackTrainingModelCatalog,
+  useTrainingModels,
+} from "../../../hooks/useTrainingModels";
 
 const activeTrainingStatuses = new Set([
   "queued",
@@ -39,13 +43,32 @@ interface TrainingPanelProps {
   onTrainingClassIndicesChange: (indices: number[]) => void;
   isCreatingTrainingJob: boolean;
   deletingTrainingJobId: string | null;
-  onStartTrainingJob: () => void;
+  onStartTrainingJob: (model: string) => void;
   onRemoveTrainingJob: (job: TrainingJob) => void;
   onDownloadArtifact: (artifact: TrainingArtifact) => void;
   onClose: () => void;
 }
 
 export function TrainingPanel(props: TrainingPanelProps) {
+  const trainingModelsQuery = useTrainingModels();
+  const trainingModelCatalog = trainingModelsQuery.data?.models.length
+    ? trainingModelsQuery.data
+    : fallbackTrainingModelCatalog;
+  const effectiveTrainingModel = trainingModelCatalog.models.some(
+    (model) => model.id === props.trainingModel,
+  )
+    ? props.trainingModel
+    : (trainingModelCatalog.models.find((model) => model.recommended)?.id ??
+      trainingModelCatalog.models[0].id);
+  const trainingModelHint = trainingModelsQuery.isLoading
+    ? "正在读取训练器支持的模型。"
+    : trainingModelsQuery.error
+      ? "无法读取训练器能力，当前显示系统预置型号。"
+      : trainingModelCatalog.source === "preset"
+        ? trainingModelCatalog.onlineWorkerCount > 0
+          ? "在线训练器尚未上报型号，当前显示系统预置型号。"
+          : "当前没有在线训练器，任务将排队等待兼容节点。"
+        : `${trainingModelCatalog.onlineWorkerCount} 个在线训练器已上报可用型号。`;
   const latestTrainingJob = props.trainingJobs[0] ?? null;
   const trainingRunning = latestTrainingJob
     ? activeTrainingStatuses.has(latestTrainingJob.status)
@@ -77,8 +100,11 @@ export function TrainingPanel(props: TrainingPanelProps) {
         <Col xs={24} xl={16}>
           <TrainingForm
             dataset={props.dataset}
-            trainingModel={props.trainingModel}
+            trainingModel={effectiveTrainingModel}
             onTrainingModelChange={props.onTrainingModelChange}
+            trainingModels={trainingModelCatalog.models}
+            trainingModelsLoading={trainingModelsQuery.isFetching}
+            trainingModelHint={trainingModelHint}
             trainingEpochs={props.trainingEpochs}
             onTrainingEpochsChange={props.onTrainingEpochsChange}
             trainingImageSize={props.trainingImageSize}
@@ -97,7 +123,7 @@ export function TrainingPanel(props: TrainingPanelProps) {
             onTrainingClassIndicesChange={props.onTrainingClassIndicesChange}
             isCreatingTrainingJob={props.isCreatingTrainingJob}
             trainingRunning={trainingRunning}
-            onStart={props.onStartTrainingJob}
+            onStart={() => props.onStartTrainingJob(effectiveTrainingModel)}
           />
         </Col>
         <Col xs={24} xl={8}>
