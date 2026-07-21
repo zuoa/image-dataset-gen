@@ -150,3 +150,136 @@ def test_occlusion_filter_drops_boxes_that_are_no_longer_visible():
     visibility_mask[30:70, 30:70] = 0
 
     assert image_storage._filter_occluded_detections(detections, visibility_mask) == []
+
+
+def test_policy_v2_groups_geometric_transforms_and_uses_configured_probabilities():
+    transforms, operations = image_storage._build_policy_transforms(
+        ["flip", "affine", "safe_crop"],
+        image_storage.random.Random(17),
+        {
+            "flip": {"mode": "horizontal", "probability": 0.5},
+            "affine": {
+                "min_scale": 0.9,
+                "max_scale": 1.1,
+                "max_translate": 0.03,
+                "max_rotate": 6,
+                "max_shear": 2,
+                "probability": 0.5,
+            },
+            "safe_crop": {"erosion_rate": 0, "probability": 0.25},
+        },
+        100,
+        80,
+        [0],
+    )
+
+    assert isinstance(transforms[0], A.HorizontalFlip)
+    assert transforms[0].p == 0.5
+    assert isinstance(transforms[1], A.OneOf)
+    assert transforms[1].p == 0.75
+    assert [type(transform).__name__ for transform in transforms[1].transforms] == [
+        "Affine",
+        "RandomSizedBBoxSafeCrop",
+    ]
+    assert [operation["stage"] for operation in operations] == ["flip", "geometry"]
+
+
+def test_policy_v2_builds_realistic_lighting_and_degradation_families():
+    transforms, operations = image_storage._build_policy_transforms(
+        ["lighting", "degradation"],
+        image_storage.random.Random(17),
+        {
+            "lighting": {"strength": 0.18, "probability": 1},
+            "degradation": {"strength": 0.5, "probability": 1},
+        },
+        100,
+        80,
+        [],
+    )
+
+    assert [type(transform).__name__ for transform in transforms] == ["OneOf", "OneOf"]
+    assert [type(transform).__name__ for transform in transforms[0].transforms] == [
+        "RandomBrightnessContrast",
+        "RandomGamma",
+        "PlanckianJitter",
+        "ColorJitter",
+    ]
+    assert [type(transform).__name__ for transform in transforms[1].transforms] == [
+        "ImageCompression",
+        "Downscale",
+        "MotionBlur",
+        "Defocus",
+        "GaussNoise",
+    ]
+    assert [operation["stage"] for operation in operations] == ["lighting", "degradation"]
+
+
+def test_policy_v2_safe_crop_preserves_detection(tmp_path: Path):
+    image = np.zeros((80, 100, 3), dtype=np.uint8)
+    image[24:56, 30:70] = (220, 80, 40)
+    buffer = BytesIO()
+    Image.fromarray(image).save(buffer, format="PNG")
+    image_storage.save_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        buffer.getvalue(),
+        "image/png",
+    )
+
+    result = image_storage.augment_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        "image-000002",
+        ["safe_crop"],
+        17,
+        {"safe_crop": {"erosion_rate": 0, "probability": 1}},
+        detections=[{"category": "worker", "confidence": 0.9, "bbox": [0.5, 0.5, 0.4, 0.4]}],
+        policy_version=2,
+    )
+
+    assert result is not None
+    assert result["applied_methods"] == ["safe_crop"]
+    assert len(result["transformed_detections"]) == 1
+    assert result["transformed_detections"][0]["category"] == "worker"
+    assert result["augmentation_replay"]["transforms"][0]["__class_fullname__"] == "RandomSizedBBoxSafeCrop"
+
+
+def test_policy_v2_target_occlusion_uses_detection_boxes(tmp_path: Path):
+    buffer = BytesIO()
+    Image.new("RGB", (100, 80), color=(255, 255, 255)).save(buffer, format="PNG")
+    image_storage.save_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        buffer.getvalue(),
+        "image/png",
+    )
+
+    result = image_storage.augment_generated_image(
+        str(tmp_path),
+        "dataset-1",
+        "image-000001",
+        "image-000002",
+        ["target_occlusion"],
+        17,
+        {
+            "target_occlusion": {
+                "min_holes": 1,
+                "max_holes": 1,
+                "min_ratio": 0.2,
+                "max_ratio": 0.2,
+                "probability": 1,
+            }
+        },
+        detections=[{"category": "worker", "confidence": 0.9, "bbox": [0.5, 0.5, 0.4, 0.4]}],
+        policy_version=2,
+    )
+
+    assert result is not None
+    assert result["applied_methods"] == ["target_occlusion"]
+    assert result["transformed_detections"] == [
+        {"category": "worker", "confidence": 0.9, "bbox": [0.5, 0.5, 0.4, 0.4]}
+    ]
+    assert result["augmentation_replay"]["transforms"][0]["__class_fullname__"] == "ConstrainedCoarseDropout"

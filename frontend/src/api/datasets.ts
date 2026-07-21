@@ -261,7 +261,12 @@ export function augmentDataset(
     method: "POST",
     token,
     headers: idempotencyHeaders(),
-    body: JSON.stringify({ multiplier, augmentation_methods: methods, augmentation_settings: settings }),
+    body: JSON.stringify({
+      multiplier,
+      augmentation_policy_version: 2,
+      augmentation_methods: methods,
+      augmentation_settings: settings,
+    }),
   });
 }
 

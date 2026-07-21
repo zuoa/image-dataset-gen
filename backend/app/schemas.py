@@ -9,6 +9,11 @@ from marshmallow import Schema, ValidationError, fields, validate, validates_sch
 SUPPORTED_ASPECT_RATIOS = ("1:1", "4:3", "3:4", "16:9", "9:16")
 AUGMENTATION_METHODS = (
     "flip",
+    "affine",
+    "safe_crop",
+    "target_occlusion",
+    "lighting",
+    "degradation",
     "rotate",
     "crop",
     "color_jitter",
@@ -249,6 +254,10 @@ class TrainingJobStatusSchema(Schema):
 
 class TaskActionSchema(Schema):
     multiplier = fields.Integer(load_default=5, validate=validate.Range(min=1, max=20))
+    augmentation_policy_version = fields.Integer(
+        load_default=1,
+        validate=validate.OneOf([1, 2]),
+    )
     augmentation_methods = fields.List(
         fields.String(validate=validate.OneOf(AUGMENTATION_METHODS)),
         load_default=["flip", "color_jitter", "blur"],
@@ -290,6 +299,38 @@ class TaskActionSchema(Schema):
                     mode = method_settings.get("mode")
                     if mode is not None and mode not in {"random", "horizontal", "vertical"}:
                         raise ValidationError({"mode": ["mode must be random, horizontal or vertical"]})
+                    if "probability" in method_settings:
+                        _ensure_number(method_settings, "probability", 0, 1)
+                elif method == "affine":
+                    min_scale = _ensure_number(method_settings, "min_scale", 0.7, 1.0)
+                    max_scale = _ensure_number(method_settings, "max_scale", 1.0, 1.3)
+                    if min_scale > max_scale:
+                        raise ValidationError({"max_scale": ["max_scale must be greater than or equal to min_scale"]})
+                    _ensure_number(method_settings, "max_translate", 0, 0.1)
+                    _ensure_number(method_settings, "max_rotate", 0, 20)
+                    _ensure_number(method_settings, "max_shear", 0, 10)
+                    _ensure_number(method_settings, "probability", 0, 1)
+                elif method == "safe_crop":
+                    _ensure_number(method_settings, "erosion_rate", 0, 0.2)
+                    _ensure_number(method_settings, "probability", 0, 1)
+                elif method == "target_occlusion":
+                    min_holes = _ensure_number(method_settings, "min_holes", 1, 4)
+                    max_holes = _ensure_number(method_settings, "max_holes", 1, 6)
+                    if not min_holes.is_integer() or not max_holes.is_integer():
+                        raise ValidationError({"min_holes": ["hole counts must be integers"]})
+                    if min_holes > max_holes:
+                        raise ValidationError({"max_holes": ["max_holes must be greater than or equal to min_holes"]})
+                    min_ratio = _ensure_number(method_settings, "min_ratio", 0.05, 0.5)
+                    max_ratio = _ensure_number(method_settings, "max_ratio", 0.05, 0.6)
+                    if min_ratio > max_ratio:
+                        raise ValidationError({"max_ratio": ["max_ratio must be greater than or equal to min_ratio"]})
+                    _ensure_number(method_settings, "probability", 0, 1)
+                elif method == "lighting":
+                    _ensure_number(method_settings, "strength", 0, 0.4)
+                    _ensure_number(method_settings, "probability", 0, 1)
+                elif method == "degradation":
+                    _ensure_number(method_settings, "strength", 0, 1)
+                    _ensure_number(method_settings, "probability", 0, 1)
                 elif method == "rotate":
                     _ensure_number(method_settings, "max_angle", 0, 20)
                 elif method == "crop":

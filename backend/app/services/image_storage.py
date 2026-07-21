@@ -24,7 +24,7 @@ MIN_BBOX_AREA_PIXELS = 1.0
 MIN_BBOX_VISIBILITY = 0.25
 GENERATED_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg")
 DEFAULT_AUGMENTATION_SETTINGS = {
-    "flip": {"mode": "random"},
+    "flip": {"mode": "random", "probability": 0.5},
     "rotate": {"max_angle": MAX_ROTATION_ANGLE_DEGREES},
     "crop": {"min_scale": 0.82, "max_scale": 0.94},
     "color_jitter": {"strength": 0.18},
@@ -32,6 +32,55 @@ DEFAULT_AUGMENTATION_SETTINGS = {
     "noise": {"max_sigma": 28.0},
     "occlusion": {"min_ratio": 0.14, "max_ratio": 0.28},
     "perspective": {"max_warp": 0.08},
+    "affine": {
+        "min_scale": 0.85,
+        "max_scale": 1.15,
+        "max_translate": 0.04,
+        "max_rotate": MAX_ROTATION_ANGLE_DEGREES,
+        "max_shear": 3.0,
+        "probability": 0.55,
+    },
+    "safe_crop": {
+        "erosion_rate": 0.0,
+        "min_scale": 0.75,
+        "max_scale": 0.95,
+        "probability": 0.3,
+    },
+    "target_occlusion": {
+        "min_holes": 1,
+        "max_holes": 2,
+        "min_ratio": 0.18,
+        "max_ratio": 0.38,
+        "probability": 0.3,
+    },
+    "lighting": {"strength": 0.18, "probability": 0.55},
+    "degradation": {"strength": 0.5, "probability": 0.35},
+}
+
+POLICY_GEOMETRY_METHODS = ("affine", "safe_crop", "rotate", "crop", "perspective")
+POLICY_OCCLUSION_METHODS = ("target_occlusion", "occlusion")
+POLICY_LIGHTING_METHODS = ("lighting", "color_jitter")
+POLICY_DEGRADATION_METHODS = ("degradation", "blur", "noise")
+APPLIED_METHOD_BY_TRANSFORM = {
+    "HorizontalFlip": "flip",
+    "VerticalFlip": "flip",
+    "Rotate": "rotate",
+    "RandomResizedCrop": "crop",
+    "RandomSizedBBoxSafeCrop": "safe_crop",
+    "ColorJitter": "color_jitter",
+    "GaussianBlur": "blur",
+    "GaussNoise": "noise",
+    "CoarseDropout": "occlusion",
+    "Perspective": "perspective",
+    "Affine": "affine",
+    "ConstrainedCoarseDropout": "target_occlusion",
+    "RandomBrightnessContrast": "brightness_contrast",
+    "RandomGamma": "gamma",
+    "PlanckianJitter": "color_temperature",
+    "ImageCompression": "image_compression",
+    "Downscale": "downscale",
+    "MotionBlur": "motion_blur",
+    "Defocus": "defocus",
 }
 
 
@@ -101,13 +150,13 @@ def augment_generated_image(
     seed: int,
     settings: dict[str, object] | None = None,
     detections: list[dict[str, Any]] | None = None,
+    policy_version: int = 1,
 ) -> dict[str, object] | None:
     source_path = existing_generated_image(storage_root, task_id, source_image_key)
     if source_path is None:
         return None
 
     rng = random.Random(seed)
-    applied_methods = _pick_augmentation_methods(methods, rng)
     mime_type = "image/png" if source_path.suffix.lower() == ".png" else "image/jpeg"
     source_format = "PNG" if mime_type == "image/png" else "JPEG"
 
@@ -116,14 +165,26 @@ def augment_generated_image(
         source_rgb = np.asarray(source_image.convert("RGB"))
         source_alpha = np.asarray(source_image.convert("RGBA").getchannel("A")) if preserve_alpha else None
         height, width = source_rgb.shape[:2]
-        transforms: list[A.BasicTransform] = []
-        augmentation_ops: list[dict[str, Any]] = []
-        for method in applied_methods:
-            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
-            transforms.append(transform)
-            augmentation_ops.append(op)
-
         source_detections, bboxes, detection_indices = _prepare_detections(detections)
+        if policy_version >= 2:
+            transforms, augmentation_ops = _build_policy_transforms(
+                methods,
+                rng,
+                settings,
+                width,
+                height,
+                detection_indices,
+            )
+            applied_methods: list[str] = []
+        else:
+            applied_methods = _pick_augmentation_methods(methods, rng)
+            transforms = []
+            augmentation_ops = []
+            for method in applied_methods:
+                transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+                transforms.append(transform)
+                augmentation_ops.append(op)
+
         pipeline = A.ReplayCompose(
             transforms,
             bbox_params=A.BboxParams(
@@ -135,33 +196,55 @@ def augment_generated_image(
                 filter_invalid_bboxes=True,
             ),
         )
-        pipeline.set_random_seed(seed)
         transform_inputs: dict[str, Any] = {
             "image": source_rgb,
             "bboxes": bboxes,
             "detection_indices": detection_indices,
         }
-        if "occlusion" in applied_methods:
+        if any(method in {"occlusion", "target_occlusion"} for method in methods):
             transform_inputs["mask"] = np.ones((height, width), dtype=np.uint8)
-        transformed = pipeline(**transform_inputs)
+        max_attempts = 3 if policy_version >= 2 else 1
+        for attempt in range(max_attempts):
+            pipeline.set_random_seed(seed + attempt)
+            transformed = pipeline(**transform_inputs)
+            if policy_version < 2:
+                break
+            applied_methods = _applied_methods_from_replay(transformed["replay"])
+            if applied_methods:
+                break
         transformed_image = np.asarray(transformed["image"], dtype=np.uint8)
+        dropout_applied = _replay_has_applied_dropout(transformed["replay"])
+        bbox_result = transformed
+        replay_without_occlusion: dict[str, Any] | None = None
+        if detections is not None and dropout_applied:
+            replay_without_occlusion = _replay_without_occlusion(transformed["replay"])
+            bbox_result = A.ReplayCompose.replay(
+                replay_without_occlusion,
+                image=source_rgb,
+                bboxes=bboxes,
+                detection_indices=detection_indices,
+            )
         transformed_detections = (
             _restore_detections(
                 source_detections,
-                transformed.get("bboxes", []),
-                transformed.get("detection_indices", []),
+                bbox_result.get("bboxes", []),
+                bbox_result.get("detection_indices", []),
             )
             if detections is not None
             else None
         )
-        if transformed_detections is not None and "occlusion" in applied_methods:
+        if (
+            transformed_detections is not None
+            and "mask" in transformed
+            and dropout_applied
+        ):
             transformed_detections = _filter_occluded_detections(
                 transformed_detections,
                 np.asarray(transformed["mask"]),
             )
 
         if source_alpha is not None:
-            alpha_replay = _replay_without_occlusion(transformed["replay"])
+            alpha_replay = replay_without_occlusion or _replay_without_occlusion(transformed["replay"])
             alpha_result = A.ReplayCompose.replay(
                 alpha_replay,
                 image=source_rgb,
@@ -251,6 +334,372 @@ def _method_settings(settings: dict[str, object] | None, method: str) -> dict[st
     if isinstance(custom, dict):
         resolved.update(custom)
     return resolved
+
+
+def _setting_probability(
+    settings: dict[str, object] | None,
+    method: str,
+    default: float,
+) -> float:
+    method_settings = _method_settings(settings, method)
+    try:
+        probability = float(method_settings.get("probability", default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(probability, 0.0), 1.0)
+
+
+def _combined_probability(probabilities: list[float]) -> float:
+    return min(sum(min(max(probability, 0.0), 1.0) for probability in probabilities), 1.0)
+
+
+def _build_policy_stage(
+    candidates: list[tuple[A.BasicTransform, dict[str, Any], float]],
+    stage: str,
+) -> tuple[A.BasicTransform, dict[str, Any]] | None:
+    active = [(transform, op, probability) for transform, op, probability in candidates if probability > 0]
+    if not active:
+        return None
+
+    probabilities = [probability for _, _, probability in active]
+    stage_probability = _combined_probability(probabilities)
+    if len(active) == 1:
+        transform, op, _ = active[0]
+        transform.p = stage_probability
+        return transform, {**op, "stage": stage, "probability": stage_probability}
+
+    for transform, _, probability in active:
+        transform.p = probability
+    return (
+        A.OneOf([transform for transform, _, _ in active], p=stage_probability),
+        {
+            "method": stage,
+            "stage": stage,
+            "probability": stage_probability,
+            "candidates": [op for _, op, _ in active],
+            "transform": "OneOf",
+        },
+    )
+
+
+def _build_policy_transforms(
+    methods: list[str],
+    rng: random.Random,
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+    detection_indices: list[int],
+) -> tuple[list[A.BasicTransform], list[dict[str, Any]]]:
+    selected = set(dict.fromkeys(method for method in methods if method))
+    transforms: list[A.BasicTransform] = []
+    augmentation_ops: list[dict[str, Any]] = []
+
+    if "flip" in selected:
+        transform, op = _build_augmentation_transform("flip", rng, settings, width, height)
+        probability = _setting_probability(settings, "flip", 0.5)
+        transform.p = probability
+        transforms.append(transform)
+        augmentation_ops.append({**op, "stage": "flip", "probability": probability})
+
+    geometry_candidates: list[tuple[A.BasicTransform, dict[str, Any], float]] = []
+    for method in POLICY_GEOMETRY_METHODS:
+        if method not in selected:
+            continue
+        if method == "affine":
+            transform, op = _build_affine_transform(settings, width, height)
+            probability = _setting_probability(settings, method, 0.55)
+        elif method == "safe_crop":
+            transform, op = _build_safe_crop_transform(
+                settings,
+                width,
+                height,
+                has_detections=bool(detection_indices),
+            )
+            probability = _setting_probability(settings, method, 0.3)
+        else:
+            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+            probability = _setting_probability(settings, method, 0.25)
+        geometry_candidates.append((transform, op, probability))
+    geometry_stage = _build_policy_stage(geometry_candidates, "geometry")
+    if geometry_stage is not None:
+        transform, op = geometry_stage
+        transforms.append(transform)
+        augmentation_ops.append(op)
+
+    occlusion_candidates: list[tuple[A.BasicTransform, dict[str, Any], float]] = []
+    for method in POLICY_OCCLUSION_METHODS:
+        if method not in selected:
+            continue
+        if method == "target_occlusion":
+            transform, op = _build_target_occlusion_transform(
+                settings,
+                width,
+                height,
+                detection_indices,
+            )
+            probability = _setting_probability(settings, method, 0.3)
+        else:
+            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+            probability = _setting_probability(settings, method, 0.25)
+        occlusion_candidates.append((transform, op, probability))
+    occlusion_stage = _build_policy_stage(occlusion_candidates, "occlusion")
+    if occlusion_stage is not None:
+        transform, op = occlusion_stage
+        transforms.append(transform)
+        augmentation_ops.append(op)
+
+    lighting_candidates: list[tuple[A.BasicTransform, dict[str, Any], float]] = []
+    for method in POLICY_LIGHTING_METHODS:
+        if method not in selected:
+            continue
+        if method == "lighting":
+            transform, op = _build_lighting_transform(settings, width, height)
+            probability = _setting_probability(settings, method, 0.55)
+        else:
+            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+            probability = _setting_probability(settings, method, 0.45)
+        lighting_candidates.append((transform, op, probability))
+    lighting_stage = _build_policy_stage(lighting_candidates, "lighting")
+    if lighting_stage is not None:
+        transform, op = lighting_stage
+        transforms.append(transform)
+        augmentation_ops.append(op)
+
+    degradation_candidates: list[tuple[A.BasicTransform, dict[str, Any], float]] = []
+    for method in POLICY_DEGRADATION_METHODS:
+        if method not in selected:
+            continue
+        if method == "degradation":
+            transform, op = _build_degradation_transform(settings, width, height)
+            probability = _setting_probability(settings, method, 0.35)
+        else:
+            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+            probability = _setting_probability(settings, method, 0.25)
+        degradation_candidates.append((transform, op, probability))
+    degradation_stage = _build_policy_stage(degradation_candidates, "degradation")
+    if degradation_stage is not None:
+        transform, op = degradation_stage
+        transforms.append(transform)
+        augmentation_ops.append(op)
+
+    if not transforms:
+        transforms.append(A.NoOp(p=1.0))
+        augmentation_ops.append({"method": "noop", "transform": "NoOp", "size": [width, height]})
+    return transforms, augmentation_ops
+
+
+def _build_affine_transform(
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+) -> tuple[A.BasicTransform, dict[str, Any]]:
+    method_settings = _method_settings(settings, "affine")
+    min_scale = max(0.1, float(method_settings.get("min_scale", 0.85)))
+    max_scale = max(0.1, float(method_settings.get("max_scale", 1.15)))
+    low_scale, high_scale = sorted((min_scale, max_scale))
+    max_translate = min(max(float(method_settings.get("max_translate", 0.04)), 0.0), 1.0)
+    max_rotate = max(float(method_settings.get("max_rotate", MAX_ROTATION_ANGLE_DEGREES)), 0.0)
+    max_shear = max(float(method_settings.get("max_shear", 3.0)), 0.0)
+    transform = A.Affine(
+        scale=(low_scale, high_scale),
+        translate_percent=(-max_translate, max_translate),
+        rotate=(-max_rotate, max_rotate),
+        shear=(-max_shear, max_shear),
+        interpolation=cv2.INTER_CUBIC,
+        mask_interpolation=cv2.INTER_NEAREST,
+        balanced_scale=low_scale < 1.0 < high_scale,
+        border_mode=cv2.BORDER_CONSTANT,
+        fill=(245, 245, 245),
+        fill_mask=0,
+        p=1.0,
+    )
+    return transform, {
+        "method": "affine",
+        "size": [width, height],
+        "min_scale": low_scale,
+        "max_scale": high_scale,
+        "max_translate": max_translate,
+        "max_rotate": max_rotate,
+        "max_shear": max_shear,
+        "transform": "Affine",
+    }
+
+
+def _build_safe_crop_transform(
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+    *,
+    has_detections: bool,
+) -> tuple[A.BasicTransform, dict[str, Any]]:
+    method_settings = _method_settings(settings, "safe_crop")
+    erosion_rate = min(max(float(method_settings.get("erosion_rate", 0.0)), 0.0), 1.0)
+    if has_detections:
+        transform: A.BasicTransform = A.RandomSizedBBoxSafeCrop(
+            height=height,
+            width=width,
+            erosion_rate=erosion_rate,
+            interpolation=cv2.INTER_LANCZOS4,
+            mask_interpolation=cv2.INTER_NEAREST,
+            p=1.0,
+        )
+    else:
+        min_scale = min(max(float(method_settings.get("min_scale", 0.75)), 0.05), 1.0)
+        max_scale = min(max(float(method_settings.get("max_scale", 0.95)), 0.05), 1.0)
+        low_scale, high_scale = sorted((min_scale, max_scale))
+        aspect_ratio = width / max(height, 1)
+        transform = A.RandomResizedCrop(
+            size=(height, width),
+            scale=(low_scale, high_scale),
+            ratio=(max(0.05, aspect_ratio * 0.9), aspect_ratio * 1.1),
+            interpolation=cv2.INTER_LANCZOS4,
+            mask_interpolation=cv2.INTER_NEAREST,
+            p=1.0,
+        )
+    return transform, {
+        "method": "safe_crop",
+        "size": [width, height],
+        "erosion_rate": erosion_rate,
+        "bbox_safe": has_detections,
+        "transform": type(transform).__name__,
+    }
+
+
+def _build_target_occlusion_transform(
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+    detection_indices: list[int],
+) -> tuple[A.BasicTransform, dict[str, Any]]:
+    method_settings = _method_settings(settings, "target_occlusion")
+    min_holes = max(1, int(method_settings.get("min_holes", 1)))
+    max_holes = max(1, int(method_settings.get("max_holes", 2)))
+    low_holes, high_holes = sorted((min_holes, max_holes))
+    min_ratio = min(max(float(method_settings.get("min_ratio", 0.18)), 0.01), 1.0)
+    max_ratio = min(max(float(method_settings.get("max_ratio", 0.38)), 0.01), 1.0)
+    low_ratio, high_ratio = sorted((min_ratio, max_ratio))
+    if detection_indices:
+        transform: A.BasicTransform = A.ConstrainedCoarseDropout(
+            num_holes_range=(low_holes, high_holes),
+            hole_height_range=(low_ratio, high_ratio),
+            hole_width_range=(low_ratio, high_ratio),
+            fill="random_uniform",
+            fill_mask=0,
+            bbox_labels=detection_indices,
+            p=1.0,
+        )
+    else:
+        transform = A.CoarseDropout(
+            num_holes_range=(low_holes, high_holes),
+            hole_height_range=(min(low_ratio, 0.08), min(high_ratio, 0.18)),
+            hole_width_range=(min(low_ratio, 0.08), min(high_ratio, 0.18)),
+            fill="random_uniform",
+            fill_mask=0,
+            p=1.0,
+        )
+    return transform, {
+        "method": "target_occlusion",
+        "size": [width, height],
+        "min_holes": low_holes,
+        "max_holes": high_holes,
+        "min_ratio": low_ratio,
+        "max_ratio": high_ratio,
+        "bbox_constrained": bool(detection_indices),
+        "transform": type(transform).__name__,
+    }
+
+
+def _build_lighting_transform(
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+) -> tuple[A.BasicTransform, dict[str, Any]]:
+    method_settings = _method_settings(settings, "lighting")
+    strength = min(max(float(method_settings.get("strength", 0.18)), 0.0), 0.5)
+    gamma_delta = max(1, int(round(strength * 100)))
+    temperature_delta = max(250, int(round(strength * 10_000)))
+    transform = A.OneOf(
+        [
+            A.RandomBrightnessContrast(
+                brightness_limit=strength,
+                contrast_limit=strength,
+                p=0.35,
+            ),
+            A.RandomGamma(
+                gamma_limit=(max(1, 100 - gamma_delta), 100 + gamma_delta),
+                p=0.25,
+            ),
+            A.PlanckianJitter(
+                mode="blackbody",
+                temperature_limit=(
+                    max(3000, 6500 - temperature_delta),
+                    min(15000, 6500 + temperature_delta),
+                ),
+                sampling_method="gaussian",
+                p=0.25,
+            ),
+            A.ColorJitter(
+                brightness=0.0,
+                contrast=0.0,
+                saturation=strength,
+                hue=min(0.05, strength / 4),
+                p=0.15,
+            ),
+        ],
+        p=1.0,
+    )
+    return transform, {
+        "method": "lighting",
+        "size": [width, height],
+        "strength": strength,
+        "transform": "OneOf",
+    }
+
+
+def _build_degradation_transform(
+    settings: dict[str, object] | None,
+    width: int,
+    height: int,
+) -> tuple[A.BasicTransform, dict[str, Any]]:
+    method_settings = _method_settings(settings, "degradation")
+    strength = min(max(float(method_settings.get("strength", 0.5)), 0.0), 1.0)
+    min_quality = max(25, int(round(90 - 50 * strength)))
+    min_downscale = max(0.25, 1.0 - 0.7 * strength)
+    max_downscale = max(min_downscale, 1.0 - 0.2 * strength)
+    max_blur_kernel = 3 + 2 * max(1, int(round(strength * 3)))
+    max_defocus_radius = max(2, 2 + int(round(strength * 6)))
+    transform = A.OneOf(
+        [
+            A.ImageCompression(
+                compression_type="jpeg",
+                quality_range=(min_quality, 95),
+                p=0.3,
+            ),
+            A.Downscale(
+                scale_range=(min_downscale, max_downscale),
+                interpolation_pair={
+                    "downscale": cv2.INTER_AREA,
+                    "upscale": cv2.INTER_LINEAR,
+                },
+                p=0.25,
+            ),
+            A.MotionBlur(blur_limit=(3, max_blur_kernel), p=0.2),
+            A.Defocus(radius=(2, max_defocus_radius), alias_blur=(0.1, 0.4), p=0.1),
+            A.GaussNoise(
+                std_range=(0.01, 0.02 + 0.08 * strength),
+                mean_range=(0.0, 0.0),
+                per_channel=True,
+                p=0.15,
+            ),
+        ],
+        p=1.0,
+    )
+    return transform, {
+        "method": "degradation",
+        "size": [width, height],
+        "strength": strength,
+        "transform": "OneOf",
+    }
 
 
 def _build_augmentation_transform(
@@ -419,12 +868,69 @@ def _filter_occluded_detections(
     return filtered
 
 
+def _applied_methods_from_replay(replay: dict[str, Any]) -> list[str]:
+    applied_methods: list[str] = []
+
+    def collect(transform: dict[str, Any]) -> None:
+        nested = transform.get("transforms")
+        if isinstance(nested, list):
+            for child in nested:
+                if isinstance(child, dict):
+                    collect(child)
+            return
+        if not transform.get("applied"):
+            return
+        class_name = str(transform.get("__class_fullname__", "")).rsplit(".", 1)[-1]
+        method = APPLIED_METHOD_BY_TRANSFORM.get(class_name)
+        if method and method not in applied_methods:
+            applied_methods.append(method)
+
+    for transform in replay.get("transforms", []):
+        if isinstance(transform, dict):
+            collect(transform)
+    return applied_methods
+
+
+def _replay_has_applied_dropout(replay: dict[str, Any]) -> bool:
+    def contains(transform: dict[str, Any]) -> bool:
+        class_name = str(transform.get("__class_fullname__", "")).rsplit(".", 1)[-1]
+        if transform.get("applied") and class_name.endswith("CoarseDropout"):
+            return True
+        nested = transform.get("transforms")
+        return isinstance(nested, list) and any(
+            contains(child) for child in nested if isinstance(child, dict)
+        )
+
+    return any(
+        contains(transform)
+        for transform in replay.get("transforms", [])
+        if isinstance(transform, dict)
+    )
+
+
 def _replay_without_occlusion(replay: dict[str, Any]) -> dict[str, Any]:
     alpha_replay = copy.deepcopy(replay)
-    for transform in alpha_replay.get("transforms", []):
+
+    def remove_dropout(transform: dict[str, Any]) -> bool:
         if str(transform.get("__class_fullname__", "")).endswith("CoarseDropout"):
             transform["applied"] = False
             transform["params"] = None
+            return False
+        nested = transform.get("transforms")
+        if isinstance(nested, list):
+            nested_states = [
+                remove_dropout(child) for child in nested if isinstance(child, dict)
+            ]
+            nested_applied = any(nested_states)
+            if transform.get("applied") and not nested_applied:
+                transform["applied"] = False
+                transform["params"] = None
+            return bool(transform.get("applied"))
+        return bool(transform.get("applied"))
+
+    for transform in alpha_replay.get("transforms", []):
+        if isinstance(transform, dict):
+            remove_dropout(transform)
     return alpha_replay
 
 

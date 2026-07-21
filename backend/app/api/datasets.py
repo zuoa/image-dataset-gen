@@ -869,6 +869,7 @@ def create_augmentation_task(dataset_id: str):
         categories=dataset.categories,
         config_json={
             "augmentation": {
+                "policyVersion": action["augmentation_policy_version"],
                 "multiplier": action["multiplier"],
                 "methods": action["augmentation_methods"],
                 "settings": action["augmentation_settings"],

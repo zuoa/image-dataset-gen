@@ -467,6 +467,7 @@ def _run_augmentation_task(self, task_id: str) -> None:
     total_to_create = max(0, int(augmentation.get("totalImagesToCreate", 0)))
     methods = [str(method) for method in augmentation.get("methods", [])]
     settings = augmentation.get("settings") if isinstance(augmentation.get("settings"), dict) else {}
+    policy_version = max(1, int(augmentation.get("policyVersion", 1)))
     storage_root = current_app.config["STORAGE_ROOT"]
 
     while True:
@@ -536,6 +537,7 @@ def _run_augmentation_task(self, task_id: str) -> None:
             augmentation_seed,
             settings,
             detections=source_detections,
+            policy_version=policy_version,
         )
         if augmented is None:
             augmentation["status"] = "failed"

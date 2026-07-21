@@ -1773,6 +1773,7 @@ def test_augmentation_task_uses_source_snapshot_after_selection_changes(tmp_path
     task_payload = response.get_json()["task"]
     task_id = task_payload["id"]
     assert "sourceImageIds" not in task_payload["config"]["augmentation"]
+    assert task_payload["config"]["augmentation"]["policyVersion"] == 1
 
     with app.app_context():
         source_image = db.session.get(DatasetImage, source_image_id)
@@ -1871,8 +1872,11 @@ def test_augmentation_inherits_transformed_annotations(tmp_path: Path):
         headers=headers,
         json={
             "multiplier": 2,
+            "augmentation_policy_version": 2,
             "augmentation_methods": ["flip"],
-            "augmentation_settings": {"flip": {"mode": "horizontal"}},
+            "augmentation_settings": {
+                "flip": {"mode": "horizontal", "probability": 1}
+            },
         },
     )
 

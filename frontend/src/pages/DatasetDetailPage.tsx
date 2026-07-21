@@ -85,11 +85,32 @@ const { Text } = Typography;
 
 const defaultAugmentationMethods: AugmentationMethod[] = [
   "flip",
-  "color_jitter",
-  "blur",
+  "affine",
+  "safe_crop",
+  "target_occlusion",
+  "lighting",
+  "degradation",
 ];
 const defaultAugmentationSettings: AugmentationSettings = {
-  flip: { mode: "random" },
+  flip: { mode: "horizontal", probability: 0.5 },
+  affine: {
+    min_scale: 0.85,
+    max_scale: 1.15,
+    max_translate: 0.04,
+    max_rotate: 8,
+    max_shear: 3,
+    probability: 0.55,
+  },
+  safe_crop: { erosion_rate: 0, probability: 0.3 },
+  target_occlusion: {
+    min_holes: 1,
+    max_holes: 2,
+    min_ratio: 0.18,
+    max_ratio: 0.38,
+    probability: 0.3,
+  },
+  lighting: { strength: 0.18, probability: 0.55 },
+  degradation: { strength: 0.5, probability: 0.35 },
   rotate: { max_angle: 8 },
   crop: { min_scale: 0.82, max_scale: 0.94 },
   color_jitter: { strength: 0.18 },

@@ -6,17 +6,22 @@ import type {
   AugmentationSettings,
 } from "../../lib/types";
 
-const augmentationOptions: Array<{ value: AugmentationMethod; label: string }> =
-  [
-    { value: "flip", label: "翻转" },
-    { value: "rotate", label: "旋转" },
-    { value: "crop", label: "裁切" },
-    { value: "color_jitter", label: "颜色抖动" },
-    { value: "blur", label: "模糊" },
-    { value: "noise", label: "噪声" },
-    { value: "occlusion", label: "遮挡" },
-    { value: "perspective", label: "透视" },
-  ];
+const augmentationOptions: Array<{
+  value: AugmentationMethod;
+  label: string;
+  description: string;
+}> = [
+  { value: "flip", label: "水平翻转", description: "学习左右方向不变性" },
+  { value: "affine", label: "仿射变化", description: "缩放、平移、旋转和轻微剪切" },
+  { value: "safe_crop", label: "目标安全裁切", description: "裁切时同步保护检测框" },
+  { value: "target_occlusion", label: "目标内遮挡", description: "优先在目标框内模拟遮挡" },
+  { value: "lighting", label: "真实光照", description: "曝光、Gamma、饱和度和色温" },
+  { value: "degradation", label: "成像退化", description: "压缩、低清、噪声、运动与失焦" },
+];
+
+function formatProbability(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
 
 interface AugmentationModalProps {
   open: boolean;
@@ -118,6 +123,18 @@ export function AugmentationModal({
             </Button>
           ))}
         </Space>
+        <div className="mt-3 grid gap-2 text-xs text-neutral-500 sm:grid-cols-2">
+          {augmentationOptions
+            .filter((option) => augmentationMethods.includes(option.value))
+            .map((option) => (
+              <div key={option.value}>
+                <span className="font-medium text-neutral-700 dark:text-neutral-300">
+                  {option.label}
+                </span>
+                ：{option.description}
+              </div>
+            ))}
+        </div>
       </div>
 
       {augmentationMethods.length > 0 ? (
@@ -137,134 +154,201 @@ export function AugmentationModal({
                       type={
                         augmentationSettings.flip.mode === mode ? "primary" : "default"
                       }
-                      onClick={() => updateSettings({ flip: { mode } })}
+                      onClick={() =>
+                        updateSettings({
+                          flip: { ...augmentationSettings.flip, mode },
+                        })
+                      }
                     >
                       {mode === "random" ? "随机" : mode === "horizontal" ? "水平" : "垂直"}
                     </Button>
                   ))}
                 </Space>
-              </Col>
-            ) : null}
-
-            {augmentationMethods.includes("rotate") ? (
-              <Col xs={24} md={12}>
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>最大旋转角度</span>
-                  <span className="text-neutral-400">{augmentationSettings.rotate.max_angle}°</span>
+                <div className="mt-3 flex items-center justify-between text-sm font-medium">
+                  <span>执行概率</span>
+                  <span className="text-neutral-400">
+                    {formatProbability(augmentationSettings.flip.probability)}
+                  </span>
                 </div>
                 <Slider
                   min={0}
-                  max={20}
-                  step={0.5}
-                  value={augmentationSettings.rotate.max_angle}
-                  onChange={(value) => updateSettings({ rotate: { max_angle: value } })}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.flip.probability}
+                  onChange={(value) =>
+                    updateSettings({
+                      flip: { ...augmentationSettings.flip, probability: value },
+                    })
+                  }
                 />
               </Col>
             ) : null}
 
-            {augmentationMethods.includes("crop") ? (
-              <Col xs={24} md={12}>
+            {augmentationMethods.includes("affine") ? (
+              <Col xs={24}>
                 <div className="text-sm font-medium">
-                  裁切范围{" "}
+                  仿射缩放范围{" "}
                   <span className="text-neutral-400">
-                    {augmentationSettings.crop.min_scale} –{" "}
-                    {augmentationSettings.crop.max_scale}
+                    {augmentationSettings.affine.min_scale} –{" "}
+                    {augmentationSettings.affine.max_scale}
                   </span>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="grid grid-cols-2 gap-4">
                   <Slider
-                    min={0.6}
-                    max={0.98}
+                    min={0.7}
+                    max={1}
                     step={0.01}
-                    value={augmentationSettings.crop.min_scale}
+                    value={augmentationSettings.affine.min_scale}
                     onChange={(value) =>
                       updateSettings({
-                        crop: { ...augmentationSettings.crop, min_scale: value },
+                        affine: { ...augmentationSettings.affine, min_scale: value },
                       })
                     }
                   />
                   <Slider
-                    min={0.6}
-                    max={0.99}
+                    min={1}
+                    max={1.3}
                     step={0.01}
-                    value={augmentationSettings.crop.max_scale}
+                    value={augmentationSettings.affine.max_scale}
                     onChange={(value) =>
                       updateSettings({
-                        crop: { ...augmentationSettings.crop, max_scale: value },
+                        affine: { ...augmentationSettings.affine, max_scale: value },
                       })
                     }
                   />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-4">
+                  <div>
+                    <div className="flex justify-between text-xs">
+                      <span>平移</span>
+                      <span>{augmentationSettings.affine.max_translate}</span>
+                    </div>
+                    <Slider
+                      min={0}
+                      max={0.1}
+                      step={0.005}
+                      value={augmentationSettings.affine.max_translate}
+                      onChange={(value) =>
+                        updateSettings({
+                          affine: { ...augmentationSettings.affine, max_translate: value },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs">
+                      <span>旋转</span>
+                      <span>{augmentationSettings.affine.max_rotate}°</span>
+                    </div>
+                    <Slider
+                      min={0}
+                      max={20}
+                      step={0.5}
+                      value={augmentationSettings.affine.max_rotate}
+                      onChange={(value) =>
+                        updateSettings({
+                          affine: { ...augmentationSettings.affine, max_rotate: value },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs">
+                      <span>剪切</span>
+                      <span>{augmentationSettings.affine.max_shear}°</span>
+                    </div>
+                    <Slider
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      value={augmentationSettings.affine.max_shear}
+                      onChange={(value) =>
+                        updateSettings({
+                          affine: { ...augmentationSettings.affine, max_shear: value },
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs">
+                      <span>执行概率</span>
+                      <span>{formatProbability(augmentationSettings.affine.probability)}</span>
+                    </div>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={augmentationSettings.affine.probability}
+                      onChange={(value) =>
+                        updateSettings({
+                          affine: { ...augmentationSettings.affine, probability: value },
+                        })
+                      }
+                    />
+                  </div>
                 </div>
               </Col>
             ) : null}
 
-            {augmentationMethods.includes("color_jitter") ? (
+            {augmentationMethods.includes("safe_crop") ? (
               <Col xs={24} md={12}>
                 <div className="flex items-center justify-between text-sm font-medium">
-                  <span>颜色抖动强度</span>
-                  <span className="text-neutral-400">{augmentationSettings.color_jitter.strength}</span>
+                  <span>安全裁切执行概率</span>
+                  <span className="text-neutral-400">
+                    {formatProbability(augmentationSettings.safe_crop.probability)}
+                  </span>
                 </div>
                 <Slider
                   min={0}
-                  max={0.4}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.safe_crop.probability}
+                  onChange={(value) =>
+                    updateSettings({
+                      safe_crop: { ...augmentationSettings.safe_crop, probability: value },
+                    })
+                  }
+                />
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>边界侵蚀</span>
+                  <span className="text-neutral-400">
+                    {augmentationSettings.safe_crop.erosion_rate}
+                  </span>
+                </div>
+                <Slider
+                  min={0}
+                  max={0.2}
                   step={0.01}
-                  value={augmentationSettings.color_jitter.strength}
-                  onChange={(value) => updateSettings({ color_jitter: { strength: value } })}
+                  value={augmentationSettings.safe_crop.erosion_rate}
+                  onChange={(value) =>
+                    updateSettings({
+                      safe_crop: { ...augmentationSettings.safe_crop, erosion_rate: value },
+                    })
+                  }
                 />
+                <div className="text-xs text-neutral-400">设为 0 时完整保留所有检测框。</div>
               </Col>
             ) : null}
 
-            {augmentationMethods.includes("blur") ? (
-              <Col xs={24} md={12}>
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>最大模糊半径</span>
-                  <span className="text-neutral-400">{augmentationSettings.blur.max_radius}</span>
-                </div>
-                <Slider
-                  min={0}
-                  max={4}
-                  step={0.1}
-                  value={augmentationSettings.blur.max_radius}
-                  onChange={(value) => updateSettings({ blur: { max_radius: value } })}
-                />
-              </Col>
-            ) : null}
-
-            {augmentationMethods.includes("noise") ? (
-              <Col xs={24} md={12}>
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>最大噪声强度</span>
-                  <span className="text-neutral-400">{augmentationSettings.noise.max_sigma}</span>
-                </div>
-                <Slider
-                  min={0}
-                  max={40}
-                  step={1}
-                  value={augmentationSettings.noise.max_sigma}
-                  onChange={(value) => updateSettings({ noise: { max_sigma: value } })}
-                />
-              </Col>
-            ) : null}
-
-            {augmentationMethods.includes("occlusion") ? (
+            {augmentationMethods.includes("target_occlusion") ? (
               <Col xs={24} md={12}>
                 <div className="text-sm font-medium">
-                  遮挡比例{" "}
+                  目标内遮挡比例{" "}
                   <span className="text-neutral-400">
-                    {augmentationSettings.occlusion.min_ratio} –{" "}
-                    {augmentationSettings.occlusion.max_ratio}
+                    {augmentationSettings.target_occlusion.min_ratio} –{" "}
+                    {augmentationSettings.target_occlusion.max_ratio}
                   </span>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="grid grid-cols-2 gap-4">
                   <Slider
                     min={0.05}
-                    max={0.35}
+                    max={0.5}
                     step={0.01}
-                    value={augmentationSettings.occlusion.min_ratio}
+                    value={augmentationSettings.target_occlusion.min_ratio}
                     onChange={(value) =>
                       updateSettings({
-                        occlusion: {
-                          ...augmentationSettings.occlusion,
+                        target_occlusion: {
+                          ...augmentationSettings.target_occlusion,
                           min_ratio: value,
                         },
                       })
@@ -272,34 +356,115 @@ export function AugmentationModal({
                   />
                   <Slider
                     min={0.05}
-                    max={0.4}
+                    max={0.6}
                     step={0.01}
-                    value={augmentationSettings.occlusion.max_ratio}
+                    value={augmentationSettings.target_occlusion.max_ratio}
                     onChange={(value) =>
                       updateSettings({
-                        occlusion: {
-                          ...augmentationSettings.occlusion,
+                        target_occlusion: {
+                          ...augmentationSettings.target_occlusion,
                           max_ratio: value,
                         },
                       })
                     }
                   />
                 </div>
-              </Col>
-            ) : null}
-
-            {augmentationMethods.includes("perspective") ? (
-              <Col xs={24} md={12}>
                 <div className="flex items-center justify-between text-sm font-medium">
-                  <span>最大透视畸变</span>
-                  <span className="text-neutral-400">{augmentationSettings.perspective.max_warp}</span>
+                  <span>执行概率</span>
+                  <span className="text-neutral-400">
+                    {formatProbability(augmentationSettings.target_occlusion.probability)}
+                  </span>
                 </div>
                 <Slider
                   min={0}
-                  max={0.15}
-                  step={0.005}
-                  value={augmentationSettings.perspective.max_warp}
-                  onChange={(value) => updateSettings({ perspective: { max_warp: value } })}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.target_occlusion.probability}
+                  onChange={(value) =>
+                    updateSettings({
+                      target_occlusion: {
+                        ...augmentationSettings.target_occlusion,
+                        probability: value,
+                      },
+                    })
+                  }
+                />
+              </Col>
+            ) : null}
+
+            {augmentationMethods.includes("lighting") ? (
+              <Col xs={24} md={12}>
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>光照变化强度</span>
+                  <span className="text-neutral-400">{augmentationSettings.lighting.strength}</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={0.4}
+                  step={0.01}
+                  value={augmentationSettings.lighting.strength}
+                  onChange={(value) =>
+                    updateSettings({
+                      lighting: { ...augmentationSettings.lighting, strength: value },
+                    })
+                  }
+                />
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>执行概率</span>
+                  <span className="text-neutral-400">
+                    {formatProbability(augmentationSettings.lighting.probability)}
+                  </span>
+                </div>
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.lighting.probability}
+                  onChange={(value) =>
+                    updateSettings({
+                      lighting: { ...augmentationSettings.lighting, probability: value },
+                    })
+                  }
+                />
+              </Col>
+            ) : null}
+
+            {augmentationMethods.includes("degradation") ? (
+              <Col xs={24} md={12}>
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>成像退化强度</span>
+                  <span className="text-neutral-400">{augmentationSettings.degradation.strength}</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.degradation.strength}
+                  onChange={(value) =>
+                    updateSettings({
+                      degradation: { ...augmentationSettings.degradation, strength: value },
+                    })
+                  }
+                />
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>执行概率</span>
+                  <span className="text-neutral-400">
+                    {formatProbability(augmentationSettings.degradation.probability)}
+                  </span>
+                </div>
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={augmentationSettings.degradation.probability}
+                  onChange={(value) =>
+                    updateSettings({
+                      degradation: {
+                        ...augmentationSettings.degradation,
+                        probability: value,
+                      },
+                    })
+                  }
                 />
               </Col>
             ) : null}

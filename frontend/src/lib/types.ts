@@ -2,6 +2,11 @@ export type ProviderId = "gemini" | "jimeng" | "stability" | "custom";
 export type ModelProfileType = "image" | "llm";
 export type AugmentationMethod =
   | "flip"
+  | "affine"
+  | "safe_crop"
+  | "target_occlusion"
+  | "lighting"
+  | "degradation"
   | "rotate"
   | "crop"
   | "color_jitter"
@@ -11,7 +16,28 @@ export type AugmentationMethod =
   | "perspective";
 
 export type AugmentationSettings = {
-  flip: { mode: "random" | "horizontal" | "vertical" };
+  flip: {
+    mode: "random" | "horizontal" | "vertical";
+    probability: number;
+  };
+  affine: {
+    min_scale: number;
+    max_scale: number;
+    max_translate: number;
+    max_rotate: number;
+    max_shear: number;
+    probability: number;
+  };
+  safe_crop: { erosion_rate: number; probability: number };
+  target_occlusion: {
+    min_holes: number;
+    max_holes: number;
+    min_ratio: number;
+    max_ratio: number;
+    probability: number;
+  };
+  lighting: { strength: number; probability: number };
+  degradation: { strength: number; probability: number };
   rotate: { max_angle: number };
   crop: { min_scale: number; max_scale: number };
   color_jitter: { strength: number };
@@ -209,6 +235,7 @@ export type DatasetTask = {
       updatedAt?: string;
     };
     augmentation?: {
+      policyVersion?: number;
       multiplier: number;
       methods: AugmentationMethod[];
       settings?: AugmentationSettingsPatch;
