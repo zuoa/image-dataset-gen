@@ -46,14 +46,14 @@ const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
 const seriesDefinitions: SeriesDefinition[] = [
   {
     key: "precision",
-    label: "Precision",
+    label: "精确率",
     color: "#30343a",
     group: "quality",
     matches: (header) => header.includes("precision"),
   },
   {
     key: "recall",
-    label: "Recall",
+    label: "召回率",
     color: "#626871",
     group: "quality",
     matches: (header) => header.includes("recall"),
@@ -74,42 +74,42 @@ const seriesDefinitions: SeriesDefinition[] = [
   },
   {
     key: "train_box_loss",
-    label: "Train box",
+    label: "训练集 · 边框",
     color: "#34383e",
     group: "loss",
     matches: (header) => header.includes("trainboxloss"),
   },
   {
     key: "train_cls_loss",
-    label: "Train cls",
+    label: "训练集 · 分类",
     color: "#555b63",
     group: "loss",
     matches: (header) => header.includes("trainclsloss"),
   },
   {
     key: "train_dfl_loss",
-    label: "Train dfl",
+    label: "训练集 · DFL",
     color: "#737981",
     group: "loss",
     matches: (header) => header.includes("traindflloss"),
   },
   {
     key: "val_box_loss",
-    label: "Val box",
+    label: "验证集 · 边框",
     color: "#8b929a",
     group: "loss",
     matches: (header) => header.includes("valboxloss"),
   },
   {
     key: "val_cls_loss",
-    label: "Val cls",
+    label: "验证集 · 分类",
     color: "#566c70",
     group: "loss",
     matches: (header) => header.includes("valclsloss"),
   },
   {
     key: "val_dfl_loss",
-    label: "Val dfl",
+    label: "验证集 · DFL",
     color: "#7d8884",
     group: "loss",
     matches: (header) => header.includes("valdflloss"),
@@ -174,17 +174,17 @@ export function TrainingResultsPanel({ job }: TrainingResultsPanelProps) {
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
             <LineChart className="h-4 w-4" />
-            result.csv
+            训练趋势
           </div>
-          <h4 className="mt-2 text-xl text-neutral-900 dark:text-white">训练结果曲线</h4>
+          <h4 className="mt-2 text-xl text-neutral-900 dark:text-white">训练结果</h4>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-500 dark:text-neutral-400">
             {parsedResults
-              ? `已解析 ${parsedResults.rowCount} 个 epoch，来自 ${resultArtifact?.filename ?? "results.csv"}。`
+              ? `已读取 ${parsedResults.rowCount} 轮训练数据，可以查看模型表现的变化。`
               : resultArtifact
-                ? `正在读取 ${resultArtifact.filename}。`
+                ? "正在读取训练结果。"
                 : activeTrainingStatuses.has(job.status)
-                  ? "训练完成并上传结果文件后，这里会显示 mAP、Precision、Recall 和 Loss 曲线。"
-                  : "没有找到 result.csv 或 results.csv 训练产物。"}
+                  ? "训练完成后，这里会显示 mAP、精确率、召回率和损失值的变化。"
+                  : "当前没有可用的训练结果。"}
           </p>
         </div>
 
@@ -200,16 +200,22 @@ export function TrainingResultsPanel({ job }: TrainingResultsPanelProps) {
       </div>
 
       {isLoading ? (
-        <TrainingResultsMessage>正在解析训练结果文件...</TrainingResultsMessage>
+        <TrainingResultsMessage>正在读取训练结果…</TrainingResultsMessage>
       ) : error ? (
-        <TrainingResultsMessage tone="error">读取 result.csv 失败：{error}</TrainingResultsMessage>
+        <TrainingResultsMessage tone="error">
+          <div>无法读取训练结果，请稍后重试。</div>
+          <details className="mt-2 text-xs">
+            <summary className="cursor-pointer select-none">查看技术详情</summary>
+            <div className="mt-2 break-words font-mono">{error}</div>
+          </details>
+        </TrainingResultsMessage>
       ) : !resultArtifact ? (
         <TrainingResultsMessage>
-          worker 上传 `results.csv` 后会自动读取；也可以继续使用上方产物按钮下载原始文件。
+          训练完成后会自动显示结果；也可以使用上方按钮下载原始训练文件。
         </TrainingResultsMessage>
       ) : parsedResults && !hasChartData ? (
         <TrainingResultsMessage>
-          文件已读取，但没有找到可绘制的 Ultralytics 指标列。
+          已读取训练结果，但其中没有可显示的指标数据。
         </TrainingResultsMessage>
       ) : parsedResults ? (
         <Row gutter={[16, 16]} className="mt-5">
@@ -223,7 +229,7 @@ export function TrainingResultsPanel({ job }: TrainingResultsPanelProps) {
           </Col>
           <Col xs={24} xl={12}>
             <TrainingLineChart
-              title="Loss"
+              title="损失值"
               subtitle={formatEpochRange(parsedResults)}
               series={parsedResults.lossSeries}
             />
@@ -558,9 +564,9 @@ function formatChartNumber(value: number | null) {
 }
 
 function formatEpochRange(results: ParsedTrainingResults) {
-  if (results.firstEpoch === null || results.lastEpoch === null) return "Epoch --";
-  if (results.firstEpoch === results.lastEpoch) return `Epoch ${formatEpochLabel(results.lastEpoch)}`;
-  return `Epoch ${formatEpochLabel(results.firstEpoch)} - ${formatEpochLabel(results.lastEpoch)}`;
+  if (results.firstEpoch === null || results.lastEpoch === null) return "训练轮次未知";
+  if (results.firstEpoch === results.lastEpoch) return `第 ${formatEpochLabel(results.lastEpoch)} 轮`;
+  return `第 ${formatEpochLabel(results.firstEpoch)}–${formatEpochLabel(results.lastEpoch)} 轮`;
 }
 
 function formatEpochLabel(value: number) {

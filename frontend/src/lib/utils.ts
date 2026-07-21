@@ -46,3 +46,34 @@ export function formatProviderLabel(providerId: string) {
   if (providerId === "custom") return "Custom Adapter";
   return providerId;
 }
+
+export function formatImageSourceLabel(sourceType: string) {
+  const labels: Record<string, string> = {
+    generation: "AI 生成",
+    augmentation: "数据增强",
+    import: "文件导入",
+    video: "视频导入",
+    roboflow: "Roboflow 导入",
+  };
+  return labels[sourceType] ?? "其他来源";
+}
+
+export function formatAnnotationStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending: "未标注",
+    unannotated: "未标注",
+    annotated: "已标注",
+    empty: "空标注",
+  };
+  return labels[status] ?? "状态未知";
+}
+
+export function formatDatasetSplitLabel(split: string) {
+  const labels: Record<string, string> = {
+    train: "训练集",
+    val: "验证集",
+    test: "测试集",
+    unselected: "不保留",
+  };
+  return labels[split] ?? "未划分";
+}

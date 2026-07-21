@@ -4,7 +4,7 @@ import type { MutableRefObject } from "react";
 
 import { AuthImage } from "../AuthImage";
 import type { DatasetImage } from "../../lib/types";
-import { cn } from "../../lib/utils";
+import { cn, formatImageSourceLabel } from "../../lib/utils";
 import type { AnnotationFilter } from "./types";
 
 interface AnnotationQueuePanelProps {
@@ -160,7 +160,7 @@ export function AnnotationQueuePanel({
                   {annotationStatusLabel(image.annotationStatus)}
                 </span>
                 <span className="mt-0.5 block truncate text-[10px] text-neutral-400">
-                  {image.selected ? "已保留" : image.sourceType}
+                  {image.selected ? "已保留" : formatImageSourceLabel(image.sourceType)}
                 </span>
               </span>
             </button>

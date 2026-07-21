@@ -50,7 +50,7 @@ export function ZipImportForm({
           loading={isImportingZip}
           icon={isImportingZip ? undefined : <Upload className="h-4 w-4" />}
         >
-          {isImportingZip ? "导入中..." : "选择 ZIP"}
+          {isImportingZip ? "正在导入…" : "选择 ZIP"}
         </Button>
       </div>
 

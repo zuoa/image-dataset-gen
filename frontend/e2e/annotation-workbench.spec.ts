@@ -434,7 +434,10 @@ test("save and next loads the next pending image when the saved image leaves the
   await page.goto("/datasets/demo/annotate");
 
   const queue = page.getByRole("region", { name: "标注队列" });
-  await queue.getByRole("radio", { name: "待处理 101" }).click();
+  await queue
+    .getByRole("radiogroup", { name: "筛选标注队列" })
+    .getByText("待处理", { exact: true })
+    .click();
   await expect(queue.getByText("101 张待处理", { exact: true })).toBeVisible();
   const image100Button = queue.locator("button").filter({ hasText: "#100" });
   await expect(image100Button).toBeAttached();

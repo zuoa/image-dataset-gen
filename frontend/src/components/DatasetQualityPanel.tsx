@@ -152,7 +152,7 @@ export function DatasetQualityPanel({
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
             <Microscope className="h-4 w-4" />
-            Quality loop
+            质量检查
           </div>
           <Typography.Title level={3} className="mt-2 !text-2xl">
             数据与模型质量
@@ -209,7 +209,7 @@ export function DatasetQualityPanel({
             <div className="flex items-center justify-between gap-3">
               <div className="text-sm font-medium">主要问题</div>
               {dataRun?.supervisionVersion ? (
-                <Tag bordered>Supervision {dataRun.supervisionVersion}</Tag>
+                <Tag bordered>检查引擎 {dataRun.supervisionVersion}</Tag>
               ) : null}
             </div>
             <List

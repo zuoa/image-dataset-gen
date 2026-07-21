@@ -10,13 +10,13 @@ export function DatasetMetrics({ dataset }: DatasetMetricsProps) {
     ? Math.round((dataset.selectedCount / dataset.imageCount) * 100)
     : 0;
   const metrics = [
-    { label: "全部样本", value: dataset.imageCount, hint: "当前样本池" },
+    { label: "全部图片", value: dataset.imageCount, hint: "当前数据集" },
     {
       label: "保留样本",
       value: dataset.selectedCount,
       hint: `${retainedPercent}% 可用于训练`,
     },
-    { label: "批次任务", value: dataset.taskCount, hint: "累计运行" },
+    { label: "任务记录", value: dataset.taskCount, hint: "累计创建" },
     { label: "累计成本", value: formatCurrency(dataset.spentCost), hint: "生成消耗" },
   ];
 

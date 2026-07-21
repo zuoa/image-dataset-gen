@@ -66,9 +66,9 @@ export function TrainingForm({
     <div>
       <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
         <Cpu className="h-4 w-4" />
-        YOLOv8 Training
+        YOLOv8 模型训练
       </div>
-      <div className="mt-2 text-2xl">训练 worker</div>
+      <div className="mt-2 text-2xl">训练参数</div>
 
       <Row gutter={[12, 12]} className="mt-6">
         <Col xs={24} md={12} lg={8} xl={8}>
@@ -79,7 +79,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={24} md={12} lg={8} xl={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Epochs</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">训练轮数</div>
           <Input
             type="number"
             min={1}
@@ -89,7 +89,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={24} md={12} lg={8} xl={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Image</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">输入尺寸</div>
           <Input
             type="number"
             min={64}
@@ -100,7 +100,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={24} md={12} lg={8} xl={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Batch</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">每批图片数</div>
           <Input
             type="number"
             min={1}
@@ -112,7 +112,7 @@ export function TrainingForm({
       </Row>
 
       <div className="mt-4">
-        <div className="mb-2 text-xs uppercase tracking-[0.18em] text-neutral-500">Classes</div>
+        <div className="mb-2 text-xs uppercase tracking-[0.18em] text-neutral-500">训练类别</div>
         <Space wrap size="small">
           <Button
             size="small"
@@ -136,7 +136,7 @@ export function TrainingForm({
 
       <Row gutter={[12, 12]} className="mt-4">
         <Col xs={12} md={6} lg={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Patience</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500" title="指标连续多少轮没有改善后提前停止">提前停止等待轮数</div>
           <Input
             type="number"
             min={0}
@@ -146,7 +146,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={12} md={6} lg={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Dropout</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500" title="训练时随机忽略部分特征的比例">随机失活比例</div>
           <Input
             type="number"
             min={0}
@@ -157,7 +157,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={12} md={6} lg={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Mixup</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500" title="混合两张训练图片的比例">混合增强比例</div>
           <Input
             type="number"
             min={0}
@@ -168,7 +168,7 @@ export function TrainingForm({
           />
         </Col>
         <Col xs={12} md={6} lg={4}>
-          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500">Weight decay</div>
+          <div className="mb-1 text-xs uppercase tracking-[0.18em] text-neutral-500" title="用于抑制模型过拟合的正则化强度">权重衰减</div>
           <Input
             type="number"
             min={0}

@@ -47,13 +47,13 @@ export function AnnotationModal({
       width={600}
     >
       <p className="mb-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-        对当前数据集样本池执行自动标注，结果会直接写入每张图片的标注信息。
+        AI 将识别图片中的目标并生成检测框，完成后可以继续复核和修改。
       </p>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={14}>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-            置信度阈值
+            最低置信度
           </div>
           <Input
             type="number"
@@ -76,7 +76,7 @@ export function AnnotationModal({
                 ? "运行中"
                 : annotationStatus === "completed"
                   ? "已完成"
-                  : "待执行"}
+                  : "尚未开始"}
             </div>
           </Card>
         </Col>

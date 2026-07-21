@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Activity, Cpu, RefreshCw, Server, Wifi, WifiOff, Zap } from "lucide-react";
 import {
-  Alert,
   Button,
   Card,
   Col,
@@ -17,6 +16,7 @@ import {
 
 import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { useWorkers } from "../hooks/useWorkers";
 import type { TrainingWorker, TrainingWorkerSummary } from "../lib/types";
 import { cn, formatDate } from "../lib/utils";
@@ -37,7 +37,7 @@ function stringList(value: unknown): string[] {
 }
 
 function heartbeatLabel(worker: TrainingWorker) {
-  if (!worker.lastHeartbeatAt || worker.heartbeatAgeSeconds == null) return "从未收到心跳";
+  if (!worker.lastHeartbeatAt || worker.heartbeatAgeSeconds == null) return "尚未连接";
   const seconds = Math.max(0, worker.heartbeatAgeSeconds);
   if (seconds < 5) return "刚刚收到";
   if (seconds < 60) return `${seconds} 秒前`;
@@ -104,11 +104,11 @@ function WorkerCard({ worker }: { worker: TrainingWorker }) {
               <Typography.Text className="mt-1 block font-mono text-sm">{runtime}</Typography.Text>
             </Col>
             <Col span={12}>
-              <Typography.Text className="block text-xs text-neutral-400">Trainer 版本</Typography.Text>
+              <Typography.Text className="block text-xs text-neutral-400">训练程序版本</Typography.Text>
               <Typography.Text className="mt-1 block font-mono text-sm">{worker.version || "未知"}</Typography.Text>
             </Col>
             <Col span={24}>
-              <Typography.Text className="block text-xs text-neutral-400">当前训练任务</Typography.Text>
+              <Typography.Text className="block text-xs text-neutral-400">当前任务编号</Typography.Text>
               <Typography.Text className="mt-1 block truncate font-mono text-sm">
                 {worker.currentJobId || (worker.isOnline ? "无" : "状态未知")}
               </Typography.Text>
@@ -120,7 +120,7 @@ function WorkerCard({ worker }: { worker: TrainingWorker }) {
           <div className="border-t border-neutral-200 pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0 dark:border-white/10">
             <div className="flex items-center gap-2 text-xs text-neutral-500">
               {worker.isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-              最近心跳
+              最后在线
             </div>
             <Typography.Text className="mt-2 block text-sm font-medium">
               {heartbeatLabel(worker)}
@@ -165,11 +165,11 @@ export function TrainerFleetPage() {
         <PageHeader
           eyebrow={
             <span className="inline-flex items-center gap-2">
-              <Activity className="h-3.5 w-3.5" /> Trainer Fleet
+              <Activity className="h-3.5 w-3.5" /> 训练设备
             </span>
           }
-          title="训练节点"
-          description="查看已连接到 Forge 的 trainer、当前工作状态和最近心跳。页面每 10 秒自动更新。"
+          title="训练设备"
+          description="查看哪些训练设备可以使用，以及它们当前正在执行的任务。状态每 10 秒更新。"
           actions={
             <Button
               icon={<RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />}
@@ -186,7 +186,7 @@ export function TrainerFleetPage() {
           <Row gutter={[24, 24]} className="relative" align="middle">
             <Col xs={24} lg={6}>
               <Typography.Text className="block font-mono text-[11px] uppercase tracking-[0.22em] text-white/55">
-                Live signal
+                在线设备
               </Typography.Text>
               <div className="mt-2 flex items-baseline gap-2">
                 <span className="font-mono text-4xl">{summary.online}</span>
@@ -198,7 +198,7 @@ export function TrainerFleetPage() {
             </Col>
 
             <Col xs={24} lg={18}>
-              <div className="space-y-2.5" aria-label="Trainer 心跳信号">
+              <div className="space-y-2.5" aria-label="训练设备在线状态">
                 {workers.slice(0, 8).map((worker) => {
                   const state = workerState(worker);
                   return (
@@ -225,7 +225,7 @@ export function TrainerFleetPage() {
                 })}
                 {workers.length === 0 ? (
                   <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-white/10 text-sm text-white/40">
-                    等待第一个 trainer 注册
+                    等待训练设备连接
                   </div>
                 ) : null}
               </div>
@@ -236,12 +236,12 @@ export function TrainerFleetPage() {
 
       <Card className="mt-6 shadow-panel">
         <PageHeader
-          eyebrow="Registry"
-          title="已注册节点"
+          eyebrow="设备列表"
+          title="已连接设备"
           description={
             data
-              ? `离线判定：超过 ${data.offlineAfterSeconds} 秒未收到心跳${data?.observedAt ? ` · 更新于 ${formatDate(data.observedAt)}` : ""}`
-              : "正在读取心跳状态"
+              ? `设备超过 ${data.offlineAfterSeconds} 秒未连接将显示为离线${data?.observedAt ? ` · 更新于 ${formatDate(data.observedAt)}` : ""}`
+              : "正在读取设备状态"
           }
           actions={
             <Segmented
@@ -256,11 +256,11 @@ export function TrainerFleetPage() {
         />
 
         {error ? (
-          <Alert
+          <UserFacingError
             className="mb-4"
-            message={`无法更新 trainer 状态：${error.message}`}
-            type="error"
-            showIcon
+            title="无法更新训练设备状态"
+            description="请检查网络连接和训练服务是否正常，然后重试。"
+            error={error}
           />
         ) : null}
 
@@ -273,12 +273,12 @@ export function TrainerFleetPage() {
                 description={
                   <div className="text-center">
                     <Typography.Text className="block text-lg">
-                      {workers.length === 0 ? "还没有 trainer 注册" : "这个状态下没有 trainer"}
+                      {workers.length === 0 ? "还没有训练设备连接" : "没有符合当前条件的设备"}
                     </Typography.Text>
                     <Typography.Text className="mx-auto mt-2 block max-w-md text-sm text-neutral-500">
                       {workers.length === 0
-                        ? "启动 trainer 并连接到当前 Forge API 后，节点会自动出现在这里。"
-                        : "切换筛选条件查看其他已注册节点。"}
+                        ? "请在训练设备上启动训练程序并连接到当前服务。"
+                        : "切换筛选条件查看其他设备。"}
                     </Typography.Text>
                   </div>
                 }

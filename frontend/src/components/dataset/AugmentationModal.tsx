@@ -75,7 +75,7 @@ export function AugmentationModal({
       width={800}
     >
       <p className="mb-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-        增强批次会基于当前保留的原始样本生成新的变体，并自动写回同一个数据集样本池。
+        为已保留的原图生成更多训练图片，完成后会加入当前数据集。
       </p>
 
       <Row gutter={[16, 16]}>
@@ -311,7 +311,7 @@ export function AugmentationModal({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">
-              批次预期
+              预计结果
             </div>
             <div className="mt-1 text-lg">
               预计新增 {selectedOriginalCount * multiplier} 张增强样本

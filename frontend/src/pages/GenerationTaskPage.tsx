@@ -18,6 +18,7 @@ import {
 import { PromptPreviewCard } from "../components/PromptPreviewCard";
 import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { LoadingState } from "../components/common/LoadingState";
 import { useDataset } from "../hooks/useDataset";
 import { useModelProfiles } from "../hooks/useModelProfiles";
@@ -226,9 +227,9 @@ export function GenerationTaskPage() {
   return (
     <PageContainer>
       <PageHeader
-        eyebrow="Generation Batch"
-        title={`在 "${dataset.name}" 中创建生成批次`}
-        description="类别已绑定到当前数据集，批次只负责定义这一次生成要覆盖的主体、镜头、场景和模型配置。"
+        eyebrow="生成图片"
+        title={`为“${dataset.name}”生成图片`}
+        description="选择图片数量、画面、场景和模型，生成结果会自动加入当前数据集。"
         actions={
           <Link to={`/datasets/${dataset.id}`}>
             <Button icon={<ArrowLeft className="h-4 w-4" />}>返回数据集</Button>
@@ -241,7 +242,7 @@ export function GenerationTaskPage() {
           <Card className="shadow-panel">
             <Row gutter={[16, 16]}>
               <Col xs={24}>
-                <FormItem label="批次主体">
+                <FormItem label="要生成的内容">
                   <Input
                     value={draft.subject}
                     onChange={(event) =>
@@ -274,7 +275,7 @@ export function GenerationTaskPage() {
               </Col>
 
               <Col xs={24} md={12}>
-                <FormItem label="CV 任务类型">
+                <FormItem label="数据用途">
                   <Select
                     value={draft.cv_task ?? "detection"}
                     onChange={(value) =>
@@ -443,18 +444,25 @@ export function GenerationTaskPage() {
             </Row>
           </Card>
 
-          {error ? <Alert message={error} type="error" showIcon className="mt-6" /> : null}
+          {error ? (
+            <UserFacingError
+              className="mt-6"
+              title="无法完成图片生成"
+              description="请检查生成内容和模型配置，确认网络连接正常后重试。"
+              error={error}
+            />
+          ) : null}
         </Col>
 
         <Col xs={24} xl={8}>
           <Space direction="vertical" className="w-full" size="large">
             <Card className="shadow-panel">
               <Text className="block text-xs uppercase tracking-[0.2em] text-neutral-500">
-                批次上下文
+                当前数据集
               </Text>
               <Title level={4} className="mt-3 !mb-2 !text-lg">{dataset.name}</Title>
               <Text className="block text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-                当前样本池 {dataset.imageCount}，已选样本 {dataset.selectedCount}，累计批次{" "}
+                当前共有 {dataset.imageCount} 张图片，已保留 {dataset.selectedCount} 张，累计任务{" "}
                 {dataset.taskCount}。
               </Text>
               <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-100 p-4 dark:border-white/10 dark:bg-white/[0.03]">
@@ -466,7 +474,7 @@ export function GenerationTaskPage() {
 
             <Card className="shadow-panel">
               <Text className="block text-xs uppercase tracking-[0.2em] text-neutral-500">
-                Prompt Preview
+                生成描述预览
               </Text>
               <div className="mt-4">
                 <PromptPreviewCard
@@ -490,7 +498,7 @@ export function GenerationTaskPage() {
                   创建并开始生成
                 </Button>
                 <Link to={`/datasets/${dataset.id}`}>
-                  <Button>稍后再说</Button>
+                  <Button>返回数据集</Button>
                 </Link>
               </Space>
             </Card>

@@ -14,7 +14,7 @@ export function DatasetHeader({ dataset }: DatasetHeaderProps) {
       <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
         <span className="inline-flex items-center gap-2 uppercase tracking-[0.18em]">
           <Database className="h-4 w-4 text-[var(--df-color-primary)]" />
-          Dataset workspace
+          数据集详情
         </span>
         <span className="text-slate-300 dark:text-slate-700">/</span>
         <StatusBadge status={dataset.status} />

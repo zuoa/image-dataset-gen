@@ -20,6 +20,7 @@ import {
 import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
 import { LoadingState } from "../components/common/LoadingState";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { useConfirm } from "../hooks/useConfirm";
 import { useModelProfiles } from "../hooks/useModelProfiles";
 import { useProviders } from "../hooks/useProviders";
@@ -221,9 +222,9 @@ export function ModelManagementPage() {
   return (
     <PageContainer>
       <PageHeader
-        eyebrow="Model Registry"
+        eyebrow="模型配置"
         title="模型管理"
-        description="统一维护图像生成模型和大语言模型。数据集内的生成批次只做选择，不再手填底层接口参数。"
+        description="保存常用模型和访问凭证，生成图片或使用 AI 助手时可以直接选择。"
         actions={
           <Segmented
             value={activeTab}
@@ -238,7 +239,7 @@ export function ModelManagementPage() {
           <Card className="h-full shadow-panel">
             <div className="mb-4 flex items-center justify-between">
               <Text className="font-medium">
-                {activeTab === "image" ? "图像模型配置" : "LLM 配置"}
+                {activeTab === "image" ? "图像模型配置" : "文本模型配置"}
               </Text>
               <Text className="text-xs text-neutral-500">{filteredProfiles.length} 个</Text>
             </div>
@@ -285,7 +286,7 @@ export function ModelManagementPage() {
           <Card className="shadow-panel">
             <div className="mb-4 flex items-center justify-between">
               <Text className="font-medium">
-                {draftProfile.profileType === "image" ? "编辑图像模型配置" : "编辑 LLM 配置"}
+                {draftProfile.profileType === "image" ? "编辑图像模型配置" : "编辑文本模型配置"}
               </Text>
               <Button onClick={handleCreate} disabled={isLoading}>新建配置</Button>
             </div>
@@ -308,7 +309,7 @@ export function ModelManagementPage() {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Form.Item label="Provider" className="!mb-2">
+                  <Form.Item label="服务商" className="!mb-2">
                     <Select
                       value={draftProfile.providerId}
                       onChange={(value) => handleProviderChange(value)}
@@ -319,7 +320,7 @@ export function ModelManagementPage() {
               </Row>
 
               {draftProfile.profileType === "llm" ? (
-                <Form.Item label="Base URL" className="!mb-2">
+                <Form.Item label="接口地址" className="!mb-2" extra="通常使用服务商提供的 API 地址。">
                   <Input
                     value={draftProfile.baseUrl ?? ""}
                     placeholder="例如：https://api.deepseek.com/v1"
@@ -347,7 +348,7 @@ export function ModelManagementPage() {
                         placeholder={
                           draftProfile.profileType === "image"
                             ? "输入模型版本"
-                            : "输入 OpenAI-compatible 模型 ID"
+                            : "输入模型名称或标识"
                         }
                         onChange={(event) =>
                           setDraftProfile((current) => ({ ...current, model: event.target.value }))
@@ -357,13 +358,13 @@ export function ModelManagementPage() {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Form.Item label="API Key" className="!mb-2">
+                  <Form.Item label="访问密钥（API Key）" className="!mb-2">
                     <Input.Password
                       value={draftProfile.apiKey}
                       placeholder={
                         draftProfile.hasApiKey
                           ? "已安全保存；留空保持不变"
-                          : "输入该配置对应的 API Key"
+                          : "输入服务商提供的访问密钥"
                       }
                       onChange={(event) =>
                         setDraftProfile((current) => ({ ...current, apiKey: event.target.value }))
@@ -376,7 +377,7 @@ export function ModelManagementPage() {
               {draftProfile.profileType === "image" ? (
                 <Row gutter={[16, 0]}>
                   <Col xs={24} md={12}>
-                    <Form.Item label="并发数" className="!mb-2">
+                    <Form.Item label="同时处理数" className="!mb-2" extra="同时向模型发送的请求数量。">
                       <InputNumber
                         min={1}
                         max={10}
@@ -389,7 +390,7 @@ export function ModelManagementPage() {
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12}>
-                    <Form.Item label="批次大小" className="!mb-2">
+                    <Form.Item label="每批图片数" className="!mb-2" extra="每轮提交给模型的图片数量。">
                       <InputNumber
                         min={1}
                         max={50}
@@ -419,7 +420,7 @@ export function ModelManagementPage() {
                 </Row>
               ) : (
                 <div className="rounded-xl border border-neutral-200 bg-neutral-100 px-4 py-3 text-sm text-neutral-600 dark:border-white/10 dark:bg-black/20 dark:text-neutral-300">
-                  使用 OpenAI-compatible `/chat/completions` 接口，根据目标对象自动生成类别标签和补充描述。
+                  该文本模型将用于建议目标类别、补充说明和优化生成描述。
                 </div>
               )}
 
@@ -453,7 +454,7 @@ export function ModelManagementPage() {
                 to="/datasets/new"
                 className="text-sm text-neutral-500 transition hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white"
               >
-                返回数据集 flow
+                返回新建数据集
               </Link>
               <Space>
                 <Button
@@ -480,7 +481,12 @@ export function ModelManagementPage() {
               </Space>
             </div>
             {saveError || error ? (
-              <Alert className="mt-4" message={saveError || error} type="error" showIcon />
+              <UserFacingError
+                className="mt-4"
+                title="无法保存模型配置"
+                description="请检查模型名称、服务商、接口地址和访问密钥后重试。"
+                error={saveError || error}
+              />
             ) : null}
           </Card>
         </Col>

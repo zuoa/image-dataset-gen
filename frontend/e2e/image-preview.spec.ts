@@ -173,10 +173,10 @@ test("dataset detail groups operations and uses structured sample filters", asyn
   await expect(confirmDialog).toBeHidden();
 
   await page.getByRole("button", { name: "生成样本" }).click();
-  const dialog = page.getByRole("dialog", { name: "进入生成工作台" });
+  const dialog = page.getByRole("dialog", { name: "开始生成图片" });
   await expect(dialog).toBeVisible();
   await expect(
-    dialog.getByRole("button", { name: "配置生成批次" }),
+    dialog.getByRole("button", { name: "继续设置" }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "取 消" }).click();
   await expect(dialog).toBeHidden();

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { Alert, Button, Card, Col, Form, Input, Row, Spin, Typography } from "antd";
+import { Button, Card, Col, Form, Input, Row, Spin, Typography } from "antd";
 
 import { getLoginCaptcha, type LoginCaptcha } from "../api/auth";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { useAuthStore } from "../store/auth";
 
 const { Title, Text, Paragraph } = Typography;
@@ -23,9 +24,9 @@ export function AuthPage() {
     setCaptchaError(null);
     try {
       setCaptcha(await getLoginCaptcha());
-    } catch (captchaLoadError) {
+    } catch {
       setCaptcha(null);
-      setCaptchaError((captchaLoadError as Error).message || "验证码加载失败");
+      setCaptchaError("验证码加载失败");
     } finally {
       setIsCaptchaLoading(false);
     }
@@ -79,16 +80,16 @@ export function AuthPage() {
         <Col xs={24} lg={14} xl={12}>
           <div className="max-w-2xl">
             <Text className="text-xs uppercase tracking-[0.35em] text-neutral-400 dark:text-neutral-500">
-              Synthetic Vision Ops Platform
+              图像数据集工作台
             </Text>
             <Title level={1} className="mt-6 !text-5xl !font-medium leading-tight md:!text-6xl">
               Dataset Forge
             </Title>
             <Paragraph className="mt-4 max-w-2xl !text-xl leading-9 text-neutral-700 dark:text-neutral-200">
-              用结构化工作流压缩图像数据集生产周期。
+              更快准备可用于训练的图像数据集
             </Paragraph>
             <Paragraph className="mt-6 max-w-xl !text-base leading-8 text-neutral-500 dark:text-neutral-400">
-              从需求配置、Prompt 构建、图片生成、增强、自动标注到导出，全链路在一个控制台里完成。
+              生成或导入图片，完成筛选、标注、增强和导出，所有工作都可以在这里完成。
             </Paragraph>
           </div>
         </Col>
@@ -96,13 +97,13 @@ export function AuthPage() {
           <Card className="mx-auto w-full max-w-md shadow-panel dark:bg-[#14171c]/95">
             <div className="mb-6">
               <Text className="text-xs font-medium uppercase tracking-[0.24em] text-neutral-400 dark:text-neutral-500">
-                Secure access
+                安全登录
               </Text>
               <Title level={3} className="mt-3 !mb-2 !text-2xl !font-medium">
                 登录控制台
               </Title>
               <Paragraph className="!mb-0 !text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                登录状态会在当前浏览器安全续期，无需在刷新后重新输入账号。
+                登录后刷新页面也无需重复输入账号和密码。
               </Paragraph>
             </div>
 
@@ -192,11 +193,11 @@ export function AuthPage() {
                 进入控制台
               </Button>
               {error ? (
-                <Alert
+                <UserFacingError
                   className="mt-4"
-                  message={error}
-                  type="error"
-                  showIcon
+                  title="登录失败"
+                  description="请检查账号、密码和图片验证码后重试。"
+                  error={error}
                   closable
                 />
               ) : null}

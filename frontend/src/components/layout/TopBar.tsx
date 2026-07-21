@@ -27,13 +27,13 @@ const breadcrumbRoutes: RouteObject[] = [
         path: ":datasetId",
         handle: { title: "数据集详情" } satisfies BreadcrumbHandle,
         children: [
-          { path: "generate", handle: { title: "创建生成批次" } satisfies BreadcrumbHandle },
+          { path: "generate", handle: { title: "生成图片" } satisfies BreadcrumbHandle },
         ],
       },
     ],
   },
   { path: "/models", handle: { title: "模型管理" } satisfies BreadcrumbHandle },
-  { path: "/trainers", handle: { title: "训练节点" } satisfies BreadcrumbHandle },
+  { path: "/trainers", handle: { title: "训练设备" } satisfies BreadcrumbHandle },
 ];
 
 export function TopBar({ collapsed, onToggle }: TopBarProps) {

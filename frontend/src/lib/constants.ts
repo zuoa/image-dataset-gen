@@ -48,7 +48,7 @@ export const defaultModelProfiles: ModelProfile[] = [
     concurrency: 1,
     batchSize: 1,
     jimengWatermark: false,
-    notes: "默认使用 DeepSeek 的 OpenAI-compatible 接口补全类别标签和补充描述。",
+    notes: "默认使用 DeepSeek 文本模型补全类别标签和补充描述。",
   },
 ];
 

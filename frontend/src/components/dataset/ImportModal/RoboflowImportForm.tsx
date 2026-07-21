@@ -81,7 +81,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
               disabled={props.isLoadingRoboflowConnections || props.isImportingRoboflow}
               placeholder={
                 props.isLoadingRoboflowConnections
-                  ? "读取连接中..."
+                  ? "正在读取连接…"
                   : "选择 Roboflow 连接"
               }
               options={props.roboflowConnections.map((connection) => ({
@@ -112,7 +112,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
             </div>
             <div className="sm:col-span-2">
               <div className="mb-2 text-xs uppercase tracking-[0.18em] text-neutral-500">
-                API Key
+                访问密钥（API Key）
               </div>
               <Input
                 type="password"
@@ -141,7 +141,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
 
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Workspace
+            工作区标识
           </div>
           <Input
             value={props.roboflowWorkspace}
@@ -152,7 +152,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
         </div>
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Project
+            项目标识
           </div>
           <Input
             value={props.roboflowProject}
@@ -163,7 +163,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
         </div>
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Version
+            数据版本
           </div>
           <Input
             value={props.roboflowVersion}
@@ -174,7 +174,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
         </div>
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Format
+            导入格式
           </div>
           <Input value="YOLOv8" disabled />
         </div>
@@ -196,7 +196,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
           props.isImportingRoboflow ? undefined : <Download className="h-4 w-4" />
         }
       >
-        {props.isImportingRoboflow ? "下载导入中..." : "从 Roboflow 导入"}
+        {props.isImportingRoboflow ? "正在从 Roboflow 导入…" : "从 Roboflow 导入"}
       </Button>
     </Card>
   );

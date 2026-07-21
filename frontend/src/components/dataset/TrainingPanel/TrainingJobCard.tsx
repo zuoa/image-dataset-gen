@@ -17,7 +17,7 @@ function trainingStatusLabel(status: string) {
     assigned: "已分配",
     preparing: "准备数据",
     running: "训练中",
-    uploading: "上传产物",
+    uploading: "保存结果",
     completed: "已完成",
     failed: "失败",
   };
@@ -50,7 +50,7 @@ export function TrainingJobCard({
         </div>
         <div className="mt-2 text-lg">暂无训练作业</div>
         <div className="mt-4 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-          训练作业会先生成 YOLO 数据包，再由已注册的训练 worker 拉取执行。
+          设置训练参数并开始训练，系统会自动选择可用的训练设备。
         </div>
       </Card>
     );
@@ -83,8 +83,8 @@ export function TrainingJobCard({
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <Metric label="mAP50" value={metrics.mAP50} />
         <Metric label="mAP50-95" value={metrics.mAP50_95} />
-        <Metric label="Precision" value={metrics.precision} />
-        <Metric label="Recall" value={metrics.recall} />
+        <Metric label="精确率" value={metrics.precision} />
+        <Metric label="召回率" value={metrics.recall} />
       </div>
 
       {job.error ? (
@@ -113,7 +113,7 @@ export function TrainingJobCard({
           disabled={deletingJobId === job.id}
           onClick={() => onRemove(job)}
         >
-          {deletingJobId === job.id ? "删除中..." : "删除任务"}
+          {deletingJobId === job.id ? "删除中…" : "删除任务"}
         </Button>
       </div>
     </Card>

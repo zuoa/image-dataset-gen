@@ -3,25 +3,11 @@ import { Empty, Pagination } from "antd";
 
 import { ImageCard } from "./ImageCard";
 import type { DatasetImage, SamplePoolSplit } from "../../../lib/types";
-
-const samplePoolSplitOptions: Array<{ value: SamplePoolSplit; label: string }> =
-  [
-    { value: "train", label: "训练集" },
-    { value: "val", label: "验证集" },
-    { value: "test", label: "测试集" },
-    { value: "unselected", label: "不保留" },
-  ];
-
-function samplePoolSourceLabel(sourceType: string) {
-  if (sourceType === "generation") return "AI 生成";
-  if (sourceType === "augmentation") return "数据增强";
-  if (["import", "video", "roboflow"].includes(sourceType)) return "导入";
-  return sourceType;
-}
-
-function samplePoolSplitLabel(split: SamplePoolSplit) {
-  return samplePoolSplitOptions.find((option) => option.value === split)?.label ?? split;
-}
+import {
+  formatAnnotationStatusLabel,
+  formatDatasetSplitLabel,
+  formatImageSourceLabel,
+} from "../../../lib/utils";
 
 function isImageAnnotated(image: DatasetImage) {
   return (
@@ -30,8 +16,7 @@ function isImageAnnotated(image: DatasetImage) {
 }
 
 function samplePoolAnnotationLabel(image: DatasetImage) {
-  if (image.annotationStatus === "empty") return "空标注";
-  return isImageAnnotated(image) ? "已标注" : "未标注";
+  return formatAnnotationStatusLabel(image.annotationStatus);
 }
 
 interface SamplePoolGridProps {
@@ -84,7 +69,7 @@ export function SamplePoolGrid({
   if (images.length === 0 && isLoadingFirstPage) {
     return (
       <div className="mt-8 rounded-2xl border border-dashed border-neutral-200 px-5 py-8 text-center text-sm text-neutral-500 dark:border-white/10">
-        正在加载样本...
+        正在加载样本…
       </div>
     );
   }
@@ -110,10 +95,10 @@ export function SamplePoolGrid({
                 image={image}
                 isQueuedForDelete={deleteSelectionIdSet.has(image.id)}
                 isDeleting={deletingImageIdSet.has(image.id)}
-                split={samplePoolSplitLabel(split)}
+                split={formatDatasetSplitLabel(split)}
                 annotationLabel={samplePoolAnnotationLabel(image)}
                 annotationClassName={annotated ? "text-white" : "text-slate-300"}
-                sourceLabel={samplePoolSourceLabel(image.sourceType)}
+                sourceLabel={formatImageSourceLabel(image.sourceType)}
                 onOpenPreview={() => onOpenPreview(image.id)}
                 onToggleDeleteSelection={() => onToggleDeleteSelection(image.id)}
                 onToggleSelection={() => onToggleSelection(image)}
@@ -155,7 +140,7 @@ export function SamplePoolGrid({
                 nextPageSize,
               )
             }
-            aria-label="样本池分页"
+            aria-label="图片分页"
           />
         </div>
       </div>

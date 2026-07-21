@@ -37,6 +37,7 @@ import {
 import { PageContainer } from "../components/common/PageContainer";
 import { LoadingState } from "../components/common/LoadingState";
 import { StatusBadge } from "../components/common/StatusBadge";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { DatasetHeader } from "../components/dataset/DatasetHeader";
 import { DatasetMetrics } from "../components/dataset/DatasetMetrics";
 import { DatasetActions } from "../components/dataset/DatasetActions";
@@ -575,7 +576,7 @@ export function DatasetDetailPage() {
     const confirmed = await confirm({
       title: "删除训练任务",
       content:
-        "删除该训练任务？如果 worker 仍在运行，这不会停止 GPU 上的训练进程。",
+        "删除记录不会停止正在进行的训练。请先在训练设备上停止任务，再删除记录。",
       okDanger: true,
     });
     if (!confirmed) return;
@@ -666,7 +667,7 @@ export function DatasetDetailPage() {
     try {
       const response = await importDatasetImagesArchive(datasetId, token, file);
       setActionError(null);
-      setImportSummary("ZIP 导入任务已创建，后台处理中。");
+      setImportSummary("ZIP 文件已上传，正在导入图片和标注。");
       setIsImportModalOpen(false);
       await invalidateDatasetData();
     } catch (error) {
@@ -707,8 +708,8 @@ export function DatasetDetailPage() {
       );
       setImportSummary(
         response.task.status === "running"
-          ? `已创建视频抽帧任务，${videoFrameIntervalHint}，尺寸 ${videoTargetSizeLabel}`
-          : `已从视频抽取 ${importedCount} 张图片`,
+          ? `已开始处理视频：${videoFrameIntervalHint}，图片尺寸 ${videoTargetSizeLabel}`
+          : `已从视频提取 ${importedCount} 张图片`,
       );
       setSelectedVideoFile(null);
       setIsImportModalOpen(false);
@@ -727,7 +728,7 @@ export function DatasetDetailPage() {
     const project = roboflowProject.trim();
     const version = roboflowVersion.trim();
     if (!connectionId || !workspace || !project || !version) {
-      setActionError("请选择 Roboflow 连接，并填写 workspace、project 和 version。");
+      setActionError("请选择 Roboflow 连接，并填写工作区标识、项目标识和数据版本。");
       return;
     }
 
@@ -744,7 +745,7 @@ export function DatasetDetailPage() {
       setActionError(null);
       setImportSummary(
         response.summary.status === "running"
-          ? "已创建 Roboflow 下载任务，可在批次任务中查看进度。"
+          ? "已开始从 Roboflow 导入，可在任务记录中查看进度。"
           : `已从 Roboflow 导入 ${String(response.summary.importedCount ?? 0)} 张图片` +
             (Number(response.summary.annotatedCount ?? 0) > 0
               ? `，带标注 ${String(response.summary.annotatedCount ?? 0)} 张`
@@ -850,7 +851,7 @@ export function DatasetDetailPage() {
             ) : null}
             {(dataset.selectedOriginalCount ?? 0) === 0 ? (
               <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">
-                当前没有保留的原始样本，暂时不能创建增强批次。
+                当前没有保留的原始图片，暂时不能进行数据增强。
               </div>
             ) : null}
           </div>
@@ -859,11 +860,11 @@ export function DatasetDetailPage() {
       </Card>
 
       {actionError ? (
-        <Alert
+        <UserFacingError
           className="mt-6"
-          message={actionError}
-          type="error"
-          showIcon
+          title="操作未完成"
+          description="请检查当前设置和网络连接后重试。"
+          error={actionError}
           closable
           onClose={() => setActionError(null)}
         />
@@ -914,7 +915,7 @@ export function DatasetDetailPage() {
             </span>
             <div>
               <div className="text-xl font-semibold tracking-tight text-slate-950 dark:text-white md:text-2xl">
-                样本池
+                数据集图片
               </div>
               <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 筛选、保留和检查数据集中的全部图像
@@ -1119,7 +1120,7 @@ export function DatasetDetailPage() {
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-white dark:bg-white dark:text-slate-950">
               <ClipboardList className="h-4 w-4" />
             </span>
-            <span>批次任务</span>
+            <span>任务记录</span>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400">
               {dataset.tasks.length}
             </span>
@@ -1135,7 +1136,7 @@ export function DatasetDetailPage() {
           dataSource={dataset.tasks}
           locale={{
             emptyText: (
-              <div className="text-sm text-neutral-500">暂无批次任务</div>
+              <div className="text-sm text-neutral-500">暂无任务记录</div>
             ),
           }}
           renderItem={(task) => (

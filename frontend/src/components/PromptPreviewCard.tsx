@@ -18,7 +18,7 @@ export function PromptPreviewCard({
       title={
         <div>
           <Typography.Text className="block text-xs uppercase tracking-[0.24em] text-neutral-500">
-            Prompt Engine
+            生成描述
           </Typography.Text>
           <Typography.Title level={3} className="!mb-0 !mt-2 !text-xl !font-medium">
             实时预览
@@ -27,7 +27,7 @@ export function PromptPreviewCard({
       }
       extra={
         <Button type="default" onClick={onCopy}>
-          复制 Prompt
+          复制生成描述
         </Button>
       }
     >
@@ -39,7 +39,7 @@ export function PromptPreviewCard({
                 {preview.language === "zh" ? "中文适配" : "英文适配"}
               </Tag>
               <Tag color={preview.token_safe ? "success" : "warning"}>
-                {preview.token_safe ? "Token Safe" : "Needs Trim"}
+                {preview.token_safe ? "长度合适" : "需要精简"}
               </Tag>
               <Tag>{formatCurrency(preview.estimated_cost)}</Tag>
             </Space>
@@ -53,14 +53,14 @@ export function PromptPreviewCard({
           {compact ? (
             <Card className="rounded-2xl" size="small" bordered>
               <Typography.Text className="text-sm text-neutral-500 dark:text-neutral-400">
-                当前先展示核心 Prompt 和费用预估。Negative Prompt 与变体会在确认提交步骤完整展开。
+                当前展示主要生成描述和费用预估，其他细节会在提交前补充。
               </Typography.Text>
             </Card>
           ) : (
             <>
               <Card className="rounded-2xl" size="small" bordered>
                 <Typography.Text className="block text-xs uppercase tracking-[0.24em] text-neutral-500">
-                  Negative
+                  需要避免的内容
                 </Typography.Text>
                 <Typography.Paragraph className="!mb-0 mt-2 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
                   {preview.negative_prompt}
@@ -70,7 +70,7 @@ export function PromptPreviewCard({
                 {preview.variants.slice(0, 3).map((variant) => (
                   <Card key={variant.seed} className="rounded-2xl" size="small" bordered>
                     <div className="mb-2 flex items-center justify-between text-xs text-neutral-500">
-                      <span>Seed {variant.seed}</span>
+                      <span>随机编号 {variant.seed}</span>
                       <span>
                         {variant.diversity_vars.composition} / {variant.diversity_vars.occlusion}
                       </span>
@@ -86,7 +86,7 @@ export function PromptPreviewCard({
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-white/12 dark:bg-neutral-900/60 dark:text-neutral-400">
-          填写完整后自动生成 Prompt 预览。
+          填写完整后会自动生成描述预览。
         </div>
       )}
     </Card>

@@ -40,7 +40,9 @@ test("application shell uses persistent desktop navigation and an on-demand mobi
   await page.goto("/");
 
   await expect(page.getByText("Dataset Forge", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "新建数据集" })).toBeVisible();
+  await expect(
+    page.getByRole("complementary").getByRole("button", { name: "新建数据集" }),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "数据集管理" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("app-shell-desktop.png"), fullPage: true });

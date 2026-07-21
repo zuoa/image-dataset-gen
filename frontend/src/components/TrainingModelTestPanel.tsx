@@ -3,6 +3,7 @@ import { Download, ImageUp, Maximize2, ScanSearch, SlidersHorizontal, Target, X,
 import { Button, Card, Checkbox, Input, Select, Slider } from "antd";
 
 import { createTrainingInferenceTest, getTrainingInferenceTest } from "../api/datasets";
+import { UserFacingError } from "./common/UserFacingError";
 import { detectionStyle } from "../lib/annotation";
 import { useAuthStore } from "../store/auth";
 import type { TrainingArtifact, TrainingInferenceResult, TrainingInferenceTest, TrainingJob } from "../lib/types";
@@ -199,11 +200,11 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
             <ScanSearch className="h-4 w-4" />
-            Model test
+            模型测试
           </div>
           <h4 className="mt-2 text-xl text-neutral-900 dark:text-white">上传图片测试模型</h4>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-            创建测试任务后由已注册的训练 worker 领取推理，完成后可点击检测框定位目标并按阈值筛选结果图。
+            上传一张图片，查看模型识别出的目标，并按置信度筛选检测结果。
           </p>
         </div>
         {result ? (
@@ -217,7 +218,7 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
         <Card className="rounded-[20px] border-neutral-200 bg-neutral-50 dark:border-white/10 dark:bg-white/[0.03]" styles={{ body: { padding: 16 } }}>
           <div className="space-y-4">
             <label className="block space-y-2">
-              <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">模型产物</span>
+              <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">可测试模型</span>
               <Select
                 value={artifactId}
                 onChange={(value) => setArtifactId(value as string)}
@@ -251,7 +252,7 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
 
             <label className="block space-y-2">
               <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-neutral-500">
-                <span>推理阈值</span>
+                <span>最低置信度</span>
                 <span>{confidenceThreshold.toFixed(2)}</span>
               </span>
               <Slider
@@ -267,35 +268,37 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
             <label className="block space-y-2">
               <span className="flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-500">
                 <SlidersHorizontal className="h-3.5 w-3.5" />
-                Image size
+                输入尺寸
               </span>
               <Input type="number" value={imageSize} readOnly disabled />
             </label>
 
             <Button className="w-full justify-center" onClick={() => void runModelTest()} disabled={!canRun} loading={isTesting}>
               <ScanSearch className="mr-2 h-4 w-4" />
-              {isTesting ? "测试中..." : "开始测试"}
+              {isTesting ? "测试中…" : "开始测试"}
             </Button>
 
             {testJob ? (
               <div className="rounded-[16px] border border-neutral-200 px-3 py-2 text-xs leading-5 text-neutral-500 dark:border-white/10">
                 当前状态：{testStatusLabel(testJob.status)}
-                {testJob.workerId ? `，worker ${testJob.workerId}` : ""}
+                {testJob.workerId ? `，处理设备：${testJob.workerId}` : ""}
               </div>
             ) : null}
             {job.status !== "completed" ? (
               <div className="rounded-[16px] border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-white/10">
-                训练完成并上传模型产物后才能测试。
+                请等待模型训练完成后再进行测试。
               </div>
             ) : modelArtifacts.length === 0 ? (
               <div className="rounded-[16px] border border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-white/10">
-                没有找到 best.pt 或 last.pt。
+                当前没有可测试的模型文件。
               </div>
             ) : null}
             {error ? (
-              <div className="rounded-[16px] border border-red-300/50 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700 dark:border-red-400/20 dark:bg-red-950/20 dark:text-red-100">
-                {error}
-              </div>
+              <UserFacingError
+                title="模型测试失败"
+                description="请检查测试图片和训练结果，然后重试。"
+                error={error}
+              />
             ) : null}
           </div>
         </Card>
@@ -380,8 +383,8 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
                             </span>
                             <span className="text-xs text-neutral-500">{detection.confidence.toFixed(2)}</span>
                           </div>
-                          <div className="mt-1 text-xs text-neutral-500">class {detection.classId}</div>
-                          {selected ? <div className="mt-2 break-all text-[11px] text-neutral-500">bbox {formatBbox(detection.bbox)}</div> : null}
+                          <div className="mt-1 text-xs text-neutral-500">类别编号 {detection.classId}</div>
+                          {selected ? <div className="mt-2 break-all text-[11px] text-neutral-500">检测位置 {formatBbox(detection.bbox)}</div> : null}
                         </Button>
                       );
                     })
@@ -403,7 +406,7 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
               <Target className="h-8 w-8 text-neutral-400" />
               <div className="mt-3 text-sm text-neutral-900 dark:text-white">等待测试图片</div>
               <div className="mt-2 max-w-md text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                测试任务完成后这里会显示 worker 返回的带框图片。
+                完成测试后，这里会显示带检测框的结果图片。
               </div>
             </div>
           )}
@@ -419,7 +422,7 @@ export function TrainingModelTestPanel({ job }: TrainingModelTestPanelProps) {
         >
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-neutral-950/80 px-4 py-3 shadow-2xl">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-400">Preview</div>
+              <div className="text-[11px] uppercase tracking-[0.24em] text-neutral-400">结果预览</div>
               <div className="mt-1 text-sm font-medium">模型测试结果</div>
             </div>
             <div className="flex items-center gap-2">

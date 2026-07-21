@@ -56,7 +56,7 @@ export function ExportModal({
       width={720}
     >
       <p className="mb-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-        选择导出格式后创建数据集压缩包，导出范围基于当前保留的样本。
+        选择训练工具需要的格式，系统会打包已保留的图片和标注。
       </p>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">

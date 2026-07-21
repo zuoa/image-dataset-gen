@@ -32,8 +32,8 @@ export function DatasetListPage() {
 
   const metrics = [
     { label: "数据集", value: summary?.totalDatasets ?? 0 },
-    { label: "批次任务", value: summary?.totalTasks ?? 0 },
-    { label: "样本总量", value: summary?.totalImages ?? 0 },
+    { label: "任务记录", value: summary?.totalTasks ?? 0 },
+    { label: "图片总数", value: summary?.totalImages ?? 0 },
     { label: "累计成本", value: formatCurrency(summary?.costToDate ?? 0) },
   ];
 
@@ -52,13 +52,13 @@ export function DatasetListPage() {
           <Col xs={24} lg={14}>
             <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-neutral-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-neutral-400">
               <Layers3 className="h-3.5 w-3.5" />
-              Dataset Ops
+              数据集总览
             </div>
             <Title level={2} className="mt-6 !text-3xl !font-medium leading-tight md:!text-4xl">
-              用数据集组织生成批次，而不是把任务当成最终容器。
+              集中管理图片、标注和导出结果
             </Title>
             <Paragraph className="mt-4 max-w-2xl !text-base leading-7 text-neutral-500 dark:text-neutral-400">
-              每个数据集统一承载目标类别、样本池、标注状态和导出结果。生成、导入、增强只是数据集内部的批次动作。
+              创建数据集后，可以继续生成或导入图片，并完成筛选、标注、训练和导出。
             </Paragraph>
             <Link to="/datasets/new" className="mt-6 inline-block">
               <Button type="primary" size="large" icon={<FolderPlus className="h-4 w-4" />}>
@@ -80,7 +80,7 @@ export function DatasetListPage() {
 
       <div className="mt-6">
         <PageHeader
-          eyebrow="Datasets"
+          eyebrow="全部数据集"
           title="数据集管理"
           actions={
             <Input.Search
@@ -102,9 +102,13 @@ export function DatasetListPage() {
                 image={<ScanSearch className="mx-auto h-12 w-12 text-neutral-400" />}
                 description={
                   <div className="text-center">
-                    <Text className="block text-lg">还没有可用数据集</Text>
+                    <Text className="block text-lg">
+                      {search.trim() ? "没有找到匹配的数据集" : "还没有数据集"}
+                    </Text>
                     <Text className="block text-sm text-neutral-500">
-                      先创建一个数据集，再在数据集内部添加生成、导入或增强批次。
+                      {search.trim()
+                        ? "请尝试缩短关键词，或按其他名称、说明和类别搜索。"
+                        : "创建第一个数据集，然后添加图片、标注并导出训练数据。"}
                     </Text>
                   </div>
                 }
@@ -125,14 +129,14 @@ export function DatasetListPage() {
                         <div className="flex flex-wrap gap-2">
                           <StatusBadge status={dataset.status} />
                           {dataset.latestTask ? (
-                            <Tag bordered>{dataset.latestTask.taskType}</Tag>
+                            <StatusBadge status={dataset.latestTask.taskType} />
                           ) : null}
                         </div>
                         <Title level={4} className="mt-3 !mb-2 !text-xl">
                           {dataset.name}
                         </Title>
                         <Paragraph className="!mb-0 max-w-2xl !text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-                          {dataset.description || "还没有补充描述，当前以类别和样本池为主组织数据集。"}
+                          {dataset.description || "尚未填写说明。"}
                         </Paragraph>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {dataset.categories.map((category) => (
@@ -144,14 +148,14 @@ export function DatasetListPage() {
                         <Row gutter={[12, 12]}>
                           <Col span={12}>
                             <div className="rounded-xl border border-black/5 bg-white/80 p-3 dark:border-white/10 dark:bg-black/20">
-                              <Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">样本池</Text>
+                              <Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">图片</Text>
                               <Text className="mt-1 block text-xl font-medium">{dataset.imageCount}</Text>
                               <Text className="text-xs text-neutral-500">已选 {dataset.selectedCount}</Text>
                             </div>
                           </Col>
                           <Col span={12}>
                             <div className="rounded-xl border border-black/5 bg-white/80 p-3 dark:border-white/10 dark:bg-black/20">
-                              <Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">批次数</Text>
+                              <Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">任务数</Text>
                               <Text className="mt-1 block text-xl font-medium">{dataset.taskCount}</Text>
                               <Text className="text-xs text-neutral-500">
                                 {dataset.latestTask ? `最近 ${dataset.latestTask.taskName}` : "尚未创建任务"}
@@ -162,7 +166,7 @@ export function DatasetListPage() {
                             <div className="rounded-xl border border-black/5 bg-white/80 p-3 dark:border-white/10 dark:bg-black/20">
                               <Text className="block text-[11px] uppercase tracking-[0.2em] text-neutral-500">成本</Text>
                               <Text className="mt-1 block text-xl font-medium">{formatCurrency(dataset.spentCost)}</Text>
-                              <Text className="text-xs text-neutral-500">聚合全批次成本</Text>
+                              <Text className="text-xs text-neutral-500">所有生成任务合计</Text>
                             </div>
                           </Col>
                           <Col span={12}>

@@ -33,7 +33,7 @@ function trainingStatusLabel(status: string) {
     assigned: "已分配",
     preparing: "准备数据",
     running: "训练中",
-    uploading: "上传产物",
+    uploading: "保存结果",
     completed: "已完成",
     failed: "失败",
   };
@@ -75,7 +75,7 @@ export function DatasetActions({
     {
       key: "augment",
       icon: <Wand2 className="h-4 w-4" />,
-      label: "创建增强批次",
+      label: "数据增强",
       disabled: dataset.selectedOriginalCount === 0,
     },
     {
@@ -88,7 +88,7 @@ export function DatasetActions({
     {
       key: "manual-annotate",
       icon: <PencilRuler className="h-4 w-4" />,
-      label: "进入标注工作台",
+      label: "人工标注",
       disabled: dataset.imageCount === 0,
     },
   ];
@@ -190,7 +190,7 @@ export function DatasetActions({
       <Modal
         open={workspaceEntry !== null}
         onCancel={() => setWorkspaceEntry(null)}
-        title={workspaceIsGenerate ? "进入生成工作台" : "进入标注工作台"}
+        title={workspaceIsGenerate ? "开始生成图片" : "开始人工标注"}
         width={520}
         footer={
           <div className="flex justify-end gap-2">
@@ -201,7 +201,7 @@ export function DatasetActions({
                 icon={<ArrowUpRight className="h-4 w-4" />}
                 onClick={() => setWorkspaceEntry(null)}
               >
-                {workspaceIsGenerate ? "配置生成批次" : "开始人工标注"}
+                {workspaceIsGenerate ? "继续设置" : "开始标注"}
               </Button>
             </Link>
           </div>
@@ -220,13 +220,13 @@ export function DatasetActions({
               <div>
                 <div className="font-medium text-slate-900 dark:text-white">
                   {workspaceIsGenerate
-                    ? "创建新的图像生成批次"
+                    ? "设置本次要生成的图片"
                     : `逐张检查并编辑 ${dataset.imageCount} 张样本`}
                 </div>
                 <p className="mb-0 mt-1.5 text-sm leading-6 text-slate-500 dark:text-slate-400">
                   {workspaceIsGenerate
-                    ? "生成配置包含模型、提示词、数量和成本预览，因此会在专用工作台中完成。"
-                    : "标注工作台提供大图画布、样本队列和检测框编辑，需要使用完整页面空间。"}
+                    ? "接下来可以选择图片数量、画面风格、场景和生成模型。"
+                    : "接下来可以逐张检查检测框、修改类别并保存标注结果。"}
                 </p>
               </div>
             </div>

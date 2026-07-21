@@ -14,6 +14,7 @@ import {
   type ResizeCorner,
 } from "../../lib/annotation";
 import type { Dataset, DatasetImage } from "../../lib/types";
+import { formatAnnotationStatusLabel, formatImageSourceLabel } from "../../lib/utils";
 
 interface ImagePreviewModalProps {
   open: boolean;
@@ -521,8 +522,8 @@ export function ImagePreviewModal({
               {previewImage.promptText}
             </Typography.Paragraph>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Tag bordered={false}>{previewImage.sourceType}</Tag>
-              <Tag bordered={false}>{previewImage.annotationStatus}</Tag>
+              <Tag bordered={false}>{formatImageSourceLabel(previewImage.sourceType)}</Tag>
+              <Tag bordered={false}>{formatAnnotationStatusLabel(previewImage.annotationStatus)}</Tag>
             </div>
           </div>
 

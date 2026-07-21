@@ -10,7 +10,7 @@ type MenuItem = Required<MenuProps>["items"][number];
 const navItems: MenuItem[] = [
   { key: "/", icon: <Boxes aria-hidden="true" className="h-4 w-4" />, label: "数据集" },
   { key: "/models", icon: <Cpu aria-hidden="true" className="h-4 w-4" />, label: "模型配置" },
-  { key: "/trainers", icon: <Server aria-hidden="true" className="h-4 w-4" />, label: "训练节点" },
+  { key: "/trainers", icon: <Server aria-hidden="true" className="h-4 w-4" />, label: "训练设备" },
 ];
 
 interface SidebarProps {

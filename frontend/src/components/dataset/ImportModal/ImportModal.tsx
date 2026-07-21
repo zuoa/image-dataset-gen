@@ -117,14 +117,14 @@ export function ImportModal(props: ImportModalProps) {
             <Upload className="h-4 w-4" />
             Import
           </div>
-          <div className="mt-2 text-xl">导入数据集</div>
+          <div className="mt-2 text-xl">导入图片</div>
         </div>
       }
       width={900}
       styles={{ body: { paddingTop: 12 } }}
     >
       <p className="mb-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-        上传视频按帧抽取底库图片，也可以继续使用 ZIP 或 Roboflow 导入。
+        从视频、ZIP 压缩包或 Roboflow 导入图片和标注。
       </p>
 
       {props.actionError ? (

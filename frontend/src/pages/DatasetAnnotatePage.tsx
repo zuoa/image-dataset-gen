@@ -54,6 +54,7 @@ import { AnnotationQueuePanel } from "../components/annotation/AnnotationQueuePa
 import type { AnnotationFilter } from "../components/annotation/types";
 import { EmptyState } from "../components/common/EmptyState";
 import { LoadingState } from "../components/common/LoadingState";
+import { UserFacingError } from "../components/common/UserFacingError";
 import { useConfirm } from "../hooks/useConfirm";
 import {
   boxFromCorners,
@@ -75,7 +76,7 @@ import type {
   SegmentAssistPrediction,
   SegmentAssistSession,
 } from "../lib/types";
-import { cn } from "../lib/utils";
+import { cn, formatImageSourceLabel } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 
 const categoryPalette = ["#64748b", "#4f6b73", "#6b7c74", "#7c8794", "#5b7080", "#7d8884", "#52636d", "#88949b", "#94a3b8"];
@@ -1347,11 +1348,10 @@ export function DatasetAnnotatePage() {
       </header>
 
       {actionError ? (
-        <Alert
-          message={actionError}
+        <UserFacingError
+          title="标注操作未完成"
           description="请检查网络或数据状态后重试。当前草稿仍保留在此浏览器中。"
-          type="error"
-          showIcon
+          error={actionError}
           closable
           onClose={() => setActionError(null)}
           className="z-10 shrink-0 rounded-none border-x-0 border-t-0"
@@ -1381,7 +1381,9 @@ export function DatasetAnnotatePage() {
                   <span className="sm:hidden">#{activeImage?.ordinal ?? "—"}</span>
                   <span className="hidden sm:inline">样本 #{activeImage?.ordinal ?? "—"}</span>
                 </Typography.Text>
-                <Typography.Text className="hidden truncate text-xs !text-neutral-400 sm:block">{activeImage?.sourceType ?? "没有可处理图片"}</Typography.Text>
+                <Typography.Text className="hidden truncate text-xs !text-neutral-400 sm:block">
+                  {activeImage ? formatImageSourceLabel(activeImage.sourceType) : "没有可处理图片"}
+                </Typography.Text>
               </div>
               {suggestedDetections ? <Tag className="hidden !mr-0 lg:inline-flex">模型建议</Tag> : null}
             </div>

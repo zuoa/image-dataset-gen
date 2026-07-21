@@ -87,7 +87,7 @@ export function VideoImportForm(props: VideoImportFormProps) {
             本地视频
           </div>
           <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-            按固定帧数或固定秒数抽取图片，抽出的帧会直接加入当前数据集样本池。
+            按固定帧数或时间间隔从视频中提取图片，并加入当前数据集。
           </p>
         </div>
         <Button
@@ -253,7 +253,7 @@ export function VideoImportForm(props: VideoImportFormProps) {
                 )
               }
             >
-              {props.isImportingVideo ? "抽帧中..." : "开始抽帧"}
+              {props.isImportingVideo ? "正在提取图片…" : "开始提取图片"}
             </Button>
           </Card>
         </Col>
