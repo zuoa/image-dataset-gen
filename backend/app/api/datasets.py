@@ -1182,7 +1182,6 @@ def update_dataset_image_annotations(dataset_id: str, image_id: str):
                 split_map=sample_pool_split_map_for_images(
                     dataset.id,
                     [image],
-                    selected_count=int(dataset.selected_count or 0),
                 ),
             ),
         }

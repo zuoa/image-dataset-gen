@@ -203,19 +203,28 @@ def _build_splits(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
 
 def _build_splits_without_imports(images: list[DatasetImage]) -> dict[str, list[DatasetImage]]:
     ordered = sorted(images, key=lambda image: image.ordinal)
-    total = len(ordered)
-    if total <= 1:
-        return {"train": ordered, "val": [], "test": []}
-    if total <= 3:
-        return {"train": ordered[:-1], "val": ordered[-1:], "test": []}
+    grouped: dict[str, list[DatasetImage]] = {}
+    for image in ordered:
+        group_id = str(image.augmentation_source_image_id or image.id)
+        grouped.setdefault(group_id, []).append(image)
 
-    train_cutoff = max(1, math.floor(total * 0.7))
-    val_cutoff = min(total, max(train_cutoff + 1, math.floor(total * 0.9)))
-    return {
-        "train": ordered[:train_cutoff],
-        "val": ordered[train_cutoff:val_cutoff],
-        "test": ordered[val_cutoff:],
-    }
+    groups = list(grouped.values())
+    total_groups = len(groups)
+    result: dict[str, list[DatasetImage]] = {"train": [], "val": [], "test": []}
+    for index, group in enumerate(groups):
+        if total_groups <= 1:
+            split = "train"
+        elif total_groups <= 3:
+            split = "train" if index < total_groups - 1 else "val"
+        else:
+            train_cutoff = max(1, math.floor(total_groups * 0.7))
+            val_cutoff = min(
+                total_groups,
+                max(train_cutoff + 1, math.floor(total_groups * 0.9)),
+            )
+            split = "train" if index < train_cutoff else "val" if index < val_cutoff else "test"
+        result[split].extend(group)
+    return result
 
 
 def _image_name(dataset_image: DatasetImage, category: str, image_ext: str) -> str:

@@ -1883,6 +1883,10 @@ def test_augmentation_inherits_transformed_annotations(tmp_path: Path):
     assert augmented["detections"] == [
         {"category": "pedestrian", "confidence": 0.88, "bbox": [0.75, 0.5, 0.2, 0.4]}
     ]
+    assert augmented["augmentationSourceImageId"] == source_image_id
+    assert augmented["split"] == next(
+        image["split"] for image in images if image["id"] == source_image_id
+    )
 
     stored = load_annotation_result(str(tmp_path), dataset_id, augmented["id"])
     assert stored is not None
@@ -1893,6 +1897,7 @@ def test_augmentation_inherits_transformed_annotations(tmp_path: Path):
         assert source is not None
         augmented_model = db.session.get(DatasetImage, augmented["id"])
         assert augmented_model is not None
+        assert augmented_model.augmentation_source_image_id == source_image_id
         assert source.annotation_status == "annotated"
         assert augmented_model.detection_categories == ["pedestrian"]
         assert augmented_model.confidence_score == 0.88

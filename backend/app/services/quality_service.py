@@ -229,9 +229,7 @@ def run_dataset_quality_analysis(run: QualityRun) -> dict[str, Any]:
                 {"duplicateOfImageId": original.id},
             )
 
-    split_map = sample_pool_split_map_for_images(
-        dataset.id, images, selected_count=len(images)
-    )
+    split_map = sample_pool_split_map_for_images(dataset.id, images)
     split_class_counts: dict[str, Counter[str]] = {
         "train": Counter(),
         "val": Counter(),

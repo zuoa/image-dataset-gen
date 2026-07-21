@@ -229,6 +229,7 @@ export type DatasetImage = {
   id: string;
   datasetId: string;
   sourceTaskId?: string | null;
+  augmentationSourceImageId?: string | null;
   sourceType: string;
   sourceOrdinal: number;
   ordinal: number;
@@ -236,7 +237,7 @@ export type DatasetImage = {
   latencyMs: number;
   seed: number;
   promptText: string;
-  diversityVars: Record<string, string>;
+  diversityVars: Record<string, unknown>;
   previewSvg: string;
   selected: boolean;
   annotationStatus: string;

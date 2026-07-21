@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import base64
+import copy
 from io import BytesIO
+import math
+import os
 import random
 import shutil
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+
+import albumentations as A
+import cv2
+import numpy as np
+from PIL import Image
 
 from app.services.storage_backend import local_backend
 
 MAX_ROTATION_ANGLE_DEGREES = 8.0
+MIN_BBOX_AREA_PIXELS = 1.0
+MIN_BBOX_VISIBILITY = 0.25
 GENERATED_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg")
 DEFAULT_AUGMENTATION_SETTINGS = {
     "flip": {"mode": "random"},
@@ -90,6 +100,7 @@ def augment_generated_image(
     methods: list[str],
     seed: int,
     settings: dict[str, object] | None = None,
+    detections: list[dict[str, Any]] | None = None,
 ) -> dict[str, object] | None:
     source_path = existing_generated_image(storage_root, task_id, source_image_key)
     if source_path is None:
@@ -102,11 +113,66 @@ def augment_generated_image(
 
     with Image.open(source_path) as source_image:
         preserve_alpha = source_image.mode in {"RGBA", "LA"} or "transparency" in source_image.info
-        working = source_image.convert("RGBA" if preserve_alpha else "RGB")
+        source_rgb = np.asarray(source_image.convert("RGB"))
+        source_alpha = np.asarray(source_image.convert("RGBA").getchannel("A")) if preserve_alpha else None
+        height, width = source_rgb.shape[:2]
+        transforms: list[A.BasicTransform] = []
         augmentation_ops: list[dict[str, Any]] = []
         for method in applied_methods:
-            working, op = _apply_augmentation_with_op(working, method, rng, settings)
+            transform, op = _build_augmentation_transform(method, rng, settings, width, height)
+            transforms.append(transform)
             augmentation_ops.append(op)
+
+        source_detections, bboxes, detection_indices = _prepare_detections(detections)
+        pipeline = A.ReplayCompose(
+            transforms,
+            bbox_params=A.BboxParams(
+                format="yolo",
+                label_fields=["detection_indices"],
+                min_area=MIN_BBOX_AREA_PIXELS,
+                min_visibility=MIN_BBOX_VISIBILITY,
+                clip=True,
+                filter_invalid_bboxes=True,
+            ),
+        )
+        pipeline.set_random_seed(seed)
+        transform_inputs: dict[str, Any] = {
+            "image": source_rgb,
+            "bboxes": bboxes,
+            "detection_indices": detection_indices,
+        }
+        if "occlusion" in applied_methods:
+            transform_inputs["mask"] = np.ones((height, width), dtype=np.uint8)
+        transformed = pipeline(**transform_inputs)
+        transformed_image = np.asarray(transformed["image"], dtype=np.uint8)
+        transformed_detections = (
+            _restore_detections(
+                source_detections,
+                transformed.get("bboxes", []),
+                transformed.get("detection_indices", []),
+            )
+            if detections is not None
+            else None
+        )
+        if transformed_detections is not None and "occlusion" in applied_methods:
+            transformed_detections = _filter_occluded_detections(
+                transformed_detections,
+                np.asarray(transformed["mask"]),
+            )
+
+        if source_alpha is not None:
+            alpha_replay = _replay_without_occlusion(transformed["replay"])
+            alpha_result = A.ReplayCompose.replay(
+                alpha_replay,
+                image=source_rgb,
+                mask=source_alpha,
+                bboxes=[],
+                detection_indices=[],
+            )
+            transformed_alpha = np.asarray(alpha_result["mask"], dtype=np.uint8)
+            working = Image.fromarray(np.dstack((transformed_image, transformed_alpha)))
+        else:
+            working = Image.fromarray(transformed_image)
 
         output = BytesIO()
         if source_format == "PNG":
@@ -122,6 +188,8 @@ def augment_generated_image(
         "path": saved_path,
         "applied_methods": applied_methods,
         "augmentation_ops": augmentation_ops,
+        "augmentation_replay": _json_safe(transformed["replay"]),
+        "transformed_detections": transformed_detections,
     }
 
 
@@ -185,139 +253,188 @@ def _method_settings(settings: dict[str, object] | None, method: str) -> dict[st
     return resolved
 
 
-def _apply_augmentation(
-    image: Image.Image,
+def _build_augmentation_transform(
     method: str,
     rng: random.Random,
     settings: dict[str, object] | None = None,
-) -> Image.Image:
-    return _apply_augmentation_with_op(image, method, rng, settings)[0]
-
-
-def _apply_augmentation_with_op(
-    image: Image.Image,
-    method: str,
-    rng: random.Random,
-    settings: dict[str, object] | None = None,
-) -> tuple[Image.Image, dict[str, Any]]:
+    width: int = 1,
+    height: int = 1,
+) -> tuple[A.BasicTransform, dict[str, Any]]:
     method_settings = _method_settings(settings, method)
-    width, height = image.size
+    op: dict[str, Any] = {"method": method, "size": [width, height]}
     if method == "flip":
         flip_mode = str(method_settings.get("mode", "random"))
-        if flip_mode == "horizontal":
-            return ImageOps.mirror(image), {"method": "flip", "mode": "horizontal", "size": [width, height]}
-        if flip_mode == "vertical":
-            return ImageOps.flip(image), {"method": "flip", "mode": "vertical", "size": [width, height]}
-        resolved_mode = "horizontal" if rng.random() < 0.7 else "vertical"
-        if resolved_mode == "horizontal":
-            return ImageOps.mirror(image), {"method": "flip", "mode": "horizontal", "size": [width, height]}
-        return ImageOps.flip(image), {"method": "flip", "mode": "vertical", "size": [width, height]}
+        resolved_mode = flip_mode if flip_mode in {"horizontal", "vertical"} else (
+            "horizontal" if rng.random() < 0.7 else "vertical"
+        )
+        op["mode"] = resolved_mode
+        transform = A.HorizontalFlip(p=1.0) if resolved_mode == "horizontal" else A.VerticalFlip(p=1.0)
+        op["transform"] = type(transform).__name__
+        return transform, op
     if method == "rotate":
         max_angle = max(0.0, float(method_settings.get("max_angle", MAX_ROTATION_ANGLE_DEGREES)))
-        angle = rng.uniform(-max_angle, max_angle)
-        fill = (245, 245, 245, 255) if image.mode == "RGBA" else (245, 245, 245)
-        rotated = image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=fill)
-        return rotated, {"method": "rotate", "angle": angle, "size": [width, height]}
+        transform = A.Rotate(
+            limit=(-max_angle, max_angle),
+            interpolation=cv2.INTER_CUBIC,
+            border_mode=cv2.BORDER_CONSTANT,
+            fill=(245, 245, 245),
+            fill_mask=0,
+            p=1.0,
+        ) if max_angle > 0 else A.NoOp(p=1.0)
+        op.update({"max_angle": max_angle, "transform": type(transform).__name__})
+        return transform, op
     if method == "crop":
-        min_scale = float(method_settings.get("min_scale", 0.82))
-        max_scale = float(method_settings.get("max_scale", 0.94))
-        crop_ratio = rng.uniform(min(min_scale, max_scale), max(min_scale, max_scale))
-        crop_w = max(8, int(width * crop_ratio))
-        crop_h = max(8, int(height * crop_ratio))
-        left = rng.randint(0, max(0, width - crop_w))
-        top = rng.randint(0, max(0, height - crop_h))
-        cropped = image.crop((left, top, left + crop_w, top + crop_h))
-        resized = cropped.resize((width, height), Image.Resampling.LANCZOS)
-        return resized, {
-            "method": "crop",
-            "crop": [left, top, left + crop_w, top + crop_h],
-            "size": [width, height],
-        }
+        min_scale = max(0.01, float(method_settings.get("min_scale", 0.82)))
+        max_scale = max(0.01, float(method_settings.get("max_scale", 0.94)))
+        low, high = sorted((min_scale, max_scale))
+        aspect_ratio = width / max(height, 1)
+        transform = A.RandomResizedCrop(
+            size=(height, width),
+            scale=(low * low, high * high),
+            ratio=(aspect_ratio, aspect_ratio),
+            interpolation=cv2.INTER_LANCZOS4,
+            p=1.0,
+        )
+        op.update({"min_scale": low, "max_scale": high, "transform": type(transform).__name__})
+        return transform, op
     if method == "color_jitter":
         strength = max(0.0, float(method_settings.get("strength", 0.18)))
-        if strength <= 0:
-            return image, {"method": "color_jitter", "size": [width, height], "geometry": "none"}
-        working = image
-        brightness = ImageEnhance.Brightness(working)
-        working = brightness.enhance(rng.uniform(max(0.1, 1 - strength), 1 + strength))
-        contrast = ImageEnhance.Contrast(working)
-        working = contrast.enhance(rng.uniform(max(0.1, 1 - strength), 1 + strength))
-        if working.mode in {"RGB", "RGBA"}:
-            color = ImageEnhance.Color(working)
-            working = color.enhance(rng.uniform(max(0.1, 1 - strength), 1 + strength))
-        return working, {"method": "color_jitter", "size": [width, height], "geometry": "none"}
+        transform = A.ColorJitter(
+            brightness=strength,
+            contrast=strength,
+            saturation=strength,
+            hue=0.0,
+            p=1.0,
+        ) if strength > 0 else A.NoOp(p=1.0)
+        op.update({"strength": strength, "transform": type(transform).__name__})
+        return transform, op
     if method == "blur":
         max_radius = max(0.0, float(method_settings.get("max_radius", 2.4)))
-        if max_radius <= 0:
-            return image, {"method": "blur", "size": [width, height], "geometry": "none"}
-        radius = rng.uniform(min(0.8, max_radius), max_radius)
-        return image.filter(ImageFilter.GaussianBlur(radius=radius)), {
-            "method": "blur",
-            "radius": radius,
-            "size": [width, height],
-            "geometry": "none",
-        }
+        transform = A.GaussianBlur(
+            blur_limit=0,
+            sigma_limit=(min(0.8, max_radius), max_radius),
+            p=1.0,
+        ) if max_radius > 0 else A.NoOp(p=1.0)
+        op.update({"max_radius": max_radius, "transform": type(transform).__name__})
+        return transform, op
     if method == "noise":
         max_sigma = max(0.0, float(method_settings.get("max_sigma", 28.0)))
-        if max_sigma <= 0:
-            return image, {"method": "noise", "size": [width, height], "geometry": "none"}
-        min_sigma = min(12.0, max(4.0, max_sigma * 0.45))
-        sigma = rng.uniform(min_sigma, max_sigma)
-        noise = Image.effect_noise(image.size, sigma).convert("L")
-        if image.mode == "RGBA":
-            alpha = image.getchannel("A")
-            rgb = image.convert("RGB")
-            merged = ImageChops.add(rgb, Image.merge("RGB", (noise, noise, noise)), scale=1.0, offset=-18)
-            return Image.merge("RGBA", (*merged.split(), alpha)), {
-                "method": "noise",
-                "sigma": sigma,
-                "size": [width, height],
-                "geometry": "none",
-            }
-        return ImageChops.add(
-            image.convert("RGB"),
-            Image.merge("RGB", (noise, noise, noise)),
-            scale=1.0,
-            offset=-18,
-        ), {"method": "noise", "sigma": sigma, "size": [width, height], "geometry": "none"}
+        min_sigma = min(max_sigma, min(12.0, max(4.0, max_sigma * 0.45)))
+        transform = A.GaussNoise(
+            std_range=(min_sigma / 255.0, max_sigma / 255.0),
+            mean_range=(0.0, 0.0),
+            per_channel=False,
+            p=1.0,
+        ) if max_sigma > 0 else A.NoOp(p=1.0)
+        op.update({"max_sigma": max_sigma, "transform": type(transform).__name__})
+        return transform, op
     if method == "occlusion":
-        working = image.copy()
-        draw = ImageDraw.Draw(working)
         min_ratio = float(method_settings.get("min_ratio", 0.14))
         max_ratio = float(method_settings.get("max_ratio", 0.28))
-        occ_ratio = rng.uniform(min(min_ratio, max_ratio), max(min_ratio, max_ratio))
-        occ_w = max(12, int(width * occ_ratio))
-        occ_h = max(12, int(height * occ_ratio))
-        left = rng.randint(0, max(0, width - occ_w))
-        top = rng.randint(0, max(0, height - occ_h))
-        fill = (rng.randint(18, 70), rng.randint(18, 70), rng.randint(18, 70), 235) if working.mode == "RGBA" else (
-            rng.randint(18, 70),
-            rng.randint(18, 70),
-            rng.randint(18, 70),
+        low, high = sorted((max(0.01, min_ratio), max(0.01, max_ratio)))
+        transform = A.CoarseDropout(
+            num_holes_range=(1, 1),
+            hole_height_range=(low, high),
+            hole_width_range=(low, high),
+            fill=(40, 40, 40),
+            fill_mask=0,
+            p=1.0,
         )
-        draw.rounded_rectangle((left, top, left + occ_w, top + occ_h), radius=6, fill=fill)
-        return working, {
-            "method": "occlusion",
-            "box": [left, top, left + occ_w, top + occ_h],
-            "size": [width, height],
-            "geometry": "none",
-        }
+        op.update({"min_ratio": low, "max_ratio": high, "transform": type(transform).__name__})
+        return transform, op
     if method == "perspective":
         max_warp = max(0.0, float(method_settings.get("max_warp", 0.08)))
-        if max_warp <= 0:
-            return image, {"method": "perspective", "size": [width, height], "geometry": "none"}
-        dx = width * rng.uniform(min(0.03, max_warp), max_warp)
-        dy = height * rng.uniform(min(0.03, max_warp), max_warp)
-        quad = (
-            rng.uniform(0, dx),
-            rng.uniform(0, dy),
-            width - rng.uniform(0, dx),
-            rng.uniform(0, dy),
-            width - rng.uniform(0, dx),
-            height - rng.uniform(0, dy),
-            rng.uniform(0, dx),
-            height - rng.uniform(0, dy),
-        )
-        transformed = image.transform(image.size, Image.Transform.QUAD, quad, resample=Image.Resampling.BICUBIC)
-        return transformed, {"method": "perspective", "quad": list(quad), "size": [width, height]}
-    return image, {"method": method, "size": [width, height], "geometry": "none"}
+        transform = A.Perspective(
+            scale=(min(0.03, max_warp), max_warp),
+            keep_size=True,
+            fit_output=False,
+            interpolation=cv2.INTER_CUBIC,
+            border_mode=cv2.BORDER_CONSTANT,
+            fill=(245, 245, 245),
+            fill_mask=0,
+            p=1.0,
+        ) if max_warp > 0 else A.NoOp(p=1.0)
+        op.update({"max_warp": max_warp, "transform": type(transform).__name__})
+        return transform, op
+    transform = A.NoOp(p=1.0)
+    op["transform"] = type(transform).__name__
+    return transform, op
+
+
+def _prepare_detections(
+    detections: list[dict[str, Any]] | None,
+) -> tuple[dict[int, dict[str, Any]], list[list[float]], list[int]]:
+    source_detections: dict[int, dict[str, Any]] = {}
+    bboxes: list[list[float]] = []
+    detection_indices: list[int] = []
+    for index, detection in enumerate(detections or []):
+        bbox = detection.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        try:
+            normalized_bbox = [float(value) for value in bbox]
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in normalized_bbox):
+            continue
+        if normalized_bbox[2] <= 0 or normalized_bbox[3] <= 0:
+            continue
+        source_detections[index] = detection
+        bboxes.append(normalized_bbox)
+        detection_indices.append(index)
+    return source_detections, bboxes, detection_indices
+
+
+def _restore_detections(
+    source_detections: dict[int, dict[str, Any]],
+    bboxes: list[list[float]],
+    detection_indices: list[float],
+) -> list[dict[str, Any]]:
+    restored: list[dict[str, Any]] = []
+    for bbox, raw_index in zip(bboxes, detection_indices):
+        try:
+            source = source_detections[int(raw_index)]
+            normalized_bbox = [round(float(value), 4) for value in bbox]
+        except (KeyError, TypeError, ValueError):
+            continue
+        restored.append({**source, "bbox": normalized_bbox})
+    return restored
+
+
+def _filter_occluded_detections(
+    detections: list[dict[str, Any]],
+    visibility_mask: np.ndarray,
+) -> list[dict[str, Any]]:
+    height, width = visibility_mask.shape[:2]
+    filtered: list[dict[str, Any]] = []
+    for detection in detections:
+        x_center, y_center, box_width, box_height = detection["bbox"]
+        left = max(0, int(math.floor((x_center - box_width / 2) * width)))
+        top = max(0, int(math.floor((y_center - box_height / 2) * height)))
+        right = min(width, int(math.ceil((x_center + box_width / 2) * width)))
+        bottom = min(height, int(math.ceil((y_center + box_height / 2) * height)))
+        region = visibility_mask[top:bottom, left:right]
+        if region.size and float(np.count_nonzero(region)) / float(region.size) >= MIN_BBOX_VISIBILITY:
+            filtered.append(detection)
+    return filtered
+
+
+def _replay_without_occlusion(replay: dict[str, Any]) -> dict[str, Any]:
+    alpha_replay = copy.deepcopy(replay)
+    for transform in alpha_replay.get("transforms", []):
+        if str(transform.get("__class_fullname__", "")).endswith("CoarseDropout"):
+            transform["applied"] = False
+            transform["params"] = None
+    return alpha_replay
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value

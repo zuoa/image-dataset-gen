@@ -34,7 +34,6 @@ from app.services.annotation_storage import (
     infer_default_bbox_semantics,
     load_annotation_result,
     save_annotation_result,
-    transform_detections_for_augmentation,
 )
 from app.services.dataset_service import (
     next_dataset_ordinal,
@@ -293,24 +292,16 @@ def _max_detection_confidence(detections: list[dict[str, object]]) -> float | No
     return max(values, default=None)
 
 
-def _inherit_augmented_annotation(
+def _source_detections_for_augmentation(
     storage_root: str,
     dataset: Dataset,
     source_image: DatasetImage,
-    target_image: DatasetImage,
-    augmentation_ops: list[dict[str, object]],
-) -> None:
+) -> list[dict[str, object]] | None:
     if source_image.annotation_status == "empty":
-        save_annotation_result(
-            storage_root, dataset.id, target_image.id, [], source="augmentation"
-        )
-        target_image.annotation_status = "empty"
-        target_image.detection_categories = []
-        target_image.confidence_score = None
-        return
+        return []
 
     if source_image.annotation_status != "annotated":
-        return
+        return None
 
     source_annotation = load_annotation_result(
         storage_root,
@@ -319,15 +310,23 @@ def _inherit_augmented_annotation(
         default_bbox_semantics=infer_default_bbox_semantics(dataset.annotation_json or {}),
     )
     if source_annotation is None:
-        return
+        return None
 
     source_detections = source_annotation.get("detections", [])
     if not isinstance(source_detections, list):
-        source_detections = []
-    transformed_detections = transform_detections_for_augmentation(
-        source_detections,
-        augmentation_ops,
-    )
+        return []
+    return [dict(detection) for detection in source_detections if isinstance(detection, dict)]
+
+
+def _inherit_augmented_annotation(
+    storage_root: str,
+    dataset: Dataset,
+    target_image: DatasetImage,
+    transformed_detections: list[dict[str, object]] | None,
+) -> None:
+    if transformed_detections is None:
+        return
+
     save_annotation_result(
         storage_root,
         dataset.id,
@@ -337,7 +336,11 @@ def _inherit_augmented_annotation(
     )
     target_image.annotation_status = "annotated" if transformed_detections else "empty"
     target_image.confidence_score = _max_detection_confidence(transformed_detections)
-    target_image.detection_categories = extract_detection_categories(storage_root, dataset.id, target_image.id)
+    target_image.detection_categories = extract_detection_categories(
+        storage_root,
+        dataset.id,
+        target_image.id,
+    )
 
 
 @celery.task(bind=True, max_retries=None)
@@ -519,6 +522,11 @@ def _run_augmentation_task(self, task_id: str) -> None:
 
         dataset_ordinal = next_dataset_ordinal(dataset)
         augmentation_seed = source_image.seed + 1000 + completed_images
+        source_detections = _source_detections_for_augmentation(
+            storage_root,
+            dataset,
+            source_image,
+        )
         augmented = augment_generated_image(
             storage_root,
             dataset.id,
@@ -527,6 +535,7 @@ def _run_augmentation_task(self, task_id: str) -> None:
             methods,
             augmentation_seed,
             settings,
+            detections=source_detections,
         )
         if augmented is None:
             augmentation["status"] = "failed"
@@ -542,13 +551,19 @@ def _run_augmentation_task(self, task_id: str) -> None:
         image = DatasetImage(
             dataset_id=dataset.id,
             source_task_id=task.id,
+            augmentation_source_image_id=source_image.id,
             source_type="augmentation",
             source_ordinal=completed_images + 1,
             ordinal=dataset_ordinal,
             status="augmented",
             seed=augmentation_seed,
             prompt_text=f'{source_image.prompt_text}, augmentation: {", ".join(applied_methods)}',
-            diversity_vars={**(source_image.diversity_vars or {}), "augmentation": ", ".join(applied_methods)},
+            diversity_vars={
+                **(source_image.diversity_vars or {}),
+                "augmentation": ", ".join(applied_methods),
+                "augmentationSourceImageId": source_image.id,
+                "augmentationReplay": augmented.get("augmentation_replay", {}),
+            },
             latency_ms=max(400, int(source_image.latency_ms * 0.35)),
             preview_svg=preview_data_url(bytes(augmented["image_bytes"]), str(augmented["mime_type"])),
             selected=True,
@@ -568,9 +583,14 @@ def _run_augmentation_task(self, task_id: str) -> None:
         _inherit_augmented_annotation(
             storage_root,
             dataset,
-            source_image,
             image,
-            [dict(item) for item in augmented.get("augmentation_ops", []) if isinstance(item, dict)],
+            [
+                dict(item)
+                for item in augmented.get("transformed_detections", [])
+                if isinstance(item, dict)
+            ]
+            if isinstance(augmented.get("transformed_detections"), list)
+            else None,
         )
 
         augmentation["completedImages"] = completed_images + 1

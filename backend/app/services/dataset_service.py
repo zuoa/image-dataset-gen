@@ -329,17 +329,16 @@ def _dataset_base_payload(dataset: Dataset) -> dict[str, Any]:
 
 
 def _selected_split_maps(dataset_id: str) -> tuple[dict[str, str], dict[str, int]]:
-    selected_rows = (
-        DatasetImage.query.with_entities(DatasetImage.id, DatasetImage.ordinal)
-        .filter_by(dataset_id=dataset_id, selected=True)
-        .order_by(DatasetImage.ordinal.asc())
-        .all()
-    )
-    total = len(selected_rows)
+    ranked_selected = _ranked_selected_images_subquery(dataset_id)
+    selected_rows = db.session.query(
+        ranked_selected.c.id,
+        ranked_selected.c.selected_rank,
+    ).all()
+    total = _selected_group_count(dataset_id)
     split_map: dict[str, str] = {}
     split_counts = {"train": 0, "val": 0, "test": 0, "unselected": 0}
-    for index, row in enumerate(selected_rows):
-        split = _sample_pool_split_for_selected_count(total, index)
+    for row in selected_rows:
+        split = _sample_pool_split_for_selected_count(total, int(row.selected_rank) - 1)
         split_map[row.id] = split
         split_counts[split] += 1
     return split_map, split_counts
@@ -363,8 +362,27 @@ def _selected_split_counts(selected_count: int) -> dict[str, int]:
     }
 
 
-def _image_split_counts_for_totals(image_count: int, selected_count: int) -> dict[str, int]:
-    counts = _selected_split_counts(selected_count)
+def _image_split_counts_for_dataset(
+    dataset_id: str,
+    image_count: int,
+    selected_count: int,
+) -> dict[str, int]:
+    group_count = _selected_group_count(dataset_id)
+    ranked_selected = _ranked_selected_images_subquery(dataset_id)
+    counts: dict[str, int] = {}
+    for split in ("train", "val", "test"):
+        start_rank, end_rank = _selected_rank_bounds(group_count, split)
+        if end_rank < start_rank:
+            counts[split] = 0
+            continue
+        counts[split] = int(
+            db.session.query(func.count())
+            .select_from(ranked_selected)
+            .filter(ranked_selected.c.selected_rank >= start_rank)
+            .filter(ranked_selected.c.selected_rank <= end_rank)
+            .scalar()
+            or 0
+        )
     counts["unselected"] = max(0, int(image_count or 0) - int(selected_count or 0))
     return counts
 
@@ -380,25 +398,77 @@ def _selected_rank_bounds(selected_count: int, split: str) -> tuple[int, int]:
     return 1, 0
 
 
+def _selected_group_count(dataset_id: str) -> int:
+    group_key = func.coalesce(
+        DatasetImage.augmentation_source_image_id,
+        DatasetImage.id,
+    )
+    return int(
+        db.session.query(func.count(func.distinct(group_key)))
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .filter(DatasetImage.selected.is_(True))
+        .scalar()
+        or 0
+    )
+
+
+def _ranked_selected_groups_subquery(dataset_id: str):
+    group_key = func.coalesce(
+        DatasetImage.augmentation_source_image_id,
+        DatasetImage.id,
+    )
+    selected_groups = (
+        db.session.query(
+            group_key.label("group_id"),
+            func.min(DatasetImage.ordinal).label("group_ordinal"),
+        )
+        .filter(DatasetImage.dataset_id == dataset_id)
+        .filter(DatasetImage.selected.is_(True))
+        .group_by(group_key)
+        .subquery()
+    )
+    return (
+        db.session.query(
+            selected_groups.c.group_id,
+            func.row_number()
+            .over(
+                order_by=[
+                    selected_groups.c.group_ordinal.asc(),
+                    selected_groups.c.group_id.asc(),
+                ]
+            )
+            .label("group_rank"),
+        )
+        .subquery()
+    )
+
+
 def _ranked_selected_images_subquery(dataset_id: str):
+    group_key = func.coalesce(
+        DatasetImage.augmentation_source_image_id,
+        DatasetImage.id,
+    )
+    ranked_groups = _ranked_selected_groups_subquery(dataset_id)
     return (
         db.session.query(
             DatasetImage.id.label("id"),
-            func.row_number()
-            .over(order_by=[DatasetImage.ordinal.asc(), DatasetImage.id.asc()])
-            .label("selected_rank"),
+            ranked_groups.c.group_rank.label("selected_rank"),
         )
+        .join(ranked_groups, group_key == ranked_groups.c.group_id)
         .filter(DatasetImage.dataset_id == dataset_id)
         .filter(DatasetImage.selected.is_(True))
         .subquery()
     )
 
 
-def _filter_by_sample_split(query, dataset_id: str, split_filter: str, selected_count: int):
+def _filter_by_sample_split(query, dataset_id: str, split_filter: str):
     if split_filter == "unselected":
         return query.filter(DatasetImage.selected.is_(False))
 
-    start_rank, end_rank = _selected_rank_bounds(selected_count, split_filter)
+    start_rank, end_rank = _selected_rank_bounds(
+        _selected_group_count(dataset_id),
+        split_filter,
+    )
     if end_rank < start_rank:
         return query.filter(False)
 
@@ -413,22 +483,12 @@ def _filter_by_sample_split(query, dataset_id: str, split_filter: str, selected_
 def sample_pool_split_map_for_images(
     dataset_id: str,
     images: list[DatasetImage],
-    *,
-    selected_count: int | None = None,
 ) -> dict[str, str]:
     selected_ids = [image.id for image in images if image.selected]
     if not selected_ids:
         return {}
 
-    if selected_count is None:
-        selected_count = (
-            db.session.query(func.count(DatasetImage.id))
-            .filter(DatasetImage.dataset_id == dataset_id)
-            .filter(DatasetImage.selected.is_(True))
-            .scalar()
-            or 0
-        )
-
+    group_count = _selected_group_count(dataset_id)
     ranked_selected = _ranked_selected_images_subquery(dataset_id)
     rows = (
         db.session.query(ranked_selected.c.id, ranked_selected.c.selected_rank)
@@ -436,7 +496,7 @@ def sample_pool_split_map_for_images(
         .all()
     )
     return {
-        row.id: _sample_pool_split_for_selected_count(int(selected_count), int(row.selected_rank) - 1)
+        row.id: _sample_pool_split_for_selected_count(group_count, int(row.selected_rank) - 1)
         for row in rows
     }
 
@@ -643,7 +703,11 @@ def build_dataset_detail_payload(
 ) -> dict[str, Any]:
     image_count = int(dataset.image_count or 0)
     selected_count = int(dataset.selected_count or 0)
-    split_counts = _image_split_counts_for_totals(image_count, selected_count)
+    split_counts = _image_split_counts_for_dataset(
+        dataset.id,
+        image_count,
+        selected_count,
+    )
     class_counts = _image_class_counts_for_dataset(dataset)
     annotation_counts = _annotation_counts_for_dataset(dataset.id, image_count)
     source_counts = _source_counts_for_dataset(dataset.id)
@@ -682,7 +746,6 @@ def build_dataset_detail_payload(
             filtered_query,
             dataset.id,
             str(split_filter),
-            selected_count,
         )
 
     if annotation_filter == "annotated":
@@ -715,7 +778,7 @@ def build_dataset_detail_payload(
                 next_cursor = encode_image_cursor(page_images[-1])
 
     page_split_map = (
-        sample_pool_split_map_for_images(dataset.id, page_images, selected_count=selected_count)
+        sample_pool_split_map_for_images(dataset.id, page_images)
         if include_images
         else {}
     )
@@ -895,6 +958,7 @@ def build_dataset_image_payload(
         "id": image.id,
         "datasetId": image.dataset_id,
         "sourceTaskId": image.source_task_id,
+        "augmentationSourceImageId": image.augmentation_source_image_id,
         "sourceType": image.source_type,
         "sourceOrdinal": image.source_ordinal,
         "ordinal": image.ordinal,

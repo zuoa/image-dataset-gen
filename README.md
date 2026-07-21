@@ -6,6 +6,7 @@
 
 - 本地 ZIP 可自动识别并导入 YOLO、COCO、Pascal VOC，也继续支持纯图片压缩包；标注和数据集划分会一并保留。
 - YOLO、COCO、Pascal VOC、CSV 导出支持单图多目标，并附带 `dataset-manifest.json`，将训练样本映射回平台图片与标注版本。
+- 离线增强固定使用 MIT 许可的 Albumentations 2.0.8，同步变换图片与 YOLO 检测框并过滤低可见度目标；增强样本会记录源图谱系，导出时与源图保持在同一 train/val/test 集合。
 - 数据集详情页可手动运行质量检查，识别缺失/空标注、越界与异常框、重复框、重复或损坏图片，并维护问题状态。
 - YOLOv8 训练完成后由 trainer 自动运行 Supervision 评测，生成 mAP、分类指标、混淆矩阵及误检/漏检/类别混淆问题，回流到同一质量面板。
 - Roboflow 下载能力保留。API Key 通过“Roboflow 连接”一次验证后加密保存，后续下载只提交连接 ID；后台导入任务不会把明文密钥写入响应或日志。
@@ -88,7 +89,7 @@ cd frontend && npm ci && npm run build
 ## 数据库与迁移
 
 - 生产数据库固定使用 PostgreSQL；UUID、JSONB、数值精度、外键、唯一约束和检查约束由数据库保证。
-- `20260717_01` 支持空库初始化和旧 Compose PostgreSQL 库接管；当前 head `20260717_03` 增加登录图片验证码表。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
+- `20260717_01` 支持空库初始化和旧 Compose PostgreSQL 库接管；当前 head `20260721_01` 增加增强源图谱系。旧 SQLite 文件仍不支持原地迁移到 PostgreSQL，需使用导入流程。
 - 修改模型后必须生成并审阅迁移，再运行：
 
 ```bash

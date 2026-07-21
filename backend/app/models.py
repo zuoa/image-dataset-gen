@@ -258,6 +258,12 @@ class DatasetImage(TimestampMixin, db.Model):
     source_task_id = db.Column(
         uuid_column_type(), db.ForeignKey("dataset_tasks.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    augmentation_source_image_id = db.Column(
+        uuid_column_type(),
+        db.ForeignKey("dataset_images.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     asset_id = db.Column(
         uuid_column_type(), db.ForeignKey("assets.id", ondelete="RESTRICT"), nullable=True, index=True
     )
