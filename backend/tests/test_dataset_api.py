@@ -9,6 +9,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from PIL import Image
 import pytest
 from sqlalchemy import event
+from werkzeug.datastructures import MultiDict
 
 from app import _backfill_detection_categories, create_app
 from app.config import TestConfig
@@ -1491,6 +1492,96 @@ def test_video_import_rejects_unsupported_file_type(tmp_path: Path):
 
     assert response.status_code == 400
     assert "只支持上传" in response.get_json()["message"]
+
+
+def test_image_upload_imports_into_dataset_pool(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-image-upload")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["summary"]["importedCount"] == 1
+    assert payload["summary"]["skippedCount"] == 0
+    assert payload["task"]["status"] == "completed"
+    assert payload["task"]["config"]["source"] == "upload"
+    dataset = payload["dataset"]
+    assert dataset["imageCount"] == 1
+    assert dataset["selectedCount"] == 1
+    assert dataset["taskCount"] == 1
+    images = _fetch_images(client, dataset_id, headers)
+    assert len(images) == 1
+    assert images[0]["sourceType"] == "import"
+    assert images[0]["selected"] is True
+    with app.app_context():
+        imported_dataset = db.session.get(Dataset, dataset_id)
+        assert imported_dataset is not None
+        assert imported_dataset.next_image_ordinal == 2
+    assert existing_generated_image(str(tmp_path), dataset_id, "image-000001") is not None
+
+
+def test_image_upload_supports_multiple_files_and_skips_invalid(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-image-upload-multi")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data=MultiDict(
+            [
+                ("images", (BytesIO(_png_bytes()), "a.png")),
+                ("images", (BytesIO(_transparent_png_bytes()), "b.png")),
+                ("images", (BytesIO(b"plain text"), "notes.txt")),
+            ]
+        ),
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["summary"]["importedCount"] == 2
+    assert payload["summary"]["skippedCount"] == 1
+    assert payload["summary"]["skippedFiles"] == ["notes.txt"]
+    assert payload["dataset"]["imageCount"] == 2
+    assert payload["dataset"]["taskCount"] == 1
+    images = _fetch_images(client, dataset_id, headers)
+    assert {image["sourceType"] for image in images} == {"import"}
+
+
+def test_image_upload_rejects_empty_submission(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-image-upload-empty")
+    dataset_id = _create_dataset(client, headers)
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(b""), "")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert "至少一张图片" in response.get_json()["message"]
 
 
 def test_roboflow_import_downloads_images_and_yolo_annotations(tmp_path: Path):

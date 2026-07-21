@@ -1,10 +1,11 @@
-import { Upload, X, FileVideo, Download } from "lucide-react";
+import { Upload, X, FileVideo, Download, ImagePlus } from "lucide-react";
 import { Modal, Tabs } from "antd";
 import type { TabsProps } from "antd";
 
 import { VideoImportForm } from "./VideoImportForm";
 import { ZipImportForm } from "./ZipImportForm";
 import { RoboflowImportForm } from "./RoboflowImportForm";
+import { ImageImportForm } from "./ImageImportForm";
 import type {
   VideoFrameIntervalMode,
   VideoOutputFormat,
@@ -14,11 +15,17 @@ import type {
 interface ImportModalProps {
   open: boolean;
   onClose: () => void;
-  activeTab: "video" | "zip" | "roboflow";
-  onTabChange: (tab: "video" | "zip" | "roboflow") => void;
+  activeTab: "image" | "video" | "zip" | "roboflow";
+  onTabChange: (tab: "image" | "video" | "zip" | "roboflow") => void;
   actionError: string | null;
   onClearActionError: () => void;
   isAnyImporting: boolean;
+
+  // Image
+  imageInputRef: React.RefObject<HTMLInputElement>;
+  onImageSelect: (files: File[]) => void;
+  isImportingImages: boolean;
+  pendingImageFiles: { name: string; size: number }[];
 
   // Video
   selectedVideoFile: File | null;
@@ -74,6 +81,16 @@ interface ImportModalProps {
 export function ImportModal(props: ImportModalProps) {
   const items: TabsProps["items"] = [
     {
+      key: "image",
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <ImagePlus className="h-4 w-4" />
+          图片上传
+        </span>
+      ),
+      children: <ImageImportForm {...props} />,
+    },
+    {
       key: "video",
       label: (
         <span className="inline-flex items-center gap-2">
@@ -124,7 +141,7 @@ export function ImportModal(props: ImportModalProps) {
       styles={{ body: { paddingTop: 12 } }}
     >
       <p className="mb-4 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-        从视频、ZIP 压缩包或 Roboflow 导入图片和标注。
+        直接上传图片，或从视频、ZIP 压缩包、Roboflow 导入图片和标注。
       </p>
 
       {props.actionError ? (
@@ -138,7 +155,9 @@ export function ImportModal(props: ImportModalProps) {
 
       <Tabs
         activeKey={props.activeTab}
-        onChange={(key) => props.onTabChange(key as "video" | "zip" | "roboflow")}
+        onChange={(key) =>
+          props.onTabChange(key as "image" | "video" | "zip" | "roboflow")
+        }
         items={items}
       />
     </Modal>

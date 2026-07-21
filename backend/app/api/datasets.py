@@ -104,6 +104,10 @@ from app.services.video_import_service import (
     video_target_size_max_dimension,
 )
 from app.services.dataset_archive_import_service import save_zip_import_source
+from app.services.image_upload_service import (
+    DatasetUploadImportError,
+    import_uploaded_images,
+)
 from app.worker_tasks import extract_dataset_archive_images
 from app.utils.crypto import encrypt_secret
 
@@ -747,6 +751,34 @@ def import_dataset_video(dataset_id: str):
                     "status": task.status,
                     "source": "video",
                 },
+                "task": build_dataset_task_summary_payload(task),
+                "dataset": build_dataset_detail_payload(dataset, include_images=False),
+            }
+        ),
+        201,
+    )
+
+
+@datasets_bp.post("/<dataset_id>/tasks/import/image")
+@jwt_required()
+def import_dataset_image(dataset_id: str):
+    user_id = get_jwt_identity()
+    dataset = sync_dataset(_dataset_for_user(dataset_id, user_id))
+    uploads = list(request.files.getlist("images"))
+    if not uploads or all(not (upload.filename or "") for upload in uploads):
+        return jsonify({"message": "请上传至少一张图片。"}), 400
+
+    try:
+        summary = import_uploaded_images(dataset=dataset, user_id=user_id, uploads=uploads)
+    except DatasetUploadImportError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    task = _task_for_dataset(dataset, summary.pop("taskId"))
+    dataset = _dataset_for_user(dataset.id, user_id)
+    return (
+        jsonify(
+            {
+                "summary": summary,
                 "task": build_dataset_task_summary_payload(task),
                 "dataset": build_dataset_detail_payload(dataset, include_images=False),
             }

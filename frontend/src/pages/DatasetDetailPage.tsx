@@ -28,6 +28,7 @@ import {
   deleteTrainingJob,
   exportDataset,
   importDatasetFromRoboflow,
+  importDatasetImages,
   importDatasetImagesArchive,
   importDatasetVideo,
   retryDatasetTask,
@@ -291,11 +292,15 @@ export function DatasetDetailPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingVideo, setIsImportingVideo] = useState(false);
   const [isImportingRoboflow, setIsImportingRoboflow] = useState(false);
+  const [isImportingImages, setIsImportingImages] = useState(false);
+  const [pendingImageFiles, setPendingImageFiles] = useState<
+    { name: string; size: number }[]
+  >([]);
   const [archiveImportFile, setArchiveImportFile] = useState<{
     name: string;
     size: number;
   } | null>(null);
-  const [activeImportTab, setActiveImportTab] = useState<ImportTab>("video");
+  const [activeImportTab, setActiveImportTab] = useState<ImportTab>("image");
   const [videoFrameIntervalMode, setVideoFrameIntervalMode] =
     useState<VideoFrameIntervalMode>("seconds");
   const [videoFrameInterval, setVideoFrameInterval] = useState(30);
@@ -340,12 +345,14 @@ export function DatasetDetailPage() {
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
 
   const archiveInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const previewImage = previewImageId
     ? loadedImages.find((image) => image.id === previewImageId) ?? null
     : null;
 
-  const isAnyImporting = isImporting || isImportingVideo || isImportingRoboflow;
+  const isAnyImporting =
+    isImporting || isImportingVideo || isImportingRoboflow || isImportingImages;
 
   const normalizedVideoFrameInterval = Math.max(
     1,
@@ -676,6 +683,31 @@ export function DatasetDetailPage() {
       setShowRoboflowConnectionForm(remaining.length === 0);
     } catch (error) {
       setActionError((error as Error).message);
+    }
+  }
+
+  async function handleImageImport(files: File[]) {
+    if (!token || !datasetId || files.length === 0) return;
+    setIsImportingImages(true);
+    setPendingImageFiles(files.map((file) => ({ name: file.name, size: file.size })));
+    setImportSummary(null);
+    setActionError(null);
+    try {
+      const response = await importDatasetImages(datasetId, token, files);
+      setActionError(null);
+      const importedCount = Number(response.summary.importedCount ?? 0);
+      const skippedCount = Number(response.summary.skippedCount ?? 0);
+      setImportSummary(
+        `已上传 ${importedCount} 张图片` +
+          (skippedCount > 0 ? `，跳过 ${skippedCount} 个无效文件` : ""),
+      );
+      setIsImportModalOpen(false);
+      await invalidateDatasetData();
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setPendingImageFiles([]);
+      setIsImportingImages(false);
     }
   }
 
@@ -1032,6 +1064,10 @@ export function DatasetDetailPage() {
         actionError={actionError}
         onClearActionError={() => setActionError(null)}
         isAnyImporting={isAnyImporting}
+        imageInputRef={imageInputRef}
+        onImageSelect={handleImageImport}
+        isImportingImages={isImportingImages}
+        pendingImageFiles={pendingImageFiles}
         selectedVideoFile={selectedVideoFile}
         onVideoSelect={setSelectedVideoFile}
         onVideoImport={handleVideoImport}

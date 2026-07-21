@@ -152,6 +152,20 @@ export function importDatasetImagesArchive(datasetId: string, token: string, arc
   );
 }
 
+export function importDatasetImages(
+  datasetId: string,
+  token: string,
+  files: File[],
+) {
+  const body = new FormData();
+  files.forEach((file) => body.append("images", file));
+  return apiRequestFormData<{
+    summary: Record<string, unknown>;
+    task: DatasetTask;
+    dataset: Dataset;
+  }>(`/datasets/${datasetId}/tasks/import/image`, body, { token, method: "POST" });
+}
+
 export function importDatasetVideo(
   datasetId: string,
   token: string,
