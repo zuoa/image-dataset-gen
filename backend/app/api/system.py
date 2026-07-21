@@ -8,11 +8,13 @@ from app.models import ModelProfile, User
 from app.schemas import ModelProfileSchema
 from app.services.dataset_service import build_dataset_summary_for_user
 from app.services.model_profile_service import (
+    _resolved_profile_api_key,
     build_model_profile_payload,
     create_model_profile,
     ensure_default_model_profiles,
 )
 from app.services.provider_catalog import PROVIDER_CATALOG
+from app.services.provider_model_service import list_available_image_models
 from app.utils.crypto import encrypt_secret
 
 system_bp = Blueprint("system", __name__)
@@ -40,6 +42,23 @@ def list_model_profiles():
         ModelProfile.query.filter_by(user_id=user_id).order_by(ModelProfile.created_at.asc()).all()
     )
     return jsonify({"profiles": [build_model_profile_payload(profile) for profile in profiles]})
+
+
+@system_bp.get("/model-profiles/<profile_id>/available-models")
+@jwt_required()
+def available_models(profile_id: str):
+    user_id = get_jwt_identity()
+    profile = ModelProfile.query.filter_by(id=profile_id, user_id=user_id).first_or_404()
+    if profile.profile_type != "image":
+        return jsonify({"message": "available models are only supported for image profiles"}), 422
+
+    force_refresh = request.args.get("refresh", "").lower() in {"1", "true", "yes"}
+    result = list_available_image_models(
+        provider_id=profile.provider_id,
+        api_key=_resolved_profile_api_key(profile),
+        force_refresh=force_refresh,
+    )
+    return jsonify(result)
 
 
 @system_bp.post("/model-profiles")

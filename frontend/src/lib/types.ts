@@ -66,6 +66,14 @@ export type ProviderInfo = {
   notes: string[];
 };
 
+export type ProviderModelList = {
+  providerId: string;
+  models: string[];
+  source: "live" | "cache" | "catalog";
+  fetchedAt: string | null;
+  warning?: string | null;
+};
+
 export type ModelProfile = {
   id: string;
   profileType: ModelProfileType;

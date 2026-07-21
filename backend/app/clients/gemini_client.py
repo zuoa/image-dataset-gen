@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlencode
 
 
 class GeminiGenerationError(RuntimeError):
@@ -137,6 +138,54 @@ def _generate_gemini_native_image(
         "mime_type": inline_data.get("mimeType", "image/png"),
         "prompt": prompt,
     }
+
+
+def list_models(
+    *,
+    api_key: str,
+    proxy_url: str = "",
+    page_size: int = 1000,
+) -> list[dict[str, Any]]:
+    """List every model visible to a Gemini API key."""
+    models: list[dict[str, Any]] = []
+    page_token = ""
+    seen_page_tokens: set[str] = set()
+
+    while True:
+        query = {"pageSize": max(1, min(page_size, 1000))}
+        if page_token:
+            query["pageToken"] = page_token
+        http_request = request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models?{urlencode(query)}",
+            headers={"x-goog-api-key": api_key},
+            method="GET",
+        )
+
+        try:
+            with _build_opener(proxy_url).open(http_request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise GeminiGenerationError(f"gemini_models_http_{exc.code}: {detail}") from exc
+        except error.URLError as exc:
+            raise GeminiGenerationError(f"gemini_models_network_error: {exc.reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise GeminiGenerationError("gemini_models_invalid_json") from exc
+
+        if not isinstance(payload, dict):
+            raise GeminiGenerationError("gemini_models_invalid_response")
+        page_models = payload.get("models")
+        if not isinstance(page_models, list):
+            raise GeminiGenerationError("gemini_models_invalid_response")
+        models.extend(model for model in page_models if isinstance(model, dict))
+
+        next_page_token = payload.get("nextPageToken")
+        if not isinstance(next_page_token, str) or not next_page_token:
+            return models
+        if next_page_token in seen_page_tokens:
+            raise GeminiGenerationError("gemini_models_repeated_page_token")
+        seen_page_tokens.add(next_page_token)
+        page_token = next_page_token
 
 
 def normalize_aspect_ratio(aspect_ratio: str) -> str:

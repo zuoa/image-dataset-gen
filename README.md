@@ -58,6 +58,8 @@ docker compose run --rm backend flask --app manage.py create-admin \
 
 trainer 注册时会通过能力信息上报可训练模型，训练页面据此提供模型选择并把任务只分配给兼容节点。默认上报 YOLOv8 和 YOLO11 的 n/s/m/l/x 型号；可用逗号分隔的 `TRAINER_SUPPORTED_MODELS` 覆盖该列表。
 
+模型管理会使用已加密保存的 Gemini API Key 获取当前账号可见、且生成客户端兼容的图像模型，并缓存 15 分钟；可通过 `PROVIDER_MODEL_CACHE_TTL_SECONDS` 调整缓存时间。供应商不可达或不支持模型发现时会回退到内置兼容目录，模型 ID 仍可手动输入。即梦推理 API Key 无法调用火山方舟控制面模型列表，因此当前使用内置目录。
+
 ### 可选的智能点选
 
 标注工作台可使用 SAM 2.1 small 将正点/排除点生成临时 mask，人工确认后只保存现有矩形框，不改变训练和导出格式。启用同机 GPU 服务时，先为 `SEGMENTER_SHARED_TOKEN` 生成至少 32 位随机值，并设置：

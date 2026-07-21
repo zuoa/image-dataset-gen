@@ -1,5 +1,5 @@
 import { apiRequest } from "./client";
-import type { ModelProfile, ProviderInfo } from "../lib/types";
+import type { ModelProfile, ProviderInfo, ProviderModelList } from "../lib/types";
 
 function serializeModelProfile(profile: ModelProfile) {
   return {
@@ -22,6 +22,14 @@ export function getProviders() {
 
 export function getModelProfiles(token: string) {
   return apiRequest<{ profiles: ModelProfile[] }>("/system/model-profiles", { token });
+}
+
+export function getAvailableModels(profileId: string, token: string, refresh = false) {
+  const query = refresh ? "?refresh=1" : "";
+  return apiRequest<ProviderModelList>(
+    `/system/model-profiles/${encodeURIComponent(profileId)}/available-models${query}`,
+    { token },
+  );
 }
 
 export function createModelProfile(profile: ModelProfile, token: string) {

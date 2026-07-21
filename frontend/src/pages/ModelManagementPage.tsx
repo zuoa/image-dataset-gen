@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ReloadOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   Col,
@@ -21,8 +24,10 @@ import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
 import { LoadingState } from "../components/common/LoadingState";
 import { UserFacingError } from "../components/common/UserFacingError";
+import { getAvailableModels } from "../api/system";
 import { useConfirm } from "../hooks/useConfirm";
 import { useModelProfiles } from "../hooks/useModelProfiles";
+import { providerModelsQueryKey, useProviderModels } from "../hooks/useProviderModels";
 import { useProviders } from "../hooks/useProviders";
 import { filterModelProfilesByType, getFallbackModelProfile } from "../lib/modelProfiles";
 import type { ModelProfile, ModelProfileType } from "../lib/types";
@@ -62,6 +67,7 @@ function createDraftProfile(
 
 export function ModelManagementPage() {
   const token = useAuthStore((state) => state.token);
+  const queryClient = useQueryClient();
   const confirm = useConfirm();
   const { data: profiles, isLoading: profilesLoading } = useModelProfiles();
   const { data: providers, isLoading: providersLoading } = useProviders();
@@ -73,6 +79,8 @@ export function ModelManagementPage() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [draftProfile, setDraftProfile] = useState<ModelProfile>(() => createDraftProfile("image"));
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [modelRefreshError, setModelRefreshError] = useState<string | null>(null);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
 
   const filteredProfiles = useMemo(
     () => filterModelProfilesByType(profiles ?? [], activeTab),
@@ -107,12 +115,30 @@ export function ModelManagementPage() {
     [draftProfile.profileType, draftProfile.providerId, providers],
   );
 
+  const savedProfile = useMemo(
+    () => profiles?.find((profile) => profile.id === draftProfile.id) ?? null,
+    [draftProfile.id, profiles],
+  );
+  const canLoadProviderModels = Boolean(
+    token &&
+      draftProfile.profileType === "image" &&
+      savedProfile?.providerId === draftProfile.providerId &&
+      !draftProfile.apiKey.trim(),
+  );
+  const providerModelsQuery = useProviderModels(
+    draftProfile.id,
+    draftProfile.providerId,
+    canLoadProviderModels,
+  );
+
   function handleTabChange(nextTab: ModelProfileType) {
     setSaveError(null);
+    setModelRefreshError(null);
     setActiveTab(nextTab);
   }
 
   function handleProviderChange(providerId: string) {
+    setModelRefreshError(null);
     if (draftProfile.profileType === "llm") {
       setDraftProfile((current) => ({
         ...current,
@@ -137,6 +163,7 @@ export function ModelManagementPage() {
   function handleCreate() {
     const next = createDraftProfile(activeTab);
     setSaveError(null);
+    setModelRefreshError(null);
     setSelectedId(next.id);
     setDraftProfile(next);
   }
@@ -165,8 +192,14 @@ export function ModelManagementPage() {
         },
         token,
       );
+      queryClient.setQueryData<ModelProfile[]>(["model-profiles", token], (current = []) =>
+        current.some((profile) => profile.id === saved.id)
+          ? current.map((profile) => (profile.id === saved.id ? saved : profile))
+          : [...current, saved],
+      );
       setSelectedId(saved.id);
       setDraftProfile(saved);
+      await queryClient.invalidateQueries({ queryKey: ["provider-models", token, saved.id] });
     } catch (nextError) {
       setSaveError((nextError as Error).message);
     }
@@ -188,8 +221,29 @@ export function ModelManagementPage() {
     setSaveError(null);
     try {
       await removeProfile(draftProfile.id, token);
+      queryClient.setQueryData<ModelProfile[]>(["model-profiles", token], (current = []) =>
+        current.filter((profile) => profile.id !== draftProfile.id),
+      );
+      queryClient.removeQueries({ queryKey: ["provider-models", token, draftProfile.id] });
     } catch (nextError) {
       setSaveError((nextError as Error).message);
+    }
+  }
+
+  async function handleRefreshModels() {
+    if (!token || !canLoadProviderModels) return;
+    setModelRefreshError(null);
+    setIsRefreshingModels(true);
+    try {
+      const result = await getAvailableModels(draftProfile.id, token, true);
+      queryClient.setQueryData(
+        providerModelsQueryKey(token, draftProfile.id, draftProfile.providerId),
+        result,
+      );
+    } catch (nextError) {
+      setModelRefreshError((nextError as Error).message);
+    } finally {
+      setIsRefreshingModels(false);
     }
   }
 
@@ -205,11 +259,43 @@ export function ModelManagementPage() {
     return llmProviders;
   }, [draftProfile.profileType, providers]);
 
-  const modelOptions = useMemo(
-    () =>
-      activeProvider?.models.map((model) => ({ value: model, label: model })) ?? [],
-    [activeProvider],
-  );
+  const modelOptions = useMemo(() => {
+    const models = providerModelsQuery.data?.models.length
+      ? providerModelsQuery.data.models
+      : (activeProvider?.models ?? []);
+    return Array.from(new Set([draftProfile.model, ...models].filter(Boolean))).map((model) => ({
+      value: model,
+      label: model,
+    }));
+  }, [activeProvider, draftProfile.model, providerModelsQuery.data]);
+
+  const modelAvailabilityHint = useMemo(() => {
+    if (draftProfile.profileType !== "image") return null;
+    if (draftProfile.apiKey.trim() || !savedProfile) {
+      return "保存配置和访问密钥后，可以获取当前账号可用的模型；也可以直接输入模型 ID。";
+    }
+    if (savedProfile.providerId !== draftProfile.providerId) {
+      return "服务商已更改，请先保存配置后再获取模型。";
+    }
+    if (modelRefreshError) return `获取失败：${modelRefreshError}`;
+    if (providerModelsQuery.isLoading) return "正在获取当前账号可用的模型…";
+    if (providerModelsQuery.isError) return "动态获取失败，当前显示内置兼容模型。";
+    const result = providerModelsQuery.data;
+    if (!result) return "可以获取当前账号可用的模型，也可以直接输入模型 ID。";
+    if (result.warning) return result.warning;
+    if (result.source === "live") return "已从服务商获取当前账号可用的兼容图像模型。";
+    if (result.source === "cache") return "当前显示最近获取并缓存的兼容图像模型。";
+    return "当前显示内置兼容模型，也可以直接输入模型 ID。";
+  }, [
+    draftProfile.apiKey,
+    draftProfile.profileType,
+    draftProfile.providerId,
+    modelRefreshError,
+    providerModelsQuery.data,
+    providerModelsQuery.isError,
+    providerModelsQuery.isLoading,
+    savedProfile,
+  ]);
 
   if (profilesLoading || providersLoading) {
     return (
@@ -259,6 +345,7 @@ export function ModelManagementPage() {
                     <Button
                       type={isActive ? "primary" : "default"}
                       onClick={() => {
+                        setModelRefreshError(null);
                         setSelectedId(profile.id);
                         setDraftProfile(createDraftProfile(activeTab, profile));
                       }}
@@ -333,23 +420,42 @@ export function ModelManagementPage() {
 
               <Row gutter={[16, 0]}>
                 <Col xs={24} md={12}>
-                  <Form.Item label="模型版本" className="!mb-2">
-                    {draftProfile.profileType === "image" && modelOptions.length > 0 ? (
-                      <Select
-                        value={draftProfile.model}
-                        onChange={(value) =>
-                          setDraftProfile((current) => ({ ...current, model: value }))
-                        }
-                        options={modelOptions}
-                      />
+                  <Form.Item
+                    label="模型版本"
+                    className="!mb-2"
+                    extra={modelAvailabilityHint}
+                  >
+                    {draftProfile.profileType === "image" ? (
+                      <Space.Compact block>
+                        <AutoComplete
+                          className="w-full"
+                          value={draftProfile.model}
+                          options={modelOptions}
+                          placeholder="选择或输入模型 ID"
+                          filterOption={(inputValue, option) =>
+                            String(option?.value ?? "")
+                              .toLowerCase()
+                              .includes(inputValue.toLowerCase())
+                          }
+                          onChange={(value) =>
+                            setDraftProfile((current) => ({ ...current, model: value }))
+                          }
+                        />
+                        <Button
+                          icon={<ReloadOutlined />}
+                          loading={providerModelsQuery.isFetching || isRefreshingModels}
+                          disabled={!canLoadProviderModels}
+                          onClick={() => void handleRefreshModels()}
+                          aria-label="刷新模型列表"
+                          title="刷新模型列表"
+                        >
+                          刷新
+                        </Button>
+                      </Space.Compact>
                     ) : (
                       <Input
                         value={draftProfile.model}
-                        placeholder={
-                          draftProfile.profileType === "image"
-                            ? "输入模型版本"
-                            : "输入模型名称或标识"
-                        }
+                        placeholder="输入模型名称或标识"
                         onChange={(event) =>
                           setDraftProfile((current) => ({ ...current, model: event.target.value }))
                         }
