@@ -153,6 +153,8 @@ export function DatasetDetailPage() {
     useState<SamplePoolAnnotationFilter>("");
   const [samplePoolSourceFilter, setSamplePoolSourceFilter] =
     useState<SamplePoolSourceFilter>("");
+  const [samplePoolPage, setSamplePoolPage] = useState(1);
+  const [samplePoolPageSize, setSamplePoolPageSize] = useState(50);
 
   const filter = useMemo(
     () =>
@@ -171,42 +173,36 @@ export function DatasetDetailPage() {
   );
 
   const datasetTasksQuery = useDatasetTasks(datasetId!, filter);
-  const imagesQuery = useDatasetImages(datasetId!, filter);
+  const imagesQuery = useDatasetImages(
+    datasetId!,
+    samplePoolPage,
+    samplePoolPageSize,
+    filter,
+  );
   const trainingJobsQuery = useTrainingJobs(datasetId!);
 
   const dataset = datasetTasksQuery.data?.dataset ?? null;
-  const loadedImages = useMemo(
-    () => imagesQuery.data?.pages.flatMap((page) => page.images) ?? [],
-    [imagesQuery.data],
-  );
-  const imagesTotal =
-    imagesQuery.data?.pages[0]?.imagesTotal ?? loadedImages.length;
-  const hasMoreImages = imagesQuery.hasNextPage ?? false;
+  const loadedImages = imagesQuery.data?.images ?? [];
+  const imagesTotal = imagesQuery.data?.imagesTotal ?? loadedImages.length;
   const isLoadingFirstPage = imagesQuery.isLoading;
-  const isLoadingMore = imagesQuery.isFetchingNextPage;
+  const isFetchingImages = imagesQuery.isFetching;
 
   const trainingJobs = trainingJobsQuery.data?.jobs ?? [];
 
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setSamplePoolPage(1);
+  }, [datasetId]);
 
   useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (
-          entries.some((entry) => entry.isIntersecting) &&
-          hasMoreImages &&
-          !isLoadingMore
-        ) {
-          void imagesQuery.fetchNextPage();
-        }
-      },
-      { rootMargin: "600px 0px" },
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [hasMoreImages, isLoadingMore, imagesQuery.fetchNextPage]);
+    if (imagesQuery.isPlaceholderData) return;
+    const lastPage = Math.max(1, Math.ceil(imagesTotal / samplePoolPageSize));
+    if (samplePoolPage > lastPage) setSamplePoolPage(lastPage);
+  }, [
+    imagesQuery.isPlaceholderData,
+    imagesTotal,
+    samplePoolPage,
+    samplePoolPageSize,
+  ]);
 
   useEffect(() => {
     setDeleteSelectionIds((current) =>
@@ -218,6 +214,7 @@ export function DatasetDetailPage() {
   useEffect(() => {
     if (samplePoolClassFilter && !(dataset?.categories ?? []).includes(samplePoolClassFilter)) {
       setSamplePoolClassFilter("");
+      setSamplePoolPage(1);
     }
   }, [dataset?.categories, samplePoolClassFilter]);
 
@@ -410,7 +407,7 @@ export function DatasetDetailPage() {
     );
   }
 
-  function selectFilteredForDelete() {
+  function selectCurrentPageForDelete() {
     setDeleteSelectionIds((current) =>
       Array.from(new Set([...current, ...loadedImages.map((image) => image.id)])),
     );
@@ -925,16 +922,16 @@ export function DatasetDetailPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-xs tabular-nums">
-            <SampleSummary label="当前显示" value={`${loadedImages.length} / ${imagesTotal}`} />
-            <SampleSummary label="已保留" value={filteredSelectedCount} />
-            <SampleSummary label="已标注" value={filteredAnnotatedCount} />
-            <SampleSummary label="未标注" value={filteredUnannotatedCount} />
+            <SampleSummary label="本页样本" value={loadedImages.length} />
+            <SampleSummary label="本页保留" value={filteredSelectedCount} />
+            <SampleSummary label="本页已标注" value={filteredAnnotatedCount} />
+            <SampleSummary label="本页未标注" value={filteredUnannotatedCount} />
           </div>
         </div>
 
         <SamplePoolToolbar
           dataset={dataset}
-          filteredImagesCount={loadedImages.length}
+          currentPageImagesCount={loadedImages.length}
           deleteSelectionCount={deleteSelectionCount}
           unretainedUnannotatedImageCount={
             dataset.unretainedUnannotatedImageCount ?? 0
@@ -945,7 +942,7 @@ export function DatasetDetailPage() {
           onRetainInvert={() => applySamplePoolRetention("invert")}
           onRetainNone={() => applySamplePoolRetention("none")}
           onRetainUnannotated={retainUnannotatedSamplePoolImages}
-          onSelectFilteredForDelete={selectFilteredForDelete}
+          onSelectCurrentPageForDelete={selectCurrentPageForDelete}
           onClearDeleteSelection={() => setDeleteSelectionIds([])}
           onRemoveDeleteSelection={removeDeleteSelection}
         />
@@ -956,18 +953,31 @@ export function DatasetDetailPage() {
           splitFilter={samplePoolSplitFilter}
           annotationFilter={samplePoolAnnotationFilter}
           sourceFilter={samplePoolSourceFilter}
-          onClassFilterChange={setSamplePoolClassFilter}
-          onSplitFilterChange={setSamplePoolSplitFilter}
-          onAnnotationFilterChange={setSamplePoolAnnotationFilter}
-          onSourceFilterChange={setSamplePoolSourceFilter}
+          onClassFilterChange={(value) => {
+            setSamplePoolClassFilter(value);
+            setSamplePoolPage(1);
+          }}
+          onSplitFilterChange={(value) => {
+            setSamplePoolSplitFilter(value);
+            setSamplePoolPage(1);
+          }}
+          onAnnotationFilterChange={(value) => {
+            setSamplePoolAnnotationFilter(value);
+            setSamplePoolPage(1);
+          }}
+          onSourceFilterChange={(value) => {
+            setSamplePoolSourceFilter(value);
+            setSamplePoolPage(1);
+          }}
         />
 
         <SamplePoolGrid
           images={loadedImages}
           imagesTotal={imagesTotal}
+          currentPage={samplePoolPage}
+          pageSize={samplePoolPageSize}
           isLoadingFirstPage={isLoadingFirstPage}
-          isLoadingMore={isLoadingMore}
-          hasMoreImages={hasMoreImages}
+          isFetching={isFetchingImages}
           deleteSelectionIds={deleteSelectionIds}
           deletingImageIds={deletingImageIds}
           onToggleDeleteSelection={toggleDeleteSelection}
@@ -980,7 +990,11 @@ export function DatasetDetailPage() {
             })
           }
           onDeleteImage={removeDatasetImage}
-          sentinelRef={sentinelRef}
+          onPageChange={(page, pageSize) => {
+            setDeleteSelectionIds([]);
+            setSamplePoolPage(page);
+            setSamplePoolPageSize(pageSize);
+          }}
         />
       </Card>
 

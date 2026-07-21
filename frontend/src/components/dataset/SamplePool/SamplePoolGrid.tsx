@@ -1,5 +1,5 @@
 import { Loader } from "lucide-react";
-import { Empty } from "antd";
+import { Empty, Pagination } from "antd";
 
 import { ImageCard } from "./ImageCard";
 import type { DatasetImage, SamplePoolSplit } from "../../../lib/types";
@@ -37,34 +37,38 @@ function samplePoolAnnotationLabel(image: DatasetImage) {
 interface SamplePoolGridProps {
   images: DatasetImage[];
   imagesTotal: number;
+  currentPage: number;
+  pageSize: number;
   isLoadingFirstPage: boolean;
-  isLoadingMore: boolean;
-  hasMoreImages: boolean;
+  isFetching: boolean;
   deleteSelectionIds: string[];
   deletingImageIds: string[];
   onToggleDeleteSelection: (imageId: string) => void;
   onOpenPreview: (imageId: string) => void;
   onToggleSelection: (image: DatasetImage) => void;
   onDeleteImage: (image: DatasetImage) => void;
-  sentinelRef: React.RefObject<HTMLDivElement>;
+  onPageChange: (page: number, pageSize: number) => void;
 }
 
 export function SamplePoolGrid({
   images,
   imagesTotal,
+  currentPage,
+  pageSize,
   isLoadingFirstPage,
-  isLoadingMore,
-  hasMoreImages,
+  isFetching,
   deleteSelectionIds,
   deletingImageIds,
   onToggleDeleteSelection,
   onOpenPreview,
   onToggleSelection,
   onDeleteImage,
-  sentinelRef,
+  onPageChange,
 }: SamplePoolGridProps) {
   const deleteSelectionIdSet = new Set(deleteSelectionIds);
   const deletingImageIdSet = new Set(deletingImageIds);
+  const rangeStart = imagesTotal === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const rangeEnd = Math.min(currentPage * pageSize, imagesTotal);
 
   if (images.length === 0 && !isLoadingFirstPage) {
     return (
@@ -86,42 +90,75 @@ export function SamplePoolGrid({
   }
 
   return (
-    <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-      {images.map((image) => {
-        const split = (image.split ??
-          (image.selected ? "train" : "unselected")) as SamplePoolSplit;
-        const annotated = isImageAnnotated(image);
-        return (
-          <ImageCard
-            key={image.id}
-            image={image}
-            isQueuedForDelete={deleteSelectionIdSet.has(image.id)}
-            isDeleting={deletingImageIdSet.has(image.id)}
-            split={samplePoolSplitLabel(split)}
-            annotationLabel={samplePoolAnnotationLabel(image)}
-            annotationClassName={annotated ? "text-white" : "text-slate-300"}
-            sourceLabel={samplePoolSourceLabel(image.sourceType)}
-            onOpenPreview={() => onOpenPreview(image.id)}
-            onToggleDeleteSelection={() => onToggleDeleteSelection(image.id)}
-            onToggleSelection={() => onToggleSelection(image)}
-            onDelete={() => onDeleteImage(image)}
-          />
-        );
-      })}
-
-      {hasMoreImages ? (
+    <>
+      <div
+        className={`relative mt-6 ${isFetching ? "pointer-events-none" : ""}`}
+        aria-busy={isFetching}
+      >
         <div
-          ref={sentinelRef}
-          className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-neutral-500"
+          className={`grid gap-3 transition-opacity sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 ${
+            isFetching ? "opacity-45" : "opacity-100"
+          }`}
         >
-          {isLoadingMore ? <Loader className="h-4 w-4 animate-spin" /> : null}
-          {isLoadingMore ? "加载更多..." : "向下滚动加载更多"}
+          {images.map((image) => {
+            const split = (image.split ??
+              (image.selected ? "train" : "unselected")) as SamplePoolSplit;
+            const annotated = isImageAnnotated(image);
+            return (
+              <ImageCard
+                key={image.id}
+                image={image}
+                isQueuedForDelete={deleteSelectionIdSet.has(image.id)}
+                isDeleting={deletingImageIdSet.has(image.id)}
+                split={samplePoolSplitLabel(split)}
+                annotationLabel={samplePoolAnnotationLabel(image)}
+                annotationClassName={annotated ? "text-white" : "text-slate-300"}
+                sourceLabel={samplePoolSourceLabel(image.sourceType)}
+                onOpenPreview={() => onOpenPreview(image.id)}
+                onToggleDeleteSelection={() => onToggleDeleteSelection(image.id)}
+                onToggleSelection={() => onToggleSelection(image)}
+                onDelete={() => onDeleteImage(image)}
+              />
+            );
+          })}
         </div>
-      ) : images.length > 0 ? (
-        <div className="col-span-full py-3 text-center text-xs text-neutral-400">
-          已加载全部 {images.length} / {imagesTotal} 张
+
+        {isFetching ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-sm text-slate-600 shadow-sm dark:border-white/10 dark:bg-slate-900/95 dark:text-slate-300">
+              <Loader className="h-4 w-4 animate-spin" />
+              正在更新样本
+            </span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-xs tabular-nums text-slate-500 dark:text-slate-400">
+          本页显示第 {rangeStart}–{rangeEnd} 张，共 {imagesTotal} 张
         </div>
-      ) : null}
-    </div>
+        <div
+          className="overflow-x-auto pb-1 sm:pb-0"
+        >
+          <Pagination
+            current={currentPage}
+            pageSize={pageSize}
+            total={imagesTotal}
+            pageSizeOptions={[20, 50, 100]}
+            showSizeChanger={imagesTotal > 20}
+            showLessItems
+            responsive
+            disabled={isFetching}
+            onChange={(nextPage, nextPageSize) =>
+              onPageChange(
+                nextPageSize === pageSize ? nextPage : 1,
+                nextPageSize,
+              )
+            }
+            aria-label="样本池分页"
+          />
+        </div>
+      </div>
+    </>
   );
 }

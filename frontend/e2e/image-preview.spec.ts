@@ -25,8 +25,8 @@ function previewSvg(label: string) {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function makeImages() {
-  return [1, 2].map((ordinal) => ({
+function makeImages(count = 2) {
+  return Array.from({ length: count }, (_, index) => index + 1).map((ordinal) => ({
     id: `image-${ordinal}`,
     datasetId: "demo",
     sourceType: "generation",
@@ -53,8 +53,9 @@ function makeImages() {
 async function mockDatasetDetailApi(
   page: Page,
   exports: Array<Record<string, unknown>> = [],
+  imageCount = 2,
 ) {
-  const images = makeImages();
+  const images = makeImages(imageCount);
   const dataset = {
     id: "demo",
     name: "城市道路车辆样本集",
@@ -96,7 +97,15 @@ async function mockDatasetDetailApi(
     }
 
     if (request.method() === "GET" && url.pathname === "/api/v1/datasets/demo") {
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ dataset }) });
+      const offset = Number(url.searchParams.get("images_offset") ?? 0);
+      const limitValue = url.searchParams.get("images_limit");
+      const pageImages = limitValue === null
+        ? images
+        : images.slice(offset, offset + Number(limitValue));
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ dataset: { ...dataset, images: pageImages } }),
+      });
       return;
     }
 
@@ -234,6 +243,21 @@ test("dataset detail remains usable on a narrow viewport", async ({ page }, test
     path: testInfo.outputPath("dataset-detail-mobile.png"),
     fullPage: true,
   });
+});
+
+test("sample pool replaces images when changing pages", async ({ page }) => {
+  await mockDatasetDetailApi(page, [], 55);
+  await page.goto("/datasets/demo");
+
+  await expect(page.getByText("本页显示第 1–50 张，共 55 张")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看样本 #1 详情" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看样本 #50 详情" })).toBeVisible();
+
+  await page.locator(".ant-pagination-item-2").click();
+
+  await expect(page.getByText("本页显示第 51–55 张，共 55 张")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看样本 #51 详情" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看样本 #1 详情" })).toBeHidden();
 });
 
 test("desktop image preview is bounded and lets the image use the canvas", async ({ page }, testInfo: TestInfo) => {

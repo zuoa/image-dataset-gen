@@ -1,31 +1,27 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { getDataset } from "../api/datasets";
 import { useAuthStore } from "../store/auth";
 import type { ImageFilter } from "../lib/types";
 
-const PAGE_SIZE = 100;
-
-type PageParam = { cursor?: string; offset?: number };
-
-export function useDatasetImages(datasetId: string, filter?: ImageFilter) {
+export function useDatasetImages(
+  datasetId: string,
+  page: number,
+  pageSize: number,
+  filter?: ImageFilter,
+) {
   const token = useAuthStore((state) => state.token);
-  return useInfiniteQuery({
-    queryKey: ["dataset-images", datasetId, token, filter],
-    queryFn: async ({ pageParam }) => {
+  return useQuery({
+    queryKey: ["dataset-images", datasetId, token, filter, page, pageSize],
+    queryFn: async () => {
       const response = await getDataset(datasetId, token!, {
-        cursor: pageParam?.cursor,
-        offset: pageParam?.cursor ? undefined : pageParam?.offset ?? 0,
-        limit: PAGE_SIZE,
+        offset: (page - 1) * pageSize,
+        limit: pageSize,
         filter,
       });
       return response.dataset;
     },
-    getNextPageParam: (lastPage): PageParam | undefined => {
-      if (!lastPage.imagesNextCursor) return undefined;
-      return { cursor: lastPage.imagesNextCursor };
-    },
-    initialPageParam: { offset: 0 } as PageParam,
+    placeholderData: keepPreviousData,
     enabled: !!token && !!datasetId,
     staleTime: 10_000,
   });

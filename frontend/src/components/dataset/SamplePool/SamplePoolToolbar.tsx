@@ -15,7 +15,7 @@ import type { Dataset } from "../../../lib/types";
 
 interface SamplePoolToolbarProps {
   dataset: Dataset;
-  filteredImagesCount: number;
+  currentPageImagesCount: number;
   deleteSelectionCount: number;
   unretainedUnannotatedImageCount: number;
   isDeletingImages: boolean;
@@ -24,14 +24,14 @@ interface SamplePoolToolbarProps {
   onRetainInvert: () => void;
   onRetainNone: () => void;
   onRetainUnannotated: () => void;
-  onSelectFilteredForDelete: () => void;
+  onSelectCurrentPageForDelete: () => void;
   onClearDeleteSelection: () => void;
   onRemoveDeleteSelection: () => void;
 }
 
 export function SamplePoolToolbar({
   dataset,
-  filteredImagesCount,
+  currentPageImagesCount,
   deleteSelectionCount,
   unretainedUnannotatedImageCount,
   isDeletingImages,
@@ -40,7 +40,7 @@ export function SamplePoolToolbar({
   onRetainInvert,
   onRetainNone,
   onRetainUnannotated,
-  onSelectFilteredForDelete,
+  onSelectCurrentPageForDelete,
   onClearDeleteSelection,
   onRemoveDeleteSelection,
 }: SamplePoolToolbarProps) {
@@ -175,12 +175,12 @@ export function SamplePoolToolbar({
       <div className="flex flex-wrap items-center gap-2">
         <Button
           icon={<CheckSquare className="h-4 w-4" />}
-          onClick={onSelectFilteredForDelete}
+          onClick={onSelectCurrentPageForDelete}
           disabled={
-            filteredImagesCount === 0 || isAnyImporting || isDeletingImages
+            currentPageImagesCount === 0 || isAnyImporting || isDeletingImages
           }
         >
-          选择当前结果
+          选择当前页
         </Button>
         {deleteSelectionCount > 0 ? (
           <Button
