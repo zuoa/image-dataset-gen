@@ -39,7 +39,7 @@ export function ImageCard({
           : "border-transparent bg-[var(--df-color-bg-container)]"
       } ${isDeleting ? "opacity-50" : ""}`}
     >
-      <div className="relative aspect-square overflow-hidden">
+      <div className="relative aspect-[4/3] overflow-hidden">
         <button
           type="button"
           aria-label={`查看样本 #${image.ordinal} 详情`}
