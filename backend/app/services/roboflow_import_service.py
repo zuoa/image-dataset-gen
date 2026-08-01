@@ -37,6 +37,14 @@ class PreparedRoboflowImage:
     image_bytes: bytes
     mime_type: str
     detections: list[dict[str, Any]]
+    label_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class YoloLabelIndex:
+    paths: tuple[Path, ...]
+    by_relative_path: dict[str, Path]
+    by_stem: dict[str, tuple[Path, ...]]
 
 
 def import_roboflow_dataset(
@@ -132,6 +140,7 @@ def _prepare_roboflow_export(
     categories = _merge_categories(existing_categories, imported_categories)
     label_categories = imported_categories or categories
     image_paths = _find_image_paths(dataset_root)
+    label_index = _build_yolo_label_index(dataset_root)
     skipped_files: list[str] = []
     prepared_images: list[PreparedRoboflowImage] = []
     max_imported_images = max(1, int(current_app.config.get("MAX_IMPORTED_IMAGES", 2000)))
@@ -144,15 +153,27 @@ def _prepare_roboflow_export(
             skipped_files.append(image_path.name)
             continue
 
+        label_path = _label_path_for_image(
+            image_path,
+            dataset_root,
+            label_index=label_index,
+        )
         prepared_images.append(
             PreparedRoboflowImage(
                 source_path=image_path,
                 image_bytes=bytes(normalized["image_bytes"]),
                 mime_type=str(normalized["mime_type"]),
-                detections=_load_yolo_detections(image_path, dataset_root, label_categories),
+                detections=_load_yolo_detections(
+                    image_path,
+                    dataset_root,
+                    label_categories,
+                    label_path=label_path,
+                ),
+                label_path=label_path,
             )
         )
 
+    _reject_silently_dropped_annotations(dataset_root, prepared_images, label_index)
     return prepared_images, categories, skipped_files
 
 
@@ -431,55 +452,211 @@ def _merge_categories(existing_categories: list[str], imported_categories: list[
     return merged or ["object"]
 
 
-def _load_yolo_detections(image_path: Path, dataset_root: Path, categories: list[str]) -> list[dict[str, Any]]:
-    label_path = _label_path_for_image(image_path, dataset_root)
+def _load_yolo_detections(
+    image_path: Path,
+    dataset_root: Path,
+    categories: list[str],
+    *,
+    label_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    if label_path is None:
+        label_path = _label_path_for_image(image_path, dataset_root)
     if label_path is None:
         return []
 
     detections: list[dict[str, Any]] = []
-    for line in label_path.read_text(encoding="utf-8").splitlines():
+    for line in label_path.read_text(encoding="utf-8-sig").splitlines():
         parts = line.strip().split()
         if len(parts) < 5:
             continue
         try:
             class_id = int(float(parts[0]))
-            x_center, y_center, width, height = (float(value) for value in parts[1:5])
+            coordinates = [float(value) for value in parts[1:]]
         except ValueError:
             continue
-        if width <= 0 or height <= 0:
+        parsed = _parse_yolo_coordinates(coordinates)
+        if parsed is None:
             continue
+        bbox, metadata = parsed
         category = categories[class_id] if 0 <= class_id < len(categories) else f"class_{class_id}"
         detections.append(
             {
                 "category": category,
                 "confidence": 1.0,
-                "bbox": _clip_bbox(x_center, y_center, width, height),
+                "bbox": bbox,
+                **metadata,
             }
         )
     return detections
 
 
-def _label_path_for_image(image_path: Path, dataset_root: Path) -> Path | None:
-    relative_path = image_path.relative_to(dataset_root)
-    parts = relative_path.parts
-    candidates: list[Path] = []
-
-    if "images" in parts:
-        images_index = parts.index("images")
-        label_relative = Path(*parts[:images_index], "labels", *parts[images_index + 1 :]).with_suffix(".txt")
-        candidates.append(dataset_root / label_relative)
-
-    candidates.extend(
-        [
-            image_path.with_suffix(".txt"),
-            dataset_root / "labels" / image_path.with_suffix(".txt").name,
-        ]
+def _build_yolo_label_index(dataset_root: Path) -> YoloLabelIndex:
+    paths = tuple(
+        sorted(
+            (
+                path
+                for path in dataset_root.rglob("*")
+                if path.is_file() and path.suffix.casefold() == ".txt"
+            ),
+            key=lambda path: path.relative_to(dataset_root).as_posix().casefold(),
+        )
+    )
+    by_relative_path = {
+        path.relative_to(dataset_root).as_posix().casefold(): path
+        for path in paths
+    }
+    paths_by_stem: dict[str, list[Path]] = {}
+    for path in paths:
+        if not _is_label_directory_path(path, dataset_root):
+            continue
+        paths_by_stem.setdefault(path.stem.casefold(), []).append(path)
+    return YoloLabelIndex(
+        paths=paths,
+        by_relative_path=by_relative_path,
+        by_stem={key: tuple(value) for key, value in paths_by_stem.items()},
     )
 
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate
+
+def _label_path_for_image(
+    image_path: Path,
+    dataset_root: Path,
+    *,
+    label_index: YoloLabelIndex | None = None,
+) -> Path | None:
+    label_index = label_index or _build_yolo_label_index(dataset_root)
+    relative_path = image_path.relative_to(dataset_root)
+    parts = relative_path.parts
+    candidate_relative_paths: list[Path] = []
+
+    for images_index, part in enumerate(parts):
+        if part.casefold() != "images":
+            continue
+        candidate_relative_paths.append(
+            Path(
+                *parts[:images_index],
+                "labels",
+                *parts[images_index + 1 :],
+            ).with_suffix(".txt")
+        )
+
+    candidate_relative_paths.extend(
+        [
+            relative_path.with_suffix(".txt"),
+            relative_path.parent / "labels" / relative_path.with_suffix(".txt").name,
+            Path("labels") / relative_path.with_suffix(".txt").name,
+        ]
+    )
+    if len(parts) > 1:
+        candidate_relative_paths.append(
+            Path(*parts[:-1], "labels", relative_path.with_suffix(".txt").name)
+        )
+
+    for candidate in candidate_relative_paths:
+        matched = label_index.by_relative_path.get(candidate.as_posix().casefold())
+        if matched is not None:
+            return matched
+
+    same_stem_paths = label_index.by_stem.get(image_path.stem.casefold(), ())
+    if len(same_stem_paths) == 1:
+        return same_stem_paths[0]
+    if len(same_stem_paths) > 1:
+        image_parent_parts = {
+            part.casefold()
+            for part in relative_path.parent.parts
+            if part.casefold() != "images"
+        }
+        scored = [
+            (
+                len(
+                    image_parent_parts
+                    & {
+                        part.casefold()
+                        for part in path.relative_to(dataset_root).parent.parts
+                        if part.casefold() != "labels"
+                    }
+                ),
+                path,
+            )
+            for path in same_stem_paths
+        ]
+        best_score = max(score for score, _ in scored)
+        best_paths = [path for score, path in scored if score == best_score]
+        if len(best_paths) == 1:
+            return best_paths[0]
     return None
+
+
+def _is_label_directory_path(path: Path, dataset_root: Path) -> bool:
+    return any(
+        part.casefold() == "labels"
+        for part in path.relative_to(dataset_root).parent.parts
+    )
+
+
+def _reject_silently_dropped_annotations(
+    dataset_root: Path,
+    prepared_images: list[PreparedRoboflowImage],
+    label_index: YoloLabelIndex,
+) -> None:
+    non_empty_label_paths = [
+        path
+        for path in label_index.paths
+        if _is_label_directory_path(path, dataset_root)
+        and path.read_text(encoding="utf-8-sig").strip()
+    ]
+    unparsed_matched_labels = [
+        item.label_path
+        for item in prepared_images
+        if item.label_path in non_empty_label_paths and not item.detections
+    ]
+    all_annotations_missing = bool(non_empty_label_paths) and not any(
+        item.detections for item in prepared_images
+    )
+    if not unparsed_matched_labels and not all_annotations_missing:
+        return
+
+    failed_paths = unparsed_matched_labels or non_empty_label_paths
+    samples = ", ".join(
+        path.relative_to(dataset_root).as_posix()
+        for path in failed_paths[:5]
+    )
+    raise RoboflowImportError(
+        "Roboflow 导出包包含非空标签文件，但部分或全部标注未能解析，已停止导入以避免标注丢失。"
+        f"请检查数据集类型和 YOLOv8 标签格式。示例标签：{samples}"
+    )
+
+
+def _parse_yolo_coordinates(
+    coordinates: list[float],
+) -> tuple[list[float], dict[str, Any]] | None:
+    if len(coordinates) == 4:
+        x_center, y_center, width, height = coordinates
+        if width <= 0 or height <= 0:
+            return None
+        return _clip_bbox(x_center, y_center, width, height), {}
+
+    if len(coordinates) < 6 or len(coordinates) % 2 != 0:
+        return None
+    points = list(zip(coordinates[0::2], coordinates[1::2], strict=True))
+    x_values = [point[0] for point in points]
+    y_values = [point[1] for point in points]
+    left = min(x_values)
+    right = max(x_values)
+    top = min(y_values)
+    bottom = max(y_values)
+    width = right - left
+    height = bottom - top
+    if width <= 0 or height <= 0:
+        return None
+    return (
+        _clip_bbox(
+            left + width / 2,
+            top + height / 2,
+            width,
+            height,
+        ),
+        {"sourceYoloCoordinates": coordinates},
+    )
 
 
 def _clip_bbox(x_center: float, y_center: float, width: float, height: float) -> list[float]:

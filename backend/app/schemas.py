@@ -402,6 +402,12 @@ class AnnotationDetectionSchema(Schema):
         required=True,
         validate=validate.Length(equal=4),
     )
+    sourceYoloCoordinates = fields.List(
+        fields.Float(validate=validate.Range(min=0, max=1)),
+        required=False,
+        allow_none=True,
+        validate=validate.Length(min=6, max=10000),
+    )
 
     @validates_schema
     def validate_bbox_area(self, data: dict, **_: object) -> None:
