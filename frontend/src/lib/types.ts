@@ -129,6 +129,21 @@ export type ExternalConnection = {
   updatedAt?: string | null;
 };
 
+export type RoboflowProjectVersion = {
+  version: string;
+  name: string;
+  imageCount: number;
+};
+
+export type RoboflowProjectResolution = {
+  workspace: string;
+  project: string;
+  projectName: string;
+  projectType: string;
+  versions: RoboflowProjectVersion[];
+  selectedVersion: string | null;
+};
+
 export type QualityIssue = {
   id: string;
   qualityRunId: string;

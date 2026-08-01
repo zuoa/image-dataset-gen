@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 import zipfile
 
+import pytest
+
 from app import create_app
 from app.config import TestConfig
 from app.extensions import db
@@ -196,3 +198,215 @@ def test_roboflow_connection_encrypts_secret_and_never_returns_it(tmp_path, monk
     )
     assert listed.status_code == 200
     assert listed.get_json()["connections"] == [payload]
+
+
+def test_roboflow_project_link_resolves_versions(tmp_path, monkeypatch):
+    class ConnectionConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    class FakeProject:
+        name = "Cherry Tomato Plants"
+        type = "object-detection"
+
+        def get_version_information(self):
+            return [
+                {
+                    "id": "ajs-workspace-eapuq/cherry-tomato-plants2-0-rdqhi/2",
+                    "name": "baseline",
+                    "images": 25,
+                },
+                {
+                    "id": "ajs-workspace-eapuq/cherry-tomato-plants2-0-rdqhi/10",
+                    "name": "latest",
+                    "images": 42,
+                },
+            ]
+
+    class FakeWorkspace:
+        def project(self, project_id):
+            assert project_id == "cherry-tomato-plants2-0-rdqhi"
+            return FakeProject()
+
+    class FakeClient:
+        def workspace(self, workspace_id):
+            assert workspace_id == "ajs-workspace-eapuq"
+            return FakeWorkspace()
+
+    app = create_app(ConnectionConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "project-link-user")
+    monkeypatch.setattr(
+        "app.api.integrations.validate_roboflow_api_key",
+        lambda _: {"workspace": "ajs-workspace-eapuq"},
+    )
+    monkeypatch.setattr(
+        "app.services.external_connection_service._make_roboflow_client",
+        lambda api_key: FakeClient() if api_key == "roboflow-secret-key" else None,
+    )
+    connection = client.post(
+        "/api/v1/integrations/roboflow/connections",
+        headers=headers,
+        json={"name": "Production", "apiKey": "roboflow-secret-key"},
+    ).get_json()["connection"]
+
+    response = client.post(
+        "/api/v1/integrations/roboflow/project-links/resolve",
+        headers=headers,
+        json={
+            "connectionId": connection["id"],
+            "url": (
+                "https://app.roboflow.com/ajs-workspace-eapuq/"
+                "cherry-tomato-plants2-0-rdqhi/browse/?tab=images#top"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["project"] == {
+        "workspace": "ajs-workspace-eapuq",
+        "project": "cherry-tomato-plants2-0-rdqhi",
+        "projectName": "Cherry Tomato Plants",
+        "projectType": "object-detection",
+        "versions": [
+            {"version": "10", "name": "latest", "imageCount": 42},
+            {"version": "2", "name": "baseline", "imageCount": 25},
+        ],
+        "selectedVersion": "10",
+    }
+    assert "roboflow-secret-key" not in response.get_data(as_text=True)
+
+
+def test_roboflow_version_link_selects_and_validates_requested_version(
+    tmp_path, monkeypatch
+):
+    class ConnectionConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    class FakeProject:
+        name = "Project"
+        type = "object-detection"
+
+        def get_version_information(self):
+            return [{"id": "workspace/project/3", "images": 10}]
+
+    class FakeWorkspace:
+        def project(self, _):
+            return FakeProject()
+
+    class FakeClient:
+        def workspace(self, _):
+            return FakeWorkspace()
+
+    app = create_app(ConnectionConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "version-link-user")
+    monkeypatch.setattr(
+        "app.api.integrations.validate_roboflow_api_key", lambda _: {"workspace": "workspace"}
+    )
+    monkeypatch.setattr(
+        "app.services.external_connection_service._make_roboflow_client",
+        lambda _: FakeClient(),
+    )
+    connection_id = client.post(
+        "/api/v1/integrations/roboflow/connections",
+        headers=headers,
+        json={"name": "Production", "apiKey": "roboflow-secret-key"},
+    ).get_json()["connection"]["id"]
+
+    selected = client.post(
+        "/api/v1/integrations/roboflow/project-links/resolve",
+        headers=headers,
+        json={
+            "connectionId": connection_id,
+            "url": "https://app.roboflow.com/workspace/project/3",
+        },
+    )
+    missing = client.post(
+        "/api/v1/integrations/roboflow/project-links/resolve",
+        headers=headers,
+        json={
+            "connectionId": connection_id,
+            "url": "https://app.roboflow.com/workspace/project/4",
+        },
+    )
+
+    assert selected.status_code == 200
+    assert selected.get_json()["project"]["selectedVersion"] == "3"
+    assert missing.status_code == 400
+    assert missing.get_json()["message"] == "链接中的 Roboflow 数据版本不存在或不可用。"
+
+
+@pytest.mark.parametrize(
+    "project_url",
+    [
+        "http://app.roboflow.com/workspace/project/browse",
+        "https://evil.example/workspace/project/browse",
+        "https://app.roboflow.com/workspace/project/settings",
+        "https://app.roboflow.com/workspace/project/0",
+        "https://app.roboflow.com/workspace/project/browse/extra",
+        "https://app.roboflow.com/workspace%2Fescaped/project/browse",
+    ],
+)
+def test_roboflow_project_link_rejects_unsupported_urls(project_url):
+    from app.services.external_connection_service import (
+        RoboflowProjectResolutionError,
+        _parse_roboflow_project_link,
+    )
+
+    with pytest.raises(RoboflowProjectResolutionError):
+        _parse_roboflow_project_link(project_url)
+
+
+def test_roboflow_project_link_requires_owned_valid_connection(tmp_path, monkeypatch):
+    class ConnectionConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(ConnectionConfig)
+    client = app.test_client()
+    owner_headers = _auth_headers(client, "project-owner")
+    other_headers = _auth_headers(client, "different-user")
+    monkeypatch.setattr(
+        "app.api.integrations.validate_roboflow_api_key",
+        lambda _: {"workspace": "workspace"},
+    )
+    connection_id = client.post(
+        "/api/v1/integrations/roboflow/connections",
+        headers=owner_headers,
+        json={"name": "Production", "apiKey": "roboflow-secret-key"},
+    ).get_json()["connection"]["id"]
+    request_payload = {
+        "connectionId": connection_id,
+        "url": "https://app.roboflow.com/workspace/project/browse",
+    }
+
+    not_owned = client.post(
+        "/api/v1/integrations/roboflow/project-links/resolve",
+        headers=other_headers,
+        json=request_payload,
+    )
+    with app.app_context():
+        connection = db.session.get(ExternalConnection, connection_id)
+        connection.status = "invalid"
+        db.session.commit()
+    invalid = client.post(
+        "/api/v1/integrations/roboflow/project-links/resolve",
+        headers=owner_headers,
+        json=request_payload,
+    )
+
+    assert not_owned.status_code == 404
+    assert invalid.status_code == 409
+    assert invalid.get_json()["message"] == "Roboflow 连接不可用，请先重新验证。"
+
+
+def test_roboflow_version_normalization_handles_empty_and_malformed_values():
+    from app.services.external_connection_service import _normalize_roboflow_versions
+
+    assert _normalize_roboflow_versions([]) == []
+    assert _normalize_roboflow_versions(
+        [
+            {"id": "workspace/project/2", "images": "invalid"},
+            {"id": "workspace/project/not-a-version", "images": 4},
+            None,
+        ]
+    ) == [{"version": "2", "name": "", "imageCount": 0}]

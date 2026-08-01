@@ -1,5 +1,8 @@
 import { apiRequest } from "./client";
-import type { ExternalConnection } from "../lib/types";
+import type {
+  ExternalConnection,
+  RoboflowProjectResolution,
+} from "../lib/types";
 
 export function listRoboflowConnections(token: string) {
   return apiRequest<{ connections: ExternalConnection[] }>(
@@ -30,5 +33,20 @@ export function deleteRoboflowConnection(token: string, connectionId: string) {
   return apiRequest<{ deleted: boolean; id: string }>(
     `/integrations/roboflow/connections/${connectionId}`,
     { method: "DELETE", token },
+  );
+}
+
+export function resolveRoboflowProjectLink(
+  token: string,
+  connectionId: string,
+  url: string,
+) {
+  return apiRequest<{ project: RoboflowProjectResolution }>(
+    "/integrations/roboflow/project-links/resolve",
+    {
+      method: "POST",
+      token,
+      body: JSON.stringify({ connectionId, url }),
+    },
   );
 }

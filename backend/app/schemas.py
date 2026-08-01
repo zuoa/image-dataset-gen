@@ -191,6 +191,11 @@ class ExternalConnectionSchema(Schema):
     apiKey = fields.String(load_default="", validate=validate.Length(max=255))
 
 
+class RoboflowProjectLinkSchema(Schema):
+    connectionId = fields.String(required=True, validate=validate.Length(min=1, max=64))
+    url = fields.String(required=True, validate=validate.Length(min=1, max=2048))
+
+
 class QualityRunCreateSchema(Schema):
     confidenceThreshold = fields.Float(
         load_default=0.25, validate=validate.Range(min=0, max=1)

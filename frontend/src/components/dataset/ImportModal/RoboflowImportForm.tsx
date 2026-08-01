@@ -1,7 +1,8 @@
-import { Download, Loader } from "lucide-react";
-import { Button, Card, Input, Select, Space } from "antd";
+import { Download, Link2 } from "lucide-react";
+import { AutoComplete, Button, Card, Input, Select, Space } from "antd";
 
 import { useConfirm } from "../../../hooks/useConfirm";
+import type { RoboflowProjectResolution } from "../../../lib/types";
 
 interface RoboflowConnection {
   id: string;
@@ -24,6 +25,11 @@ interface RoboflowImportFormProps {
   onShowRoboflowConnectionFormChange: (show: boolean) => void;
   isLoadingRoboflowConnections: boolean;
   isSavingRoboflowConnection: boolean;
+  roboflowProjectUrl: string;
+  onRoboflowProjectUrlChange: (value: string) => void;
+  onResolveRoboflowProjectLink: () => Promise<void>;
+  isResolvingRoboflowLink: boolean;
+  resolvedRoboflowProject: RoboflowProjectResolution | null;
   roboflowWorkspace: string;
   onRoboflowWorkspaceChange: (value: string) => void;
   roboflowProject: string;
@@ -78,7 +84,11 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
               className="flex-1"
               value={props.selectedRoboflowConnectionId || undefined}
               onChange={props.onSelectedRoboflowConnectionIdChange}
-              disabled={props.isLoadingRoboflowConnections || props.isImportingRoboflow}
+              disabled={
+                props.isLoadingRoboflowConnections ||
+                props.isImportingRoboflow ||
+                props.isResolvingRoboflowLink
+              }
               placeholder={
                 props.isLoadingRoboflowConnections
                   ? "正在读取连接…"
@@ -91,7 +101,11 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
             />
             <Button
               onClick={handleRemoveConnection}
-              disabled={!props.selectedRoboflowConnectionId || props.isImportingRoboflow}
+              disabled={
+                !props.selectedRoboflowConnectionId ||
+                props.isImportingRoboflow ||
+                props.isResolvingRoboflowLink
+              }
             >
               删除
             </Button>
@@ -139,6 +153,51 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
           </>
         ) : null}
 
+        <div className="sm:col-span-2">
+          <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
+            项目链接
+          </div>
+          <Space.Compact className="w-full">
+            <Input
+              value={props.roboflowProjectUrl}
+              onChange={(event) =>
+                props.onRoboflowProjectUrlChange(event.target.value)
+              }
+              onPressEnter={() => void props.onResolveRoboflowProjectLink()}
+              placeholder="https://app.roboflow.com/workspace/project/browse"
+              disabled={
+                props.isImportingRoboflow || props.isResolvingRoboflowLink
+              }
+              prefix={<Link2 className="h-4 w-4 text-neutral-400" />}
+            />
+            <Button
+              onClick={() => void props.onResolveRoboflowProjectLink()}
+              loading={props.isResolvingRoboflowLink}
+              disabled={
+                props.isAnyImporting ||
+                props.isImportingRoboflow ||
+                !props.selectedRoboflowConnectionId ||
+                !props.roboflowProjectUrl.trim()
+              }
+            >
+              解析链接
+            </Button>
+          </Space.Compact>
+          <div className="mt-2 text-xs leading-5 text-neutral-500">
+            支持 Roboflow 项目的 browse 页面或明确的数据版本链接。
+          </div>
+        </div>
+
+        {props.resolvedRoboflowProject ? (
+          <div className="sm:col-span-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-950/30 dark:text-emerald-100">
+            已识别 {props.resolvedRoboflowProject.projectName}
+            {props.resolvedRoboflowProject.projectType
+              ? ` · ${props.resolvedRoboflowProject.projectType}`
+              : ""}
+            {` · ${String(props.resolvedRoboflowProject.versions.length)} 个数据版本`}
+          </div>
+        ) : null}
+
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
             工作区标识
@@ -147,7 +206,7 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
             value={props.roboflowWorkspace}
             onChange={(event) => props.onRoboflowWorkspaceChange(event.target.value)}
             placeholder="workspace-id"
-            disabled={props.isImportingRoboflow}
+            disabled={props.isImportingRoboflow || props.isResolvingRoboflowLink}
           />
         </div>
         <div>
@@ -158,18 +217,33 @@ export function RoboflowImportForm(props: RoboflowImportFormProps) {
             value={props.roboflowProject}
             onChange={(event) => props.onRoboflowProjectChange(event.target.value)}
             placeholder="project-id"
-            disabled={props.isImportingRoboflow}
+            disabled={props.isImportingRoboflow || props.isResolvingRoboflowLink}
           />
         </div>
         <div>
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
             数据版本
           </div>
-          <Input
+          <AutoComplete
+            className="w-full"
             value={props.roboflowVersion}
-            onChange={(event) => props.onRoboflowVersionChange(event.target.value)}
+            onChange={props.onRoboflowVersionChange}
+            options={(props.resolvedRoboflowProject?.versions ?? []).map(
+              (version) => ({
+                value: version.version,
+                label:
+                  `版本 ${version.version}` +
+                  (version.name ? ` · ${version.name}` : "") +
+                  ` · ${String(version.imageCount)} 张图片`,
+              }),
+            )}
+            filterOption={(inputValue, option) =>
+              String(option?.label ?? "")
+                .toLowerCase()
+                .includes(inputValue.toLowerCase())
+            }
             placeholder="version"
-            disabled={props.isImportingRoboflow}
+            disabled={props.isImportingRoboflow || props.isResolvingRoboflowLink}
           />
         </div>
         <div>

@@ -18,6 +18,7 @@ import {
   createRoboflowConnection,
   deleteRoboflowConnection,
   listRoboflowConnections,
+  resolveRoboflowProjectLink,
 } from "../api/integrations";
 import {
   annotateDataset,
@@ -69,6 +70,7 @@ import type {
   DatasetImage,
   ExternalConnection,
   ImageFilter,
+  RoboflowProjectResolution,
   SamplePoolSource,
   SamplePoolSplit,
   TrainingJob,
@@ -327,6 +329,10 @@ export function DatasetDetailPage() {
     useState(false);
   const [isSavingRoboflowConnection, setIsSavingRoboflowConnection] =
     useState(false);
+  const [roboflowProjectUrl, setRoboflowProjectUrl] = useState("");
+  const [isResolvingRoboflowLink, setIsResolvingRoboflowLink] = useState(false);
+  const [resolvedRoboflowProject, setResolvedRoboflowProject] =
+    useState<RoboflowProjectResolution | null>(null);
   const [roboflowWorkspace, setRoboflowWorkspace] = useState("");
   const [roboflowProject, setRoboflowProject] = useState("");
   const [roboflowVersion, setRoboflowVersion] = useState("");
@@ -643,6 +649,59 @@ export function DatasetDetailPage() {
     }
   }
 
+  function clearResolvedRoboflowProject() {
+    setResolvedRoboflowProject(null);
+  }
+
+  function handleRoboflowConnectionChange(connectionId: string) {
+    setSelectedRoboflowConnectionId(connectionId);
+    clearResolvedRoboflowProject();
+  }
+
+  function handleRoboflowProjectUrlChange(projectUrl: string) {
+    setRoboflowProjectUrl(projectUrl);
+    clearResolvedRoboflowProject();
+  }
+
+  function handleRoboflowWorkspaceChange(workspace: string) {
+    setRoboflowWorkspace(workspace);
+    clearResolvedRoboflowProject();
+  }
+
+  function handleRoboflowProjectChange(project: string) {
+    setRoboflowProject(project);
+    clearResolvedRoboflowProject();
+  }
+
+  async function handleRoboflowProjectLinkResolve() {
+    if (!token || !selectedRoboflowConnectionId || !roboflowProjectUrl.trim()) {
+      setActionError("请选择 Roboflow 连接并粘贴项目链接。");
+      return;
+    }
+
+    setIsResolvingRoboflowLink(true);
+    setActionError(null);
+    try {
+      const response = await resolveRoboflowProjectLink(
+        token,
+        selectedRoboflowConnectionId,
+        roboflowProjectUrl.trim(),
+      );
+      setResolvedRoboflowProject(response.project);
+      setRoboflowWorkspace(response.project.workspace);
+      setRoboflowProject(response.project.project);
+      setRoboflowVersion(response.project.selectedVersion ?? "");
+      if (response.project.versions.length === 0) {
+        setActionError("这个 Roboflow 项目还没有可导入的数据版本。");
+      }
+    } catch (error) {
+      clearResolvedRoboflowProject();
+      setActionError((error as Error).message);
+    } finally {
+      setIsResolvingRoboflowLink(false);
+    }
+  }
+
   async function saveRoboflowConnection() {
     if (!token || !newRoboflowConnectionName.trim() || !newRoboflowApiKey.trim())
       return;
@@ -655,6 +714,7 @@ export function DatasetDetailPage() {
       );
       setRoboflowConnections((current) => [...current, response.connection]);
       setSelectedRoboflowConnectionId(response.connection.id);
+      clearResolvedRoboflowProject();
       setNewRoboflowApiKey("");
       setShowRoboflowConnectionForm(false);
       setActionError(null);
@@ -680,6 +740,7 @@ export function DatasetDetailPage() {
       );
       setRoboflowConnections(remaining);
       setSelectedRoboflowConnectionId(remaining[0]?.id ?? "");
+      clearResolvedRoboflowProject();
       setShowRoboflowConnectionForm(remaining.length === 0);
     } catch (error) {
       setActionError((error as Error).message);
@@ -1092,7 +1153,7 @@ export function DatasetDetailPage() {
         archiveImportFile={archiveImportFile}
         roboflowConnections={roboflowConnections}
         selectedRoboflowConnectionId={selectedRoboflowConnectionId}
-        onSelectedRoboflowConnectionIdChange={setSelectedRoboflowConnectionId}
+        onSelectedRoboflowConnectionIdChange={handleRoboflowConnectionChange}
         onLoadRoboflowConnections={loadRoboflowConnections}
         onSaveRoboflowConnection={saveRoboflowConnection}
         onRemoveSelectedRoboflowConnection={removeSelectedRoboflowConnection}
@@ -1104,10 +1165,15 @@ export function DatasetDetailPage() {
         onShowRoboflowConnectionFormChange={setShowRoboflowConnectionForm}
         isLoadingRoboflowConnections={isLoadingRoboflowConnections}
         isSavingRoboflowConnection={isSavingRoboflowConnection}
+        roboflowProjectUrl={roboflowProjectUrl}
+        onRoboflowProjectUrlChange={handleRoboflowProjectUrlChange}
+        onResolveRoboflowProjectLink={handleRoboflowProjectLinkResolve}
+        isResolvingRoboflowLink={isResolvingRoboflowLink}
+        resolvedRoboflowProject={resolvedRoboflowProject}
         roboflowWorkspace={roboflowWorkspace}
-        onRoboflowWorkspaceChange={setRoboflowWorkspace}
+        onRoboflowWorkspaceChange={handleRoboflowWorkspaceChange}
         roboflowProject={roboflowProject}
-        onRoboflowProjectChange={setRoboflowProject}
+        onRoboflowProjectChange={handleRoboflowProjectChange}
         roboflowVersion={roboflowVersion}
         onRoboflowVersionChange={setRoboflowVersion}
         onRoboflowImport={handleRoboflowImport}

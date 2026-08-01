@@ -6,12 +6,14 @@ from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models import ExternalConnection
-from app.schemas import ExternalConnectionSchema
+from app.schemas import ExternalConnectionSchema, RoboflowProjectLinkSchema
 from app.services.external_connection_service import (
     ConnectionValidationError,
+    RoboflowProjectResolutionError,
     build_connection_payload,
     connection_secret,
     mark_connection_valid,
+    resolve_roboflow_project_link,
     set_connection_secret,
     validate_roboflow_api_key,
 )
@@ -39,6 +41,23 @@ def list_roboflow_connections():
     return jsonify(
         {"connections": [build_connection_payload(item) for item in connections]}
     )
+
+
+@integrations_bp.post("/roboflow/project-links/resolve")
+@jwt_required()
+def resolve_roboflow_project():
+    user_id = get_jwt_identity()
+    payload = RoboflowProjectLinkSchema().load(request.get_json() or {})
+    connection = _connection_for_user(payload["connectionId"], user_id)
+    if connection.status != "valid":
+        return jsonify({"message": "Roboflow 连接不可用，请先重新验证。"}), 409
+    try:
+        project = resolve_roboflow_project_link(
+            connection_secret(connection), payload["url"]
+        )
+    except RoboflowProjectResolutionError as exc:
+        return jsonify({"message": str(exc)}), 400
+    return jsonify({"project": project})
 
 
 @integrations_bp.post("/roboflow/connections")

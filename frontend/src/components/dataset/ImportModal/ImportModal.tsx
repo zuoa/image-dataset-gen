@@ -11,6 +11,7 @@ import type {
   VideoOutputFormat,
   VideoTargetSize,
 } from "../types";
+import type { RoboflowProjectResolution } from "../../../lib/types";
 
 interface ImportModalProps {
   open: boolean;
@@ -68,6 +69,11 @@ interface ImportModalProps {
   onShowRoboflowConnectionFormChange: (show: boolean) => void;
   isLoadingRoboflowConnections: boolean;
   isSavingRoboflowConnection: boolean;
+  roboflowProjectUrl: string;
+  onRoboflowProjectUrlChange: (value: string) => void;
+  onResolveRoboflowProjectLink: () => Promise<void>;
+  isResolvingRoboflowLink: boolean;
+  resolvedRoboflowProject: RoboflowProjectResolution | null;
   roboflowWorkspace: string;
   onRoboflowWorkspaceChange: (value: string) => void;
   roboflowProject: string;
