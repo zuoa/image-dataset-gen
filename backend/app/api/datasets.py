@@ -14,12 +14,16 @@ from werkzeug.utils import secure_filename
 
 from app.extensions import db
 from app.models import (
+    Asset,
     Dataset,
     DatasetExport,
     DatasetImage,
     DatasetTask,
     ExternalConnection,
     ModelProfile,
+    QualityRun,
+    TrainingInferenceJob,
+    TrainingJob,
     generate_uuid,
 )
 from app.schemas import (
@@ -115,6 +119,12 @@ datasets_bp = Blueprint("datasets", __name__)
 
 SEGMENT_SESSION_SALT = "dataset-forge-segment-assist-v1"
 
+ACTIVE_DATASET_TASK_STATUSES = {"running"}
+ACTIVE_EXPORT_STATUSES = {"pending", "running"}
+ACTIVE_TRAINING_STATUSES = {"queued", "assigned", "preparing", "running", "uploading"}
+ACTIVE_INFERENCE_STATUSES = {"queued", "assigned", "running"}
+ACTIVE_QUALITY_STATUSES = {"queued", "running"}
+
 
 
 def _dataset_for_user(dataset_id: str, user_id: str) -> Dataset:
@@ -180,6 +190,34 @@ def _task_for_dataset(dataset: Dataset, task_id: str) -> DatasetTask:
 def _sync_and_payload(dataset: Dataset) -> dict:
     dataset = sync_dataset_stats_from_db(dataset)
     return build_dataset_detail_payload(dataset, include_images=False)
+
+
+def _dataset_has_active_work(dataset: Dataset) -> bool:
+    if str((dataset.annotation_json or {}).get("status") or "") == "running":
+        return True
+    checks = (
+        DatasetTask.query.filter(
+            DatasetTask.dataset_id == dataset.id,
+            DatasetTask.status.in_(ACTIVE_DATASET_TASK_STATUSES),
+        ),
+        DatasetExport.query.filter(
+            DatasetExport.dataset_id == dataset.id,
+            DatasetExport.status.in_(ACTIVE_EXPORT_STATUSES),
+        ),
+        TrainingJob.query.filter(
+            TrainingJob.dataset_id == dataset.id,
+            TrainingJob.status.in_(ACTIVE_TRAINING_STATUSES),
+        ),
+        TrainingInferenceJob.query.filter(
+            TrainingInferenceJob.dataset_id == dataset.id,
+            TrainingInferenceJob.status.in_(ACTIVE_INFERENCE_STATUSES),
+        ),
+        QualityRun.query.filter(
+            QualityRun.dataset_id == dataset.id,
+            QualityRun.status.in_(ACTIVE_QUALITY_STATUSES),
+        ),
+    )
+    return any(query.with_entities(func.count()).scalar() for query in checks)
 
 
 def _begin_idempotency(user_id: str, scope: str, payload: dict[str, Any]):
@@ -457,6 +495,30 @@ def update_dataset(dataset_id: str):
 
     db.session.commit()
     return jsonify({"dataset": _sync_and_payload(dataset)})
+
+
+@datasets_bp.delete("/<dataset_id>")
+@jwt_required()
+def delete_dataset(dataset_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    if _dataset_has_active_work(dataset):
+        return jsonify({"message": "数据集仍有运行中或排队中的任务，请等待任务结束后再删除。"}), 409
+
+    images = DatasetImage.query.filter_by(dataset_id=dataset.id).all()
+    for image in images:
+        _delete_dataset_image_assets(dataset, image)
+
+    deleted_at = now_utc()
+    assets = Asset.query.filter_by(dataset_id=dataset.id).all()
+    for asset in assets:
+        asset.status = "deleted"
+        asset.deleted_at = deleted_at
+
+    deleted_dataset_id = dataset.id
+    db.session.delete(dataset)
+    db.session.commit()
+    return jsonify({"deletedDatasetId": deleted_dataset_id})
 
 
 @datasets_bp.post("/<dataset_id>/tasks/generation")
@@ -1159,6 +1221,23 @@ def delete_dataset_images(dataset_id: str):
         return jsonify({"message": "one or more images not found"}), 404
 
     return jsonify(_delete_dataset_images(dataset, [image_by_id[image_id] for image_id in image_ids]))
+
+
+@datasets_bp.delete("/<dataset_id>/tasks/<task_id>/images")
+@jwt_required()
+def delete_dataset_task_images(dataset_id: str, task_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    task = _task_for_dataset(dataset, task_id)
+    if task.status in ACTIVE_DATASET_TASK_STATUSES:
+        return jsonify({"message": "该批次仍在运行，请等待任务结束后再删除图片。"}), 409
+
+    images = (
+        DatasetImage.query.filter_by(dataset_id=dataset.id, source_task_id=task.id)
+        .order_by(DatasetImage.ordinal.asc())
+        .all()
+    )
+    return jsonify(_delete_dataset_images(dataset, images))
 
 
 @datasets_bp.patch("/<dataset_id>/images/<image_id>/annotations")

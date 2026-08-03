@@ -8,6 +8,7 @@ import {
   PencilRuler,
   Sparkles,
   Tag,
+  Trash2,
   Upload,
   Wand2,
 } from "lucide-react";
@@ -49,6 +50,7 @@ interface DatasetActionsProps {
   onImport: () => void;
   onTrain: () => void;
   onTasks: () => void;
+  onDelete: () => void;
   isAnyImporting?: boolean;
 }
 
@@ -61,6 +63,7 @@ export function DatasetActions({
   onImport,
   onTrain,
   onTasks,
+  onDelete,
   isAnyImporting,
 }: DatasetActionsProps) {
   const [workspaceEntry, setWorkspaceEntry] = useState<WorkspaceEntry | null>(
@@ -184,6 +187,17 @@ export function DatasetActions({
           <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400">
             {dataset.tasks.length}
           </span>
+        </Button>
+
+        <Button
+          type="text"
+          danger
+          size="large"
+          icon={<Trash2 className="h-4 w-4" />}
+          onClick={onDelete}
+          className="!h-11"
+        >
+          删除数据集
         </Button>
       </div>
 

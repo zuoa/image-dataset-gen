@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClipboardList, Images } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { ClipboardList, Images, Trash2 } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Button,
@@ -24,8 +24,10 @@ import {
   annotateDataset,
   augmentDataset,
   createTrainingJob,
+  deleteDataset,
   deleteDatasetImage,
   deleteDatasetImages,
+  deleteDatasetTaskImages,
   deleteTrainingJob,
   exportDataset,
   importDatasetFromRoboflow,
@@ -43,6 +45,7 @@ import { UserFacingError } from "../components/common/UserFacingError";
 import { DatasetHeader } from "../components/dataset/DatasetHeader";
 import { DatasetMetrics } from "../components/dataset/DatasetMetrics";
 import { DatasetActions } from "../components/dataset/DatasetActions";
+import { DeleteDatasetModal } from "../components/dataset/DeleteDatasetModal";
 import {
   SamplePoolFilters,
   SamplePoolGrid,
@@ -68,6 +71,7 @@ import type {
   AugmentationSettings,
   DatasetExport,
   DatasetImage,
+  DatasetTask,
   ExternalConnection,
   ImageFilter,
   RoboflowProjectResolution,
@@ -168,6 +172,7 @@ function SampleSummary({
 export function DatasetDetailPage() {
   const token = useAuthStore((state) => state.token);
   const { datasetId } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
 
@@ -265,6 +270,10 @@ export function DatasetDetailPage() {
   >(null);
   const [deleteSelectionIds, setDeleteSelectionIds] = useState<string[]>([]);
   const [deletingImageIds, setDeletingImageIds] = useState<string[]>([]);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [isDeleteDatasetOpen, setIsDeleteDatasetOpen] = useState(false);
+  const [isDeletingDataset, setIsDeletingDataset] = useState(false);
+  const [deleteDatasetError, setDeleteDatasetError] = useState<string | null>(null);
 
   const [multiplier, setMultiplier] = useState(3);
   const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
@@ -384,12 +393,14 @@ export function DatasetDetailPage() {
 
   const latestTrainingJob = trainingJobs[0];
   async function invalidateDatasetData() {
-    await queryClient.invalidateQueries({
-      queryKey: ["dataset-tasks", datasetId, token],
-    });
-    await queryClient.invalidateQueries({
-      queryKey: ["dataset-images", datasetId, token],
-    });
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["dataset-tasks", datasetId, token],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["dataset-images", datasetId, token],
+      }),
+    ]);
   }
 
   async function confirmDiscardChanges() {
@@ -502,6 +513,51 @@ export function DatasetDetailPage() {
       loadedImages.some((image) => image.id === imageId),
     );
     void removeDatasetImages(imageIds, "");
+  }
+
+  async function removeTaskImages(task: DatasetTask) {
+    if (!token || !datasetId || task.imagesGenerated === 0 || task.status === "running") return;
+    if (previewImage?.sourceTaskId === task.id && !(await confirmDiscardChanges())) return;
+    const confirmed = await confirm({
+      title: "删除本批图片",
+      content: `删除“${task.taskName}”现存的 ${task.imagesGenerated} 张图片？任务配置、成本和执行记录会保留。`,
+      okDanger: true,
+    });
+    if (!confirmed) return;
+
+    setDeletingTaskId(task.id);
+    try {
+      const response = await deleteDatasetTaskImages(datasetId, task.id, token);
+      const deletedIdSet = new Set(response.deletedImageIds);
+      if (previewImageId && deletedIdSet.has(previewImageId)) setPreviewImageId(null);
+      setDeleteSelectionIds((current) =>
+        current.filter((imageId) => !deletedIdSet.has(imageId)),
+      );
+      setActionError(null);
+      await invalidateDatasetData();
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setDeletingTaskId(null);
+    }
+  }
+
+  async function removeCurrentDataset() {
+    if (!token || !dataset) return;
+    setIsDeletingDataset(true);
+    setDeleteDatasetError(null);
+    try {
+      await deleteDataset(dataset.id, token);
+      queryClient.removeQueries({ queryKey: ["dataset-tasks", dataset.id] });
+      queryClient.removeQueries({ queryKey: ["dataset-images", dataset.id] });
+      queryClient.removeQueries({ queryKey: ["training-jobs", dataset.id] });
+      await queryClient.invalidateQueries({ queryKey: ["datasets", token] });
+      navigate("/datasets", { replace: true });
+    } catch (error) {
+      setDeleteDatasetError((error as Error).message);
+    } finally {
+      setIsDeletingDataset(false);
+    }
   }
 
   async function createAugmentationTask() {
@@ -953,6 +1009,10 @@ export function DatasetDetailPage() {
               }}
               onTrain={() => setIsTrainingPanelOpen(true)}
               onTasks={() => setIsTasksDrawerOpen(true)}
+              onDelete={() => {
+                setDeleteDatasetError(null);
+                setIsDeleteDatasetOpen(true);
+              }}
               isAnyImporting={isAnyImporting}
             />
             {importSummary ? (
@@ -1276,19 +1336,32 @@ export function DatasetDetailPage() {
                       {task.subject}
                     </div>
                   </div>
-                  {(task.status === "paused" || task.status === "failed") && token ? (
-                    <Button
-                      onClick={() =>
-                        void retryDatasetTask(dataset.id, task.id, token)
-                          .then(() => invalidateDatasetData())
-                          .catch((error) =>
-                            setActionError((error as Error).message),
-                          )
-                      }
-                    >
-                      重试
-                    </Button>
-                  ) : null}
+                  <Space wrap size="small">
+                    {(task.status === "paused" || task.status === "failed") && token ? (
+                      <Button
+                        onClick={() =>
+                          void retryDatasetTask(dataset.id, task.id, token)
+                            .then(() => invalidateDatasetData())
+                            .catch((error) =>
+                              setActionError((error as Error).message),
+                            )
+                        }
+                      >
+                        重试
+                      </Button>
+                    ) : null}
+                    {task.status !== "running" && task.imagesGenerated > 0 ? (
+                      <Button
+                        danger
+                        icon={<Trash2 className="h-4 w-4" />}
+                        loading={deletingTaskId === task.id}
+                        disabled={deletingTaskId !== null}
+                        onClick={() => void removeTaskImages(task)}
+                      >
+                        删除本批图片
+                      </Button>
+                    ) : null}
+                  </Space>
                 </div>
                 <Progress percent={task.progressPercent} className="mt-4" />
                 <Space wrap className="mt-3 text-xs text-slate-500 dark:text-slate-400">
@@ -1303,6 +1376,17 @@ export function DatasetDetailPage() {
           )}
         />
       </Modal>
+
+      <DeleteDatasetModal
+        open={isDeleteDatasetOpen}
+        dataset={dataset}
+        loading={isDeletingDataset}
+        error={deleteDatasetError}
+        onClose={() => {
+          if (!isDeletingDataset) setIsDeleteDatasetOpen(false);
+        }}
+        onConfirm={removeCurrentDataset}
+      />
     </PageContainer>
   );
 }

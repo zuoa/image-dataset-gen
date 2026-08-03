@@ -95,6 +95,13 @@ export function updateDataset(
   });
 }
 
+export function deleteDataset(datasetId: string, token: string) {
+  return apiRequest<{ deletedDatasetId: string }>(`/datasets/${datasetId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export function previewGenerationPrompt(config: TaskConfig, token: string) {
   return apiRequest<PromptPreview>("/datasets/generation/prompt-preview", {
     method: "POST",
@@ -402,6 +409,16 @@ export function deleteDatasetImages(datasetId: string, imageIds: string[], token
       method: "DELETE",
       token,
       body: JSON.stringify({ image_ids: imageIds }),
+    },
+  );
+}
+
+export function deleteDatasetTaskImages(datasetId: string, taskId: string, token: string) {
+  return apiRequest<{ deletedImageIds: string[]; deletedCount: number; dataset: Dataset }>(
+    `/datasets/${datasetId}/tasks/${taskId}/images`,
+    {
+      method: "DELETE",
+      token,
     },
   );
 }

@@ -14,7 +14,7 @@ from werkzeug.datastructures import MultiDict
 from app import _backfill_detection_categories, create_app
 from app.config import TestConfig
 from app.extensions import db
-from app.models import Dataset, DatasetImage, DatasetTask, TaskItem
+from app.models import Asset, Dataset, DatasetImage, DatasetTask, TaskItem
 from app.services.annotation_storage import load_annotation_result, save_annotation_result
 from app.services.image_storage import existing_generated_image, save_generated_image
 
@@ -1187,6 +1187,158 @@ def test_delete_multiple_dataset_images_clears_pool(tmp_path: Path):
     assert dataset["tasks"][0]["imagesGenerated"] == 0
     assert dataset["tasks"][0]["selectedCount"] == 0
     assert _fetch_images(client, dataset_id, headers) == []
+
+
+def test_delete_dataset_removes_records_and_marks_assets_deleted(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-delete")
+    dataset_id = _create_dataset(client, headers)
+
+    imported = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 201
+    image = _fetch_images(client, dataset_id, headers)[0]
+    image_path = existing_generated_image(str(tmp_path), dataset_id, f"image-{image['ordinal']:06d}")
+    assert image_path is not None and image_path.exists()
+
+    response = client.delete(f"/api/v1/datasets/{dataset_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"deletedDatasetId": dataset_id}
+    assert client.get(f"/api/v1/datasets/{dataset_id}", headers=headers).status_code == 404
+    assert image_path.exists() is False
+    with app.app_context():
+        assert db.session.get(Dataset, dataset_id) is None
+        assets = Asset.query.all()
+        assert assets
+        assert all(asset.status == "deleted" for asset in assets)
+        assert all(asset.deleted_at is not None for asset in assets)
+
+
+def test_delete_task_images_keeps_task_history_and_other_batches(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-delete-task-images")
+    dataset_id = _create_dataset(client, headers)
+
+    first = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(_png_bytes((255, 0, 0))), "first.png")},
+        content_type="multipart/form-data",
+    )
+    second = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(_png_bytes((0, 255, 0))), "second.png")},
+        content_type="multipart/form-data",
+    )
+    assert first.status_code == second.status_code == 201
+    first_task_id = first.get_json()["task"]["id"]
+    second_task_id = second.get_json()["task"]["id"]
+    before_images = _fetch_images(client, dataset_id, headers)
+    first_image_id = next(
+        image["id"] for image in before_images if image["sourceTaskId"] == first_task_id
+    )
+
+    response = client.delete(
+        f"/api/v1/datasets/{dataset_id}/tasks/{first_task_id}/images",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["deletedImageIds"] == [first_image_id]
+    assert payload["deletedCount"] == 1
+    assert payload["dataset"]["imageCount"] == 1
+    assert payload["dataset"]["taskCount"] == 2
+    tasks = {task["id"]: task for task in payload["dataset"]["tasks"]}
+    assert tasks[first_task_id]["imagesGenerated"] == 0
+    assert tasks[second_task_id]["imagesGenerated"] == 1
+    remaining_images = _fetch_images(client, dataset_id, headers)
+    assert [image["sourceTaskId"] for image in remaining_images] == [second_task_id]
+
+    repeated = client.delete(
+        f"/api/v1/datasets/{dataset_id}/tasks/{first_task_id}/images",
+        headers=headers,
+    )
+    assert repeated.status_code == 200
+    assert repeated.get_json()["deletedCount"] == 0
+
+
+def test_delete_rejects_running_dataset_and_task_batch(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    headers = _auth_headers(client, "dataset-delete-running")
+    dataset_id = _create_dataset(client, headers)
+    imported = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=headers,
+        data={"images": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 201
+    task_id = imported.get_json()["task"]["id"]
+    with app.app_context():
+        task = db.session.get(DatasetTask, task_id)
+        assert task is not None
+        task.status = "running"
+        db.session.commit()
+
+    batch_response = client.delete(
+        f"/api/v1/datasets/{dataset_id}/tasks/{task_id}/images",
+        headers=headers,
+    )
+    dataset_response = client.delete(f"/api/v1/datasets/{dataset_id}", headers=headers)
+
+    assert batch_response.status_code == 409
+    assert dataset_response.status_code == 409
+    assert len(_fetch_images(client, dataset_id, headers)) == 1
+
+
+def test_delete_dataset_and_task_batch_enforce_dataset_ownership(tmp_path: Path):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path)
+
+    app = create_app(DatasetConfig)
+    client = app.test_client()
+    owner_headers = _auth_headers(client, "dataset-delete-owner")
+    other_headers = _auth_headers(client, "dataset-delete-other")
+    dataset_id = _create_dataset(client, owner_headers)
+    imported = client.post(
+        f"/api/v1/datasets/{dataset_id}/tasks/import/image",
+        headers=owner_headers,
+        data={"images": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 201
+    task_id = imported.get_json()["task"]["id"]
+
+    dataset_response = client.delete(
+        f"/api/v1/datasets/{dataset_id}", headers=other_headers
+    )
+    batch_response = client.delete(
+        f"/api/v1/datasets/{dataset_id}/tasks/{task_id}/images",
+        headers=other_headers,
+    )
+
+    assert dataset_response.status_code == 404
+    assert batch_response.status_code == 404
+    assert len(_fetch_images(client, dataset_id, owner_headers)) == 1
 
 
 def test_video_import_extracts_frames_into_dataset_pool_and_export_names(tmp_path: Path):

@@ -1,21 +1,31 @@
 import { useDeferredValue, useMemo, useState } from "react";
-import { ArrowRight, FolderPlus, Layers3, ScanSearch } from "lucide-react";
+import { ArrowRight, FolderPlus, Layers3, ScanSearch, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button, Card, Col, Empty, Input, List, Row, Tag, Typography } from "antd";
+import { useQueryClient } from "@tanstack/react-query";
 
+import { deleteDataset } from "../api/datasets";
 import { PageContainer } from "../components/common/PageContainer";
 import { PageHeader } from "../components/common/PageHeader";
 import { StatCard } from "../components/common/DataCard";
 import { LoadingState } from "../components/common/LoadingState";
 import { StatusBadge } from "../components/common/StatusBadge";
+import { DeleteDatasetModal } from "../components/dataset/DeleteDatasetModal";
 import { useDatasets } from "../hooks/useDatasets";
+import type { DatasetListItem } from "../lib/types";
 import { formatCurrency, formatDate } from "../lib/utils";
+import { useAuthStore } from "../store/auth";
 
 const { Title, Text, Paragraph } = Typography;
 
 export function DatasetListPage() {
+  const token = useAuthStore((state) => state.token);
+  const queryClient = useQueryClient();
   const { data, isLoading } = useDatasets();
   const [search, setSearch] = useState("");
+  const [datasetToDelete, setDatasetToDelete] = useState<DatasetListItem | null>(null);
+  const [deletingDatasetId, setDeletingDatasetId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
   const summary = data?.summary;
@@ -36,6 +46,26 @@ export function DatasetListPage() {
     { label: "图片总数", value: summary?.totalImages ?? 0 },
     { label: "累计成本", value: formatCurrency(summary?.costToDate ?? 0) },
   ];
+
+  function openDeleteDataset(dataset: DatasetListItem) {
+    setDeleteError(null);
+    setDatasetToDelete(dataset);
+  }
+
+  async function removeDataset() {
+    if (!token || !datasetToDelete) return;
+    setDeletingDatasetId(datasetToDelete.id);
+    setDeleteError(null);
+    try {
+      await deleteDataset(datasetToDelete.id, token);
+      setDatasetToDelete(null);
+      await queryClient.invalidateQueries({ queryKey: ["datasets", token] });
+    } catch (error) {
+      setDeleteError((error as Error).message);
+    } finally {
+      setDeletingDatasetId(null);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -117,13 +147,12 @@ export function DatasetListPage() {
           }}
           renderItem={(dataset) => (
             <List.Item key={dataset.id}>
-              <Link to={`/datasets/${dataset.id}`}>
-                <Card
-                  hoverable
-                  className="group transition-colors"
-                  styles={{ body: { padding: 0 } }}
-                >
-                  <div className="p-5">
+              <Card
+                hoverable
+                className="group w-full transition-colors"
+                styles={{ body: { padding: 0 } }}
+              >
+                <div className="p-5">
                     <Row gutter={[16, 16]} align="middle">
                       <Col xs={24} lg={16}>
                         <div className="flex flex-wrap gap-2">
@@ -132,9 +161,11 @@ export function DatasetListPage() {
                             <StatusBadge status={dataset.latestTask.taskType} />
                           ) : null}
                         </div>
-                        <Title level={4} className="mt-3 !mb-2 !text-xl">
-                          {dataset.name}
-                        </Title>
+                        <Link to={`/datasets/${dataset.id}`}>
+                          <Title level={4} className="mt-3 !mb-2 !text-xl hover:!text-[var(--df-color-primary)]">
+                            {dataset.name}
+                          </Title>
+                        </Link>
                         <Paragraph className="!mb-0 max-w-2xl !text-sm leading-6 text-neutral-500 dark:text-neutral-400">
                           {dataset.description || "尚未填写说明。"}
                         </Paragraph>
@@ -179,17 +210,40 @@ export function DatasetListPage() {
                         </Row>
                       </Col>
                     </Row>
-                    <div className="mt-4 flex items-center justify-end text-neutral-400 transition group-hover:text-[var(--df-color-primary)] dark:text-neutral-500 dark:group-hover:text-[var(--df-color-primary-text-hover)]">
-                      <Text className="mr-1 text-sm">查看详情</Text>
-                      <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                      <Button
+                        type="text"
+                        danger
+                        icon={<Trash2 className="h-4 w-4" />}
+                        onClick={() => openDeleteDataset(dataset)}
+                      >
+                        删除
+                      </Button>
+                      <Link
+                        to={`/datasets/${dataset.id}`}
+                        className="flex items-center text-neutral-400 transition group-hover:text-[var(--df-color-primary)] dark:text-neutral-500 dark:group-hover:text-[var(--df-color-primary-text-hover)]"
+                      >
+                        <Text className="mr-1 text-sm">查看详情</Text>
+                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                      </Link>
                     </div>
-                  </div>
-                </Card>
-              </Link>
+                </div>
+              </Card>
             </List.Item>
           )}
         />
       </div>
+
+      <DeleteDatasetModal
+        open={datasetToDelete !== null}
+        dataset={datasetToDelete}
+        loading={deletingDatasetId === datasetToDelete?.id}
+        error={deleteError}
+        onClose={() => {
+          if (!deletingDatasetId) setDatasetToDelete(null);
+        }}
+        onConfirm={removeDataset}
+      />
     </PageContainer>
   );
 }
