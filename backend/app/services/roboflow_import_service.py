@@ -70,7 +70,9 @@ def import_roboflow_dataset(
             model_format=model_format,
             target_dir=Path(temp_dir),
         )
-        prepared_images, categories, skipped_files = _prepare_roboflow_export(export_root, dataset.categories)
+        prepared_images, categories, skipped_files, diagnostics = _prepare_roboflow_export(
+            export_root, dataset.categories
+        )
 
         if not prepared_images:
             raise RoboflowImportError(_empty_export_message(export_root, skipped_files))
@@ -81,6 +83,7 @@ def import_roboflow_dataset(
             prepared_images=prepared_images,
             categories=categories,
             skipped_files=skipped_files,
+            diagnostics=diagnostics,
             workspace=workspace,
             project=project,
             version=version,
@@ -134,7 +137,7 @@ def _make_roboflow_client(api_key: str):
 def _prepare_roboflow_export(
     export_root: Path,
     existing_categories: list[str],
-) -> tuple[list[PreparedRoboflowImage], list[str], list[str]]:
+) -> tuple[list[PreparedRoboflowImage], list[str], list[str], dict[str, Any]]:
     dataset_root = _find_dataset_root(export_root)
     imported_categories = _load_yolo_categories(dataset_root)
     categories = _merge_categories(existing_categories, imported_categories)
@@ -174,7 +177,62 @@ def _prepare_roboflow_export(
         )
 
     _reject_silently_dropped_annotations(dataset_root, prepared_images, label_index)
-    return prepared_images, categories, skipped_files
+    diagnostics = _build_export_diagnostics(
+        export_root,
+        dataset_root,
+        prepared_images=prepared_images,
+        categories=imported_categories,
+        image_paths=image_paths,
+        label_index=label_index,
+    )
+    current_app.logger.info("Roboflow export diagnostics: %s", diagnostics)
+    return prepared_images, categories, skipped_files, diagnostics
+
+
+def _build_export_diagnostics(
+    export_root: Path,
+    dataset_root: Path,
+    *,
+    prepared_images: list[PreparedRoboflowImage],
+    categories: list[str],
+    image_paths: list[Path],
+    label_index: YoloLabelIndex,
+) -> dict[str, Any]:
+    label_paths = [
+        path for path in label_index.paths if _is_label_directory_path(path, dataset_root)
+    ]
+    non_empty_label_paths = [
+        path
+        for path in label_paths
+        if path.read_text(encoding="utf-8-sig").strip()
+    ]
+
+    def _sample(paths: list[Path] | tuple[Path, ...], limit: int = 5) -> list[str]:
+        samples: list[str] = []
+        for path in paths[:limit]:
+            try:
+                samples.append(path.relative_to(dataset_root).as_posix())
+            except ValueError:
+                samples.append(path.name)
+        return samples
+
+    top_level_entries: list[str] = []
+    if export_root.is_dir():
+        for entry in sorted(export_root.iterdir(), key=lambda item: item.name.casefold())[:12]:
+            top_level_entries.append(f"{entry.name}/" if entry.is_dir() else entry.name)
+
+    return {
+        "dataYamlFound": (dataset_root / "data.yaml").exists(),
+        "categoriesParsed": categories,
+        "topLevelEntries": top_level_entries,
+        "imageFilesFound": len(image_paths),
+        "labelFilesFound": len(label_paths),
+        "nonEmptyLabelFiles": len(non_empty_label_paths),
+        "imagesWithMatchedLabel": sum(1 for item in prepared_images if item.label_path is not None),
+        "imagesWithDetections": sum(1 for item in prepared_images if item.detections),
+        "sampleImages": _sample(image_paths),
+        "sampleLabels": _sample(label_paths),
+    }
 
 
 def _resolve_download_root(export_root: Path) -> Path:
@@ -214,6 +272,7 @@ def _persist_prepared_images(
     prepared_images: list[PreparedRoboflowImage],
     categories: list[str],
     skipped_files: list[str],
+    diagnostics: dict[str, Any] | None = None,
     workspace: str,
     project: str,
     version: str,
@@ -330,6 +389,7 @@ def _persist_prepared_images(
         "emptyAnnotationCount": empty_annotation_count,
         "skippedCount": len(skipped_files),
         "skippedFiles": skipped_files[:10],
+        "exportDiagnostics": diagnostics or {},
     }
     task.config_json = {**(task.config_json or {}), "resultSummary": result_summary}
     db.session.commit()

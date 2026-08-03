@@ -38,7 +38,7 @@ def test_prepare_roboflow_export_matches_case_insensitive_sibling_labels_and_pol
 
     app = create_app(DatasetConfig)
     with app.app_context():
-        prepared, categories, skipped = _prepare_roboflow_export(export_root, [])
+        prepared, categories, skipped, diagnostics = _prepare_roboflow_export(export_root, [])
 
     assert categories == ["vehicle"]
     assert skipped == []
@@ -52,6 +52,11 @@ def test_prepare_roboflow_export_matches_case_insensitive_sibling_labels_and_pol
             "sourceYoloCoordinates": coordinates,
         }
     ]
+    assert diagnostics["dataYamlFound"] is True
+    assert diagnostics["imageFilesFound"] == 1
+    assert diagnostics["nonEmptyLabelFiles"] == 1
+    assert diagnostics["imagesWithMatchedLabel"] == 1
+    assert diagnostics["imagesWithDetections"] == 1
 
 
 def test_prepare_roboflow_export_rejects_nonempty_labels_when_nothing_can_be_parsed(
