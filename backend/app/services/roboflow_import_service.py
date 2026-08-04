@@ -177,6 +177,7 @@ def _prepare_roboflow_export(
         )
 
     _reject_silently_dropped_annotations(dataset_root, prepared_images, label_index)
+    categories = _extend_categories_with_detection_names(categories, prepared_images)
     diagnostics = _build_export_diagnostics(
         export_root,
         dataset_root,
@@ -187,6 +188,32 @@ def _prepare_roboflow_export(
     )
     current_app.logger.info("Roboflow export diagnostics: %s", diagnostics)
     return prepared_images, categories, skipped_files, diagnostics
+
+
+def _extend_categories_with_detection_names(
+    categories: list[str],
+    prepared_images: list[PreparedRoboflowImage],
+) -> list[str]:
+    """Keep detections whose class id fell outside data.yaml names.
+
+    Such detections are named ``class_<id>`` by the parser. Without this the
+    annotation revision writer would reject them as unknown categories and
+    abort the whole import.
+    """
+    detection_categories = {
+        str(detection["category"])
+        for prepared in prepared_images
+        for detection in prepared.detections
+        if detection.get("category")
+    }
+    extras = sorted(detection_categories - set(categories))
+    if extras:
+        current_app.logger.warning(
+            "Roboflow export references class ids missing from data.yaml; "
+            "adding fallback categories: %s",
+            extras,
+        )
+    return [*categories, *extras]
 
 
 def _build_export_diagnostics(

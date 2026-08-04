@@ -59,6 +59,32 @@ def test_prepare_roboflow_export_matches_case_insensitive_sibling_labels_and_pol
     assert diagnostics["imagesWithDetections"] == 1
 
 
+def test_prepare_roboflow_export_extends_categories_for_out_of_range_class_ids(
+    tmp_path: Path,
+):
+    class DatasetConfig(TestConfig):
+        STORAGE_ROOT = str(tmp_path / "storage")
+
+    export_root = tmp_path / "export"
+    images_dir = export_root / "train" / "images"
+    labels_dir = export_root / "train" / "labels"
+    images_dir.mkdir(parents=True)
+    labels_dir.mkdir(parents=True)
+    (export_root / "data.yaml").write_text("names: [vehicle]\n", encoding="utf-8")
+    (images_dir / "sample.png").write_bytes(_png_bytes())
+    (labels_dir / "sample.txt").write_text("5 0.5 0.5 0.4 0.3\n", encoding="utf-8")
+
+    app = create_app(DatasetConfig)
+    with app.app_context():
+        prepared, categories, skipped, diagnostics = _prepare_roboflow_export(export_root, [])
+
+    assert skipped == []
+    assert categories == ["vehicle", "class_5"]
+    assert prepared[0].detections[0]["category"] == "class_5"
+    assert diagnostics["imagesWithDetections"] == 1
+
+
+
 def test_prepare_roboflow_export_rejects_nonempty_labels_when_nothing_can_be_parsed(
     tmp_path: Path,
 ):
