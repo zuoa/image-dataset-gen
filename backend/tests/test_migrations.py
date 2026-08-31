@@ -87,8 +87,11 @@ def test_initial_migration_adopts_unversioned_auto_created_schema(tmp_path: Path
     assert {"token_hash", "token_scopes"} <= worker_columns
     image_columns = {column["name"] for column in inspector.get_columns("dataset_images")}
     assert "augmentation_source_image_id" in image_columns
+    assert "dataset_collections" in inspector.get_table_names()
+    dataset_columns = {column["name"] for column in inspector.get_columns("datasets")}
+    assert "collection_id" in dataset_columns
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260721_01"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "20260827_01"
         assert connection.scalar(sa.text("SELECT id FROM users WHERE email = 'legacy-user'")) == user_id
 
 

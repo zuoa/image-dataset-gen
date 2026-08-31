@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Cpu,
   Download,
+  FolderInput,
   PencilRuler,
   Sparkles,
   Tag,
@@ -50,6 +51,7 @@ interface DatasetActionsProps {
   onImport: () => void;
   onTrain: () => void;
   onTasks: () => void;
+  onMove?: () => void;
   onDelete: () => void;
   isAnyImporting?: boolean;
 }
@@ -63,6 +65,7 @@ export function DatasetActions({
   onImport,
   onTrain,
   onTasks,
+  onMove,
   onDelete,
   isAnyImporting,
 }: DatasetActionsProps) {
@@ -188,6 +191,18 @@ export function DatasetActions({
             {dataset.tasks.length}
           </span>
         </Button>
+
+        {onMove ? (
+          <Button
+            type="text"
+            size="large"
+            icon={<FolderInput className="h-4 w-4" />}
+            onClick={onMove}
+            className="!h-11 !text-slate-600 dark:!text-slate-300"
+          >
+            移动到分组
+          </Button>
+        ) : null}
 
         <Button
           type="text"

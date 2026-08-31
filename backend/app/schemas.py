@@ -135,15 +135,62 @@ class DatasetSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(min=3, max=255))
     categories = fields.List(fields.String(), required=True, validate=validate.Length(min=1, max=24))
     description = fields.String(load_default="", allow_none=True, validate=validate.Length(max=1000))
+    collectionId = fields.String(allow_none=True, validate=validate.Length(max=36))
 
     @validates_schema
     def validate_categories(self, data: dict, **_: object) -> None:
-        categories = [str(category).strip() for category in data.get("categories") or []]
-        if any(not category for category in categories):
-            raise ValidationError({"categories": ["category names cannot be empty"]})
-        if len(categories) != len(set(categories)):
-            raise ValidationError({"categories": ["category names must be unique"]})
-        data["categories"] = categories
+        if "categories" in data:
+            categories = [str(category).strip() for category in data.get("categories") or []]
+            if any(not category for category in categories):
+                raise ValidationError({"categories": ["category names cannot be empty"]})
+            if len(categories) != len(set(categories)):
+                raise ValidationError({"categories": ["category names must be unique"]})
+            data["categories"] = categories
+        if "collectionId" in data:
+            collection_id = data.get("collectionId")
+            if collection_id is None or str(collection_id).strip() == "":
+                data["collectionId"] = None
+            else:
+                collection_id = str(collection_id).strip()
+                _validate_uuid(collection_id)
+                data["collectionId"] = collection_id
+
+
+class DatasetCollectionSchema(Schema):
+    name = fields.String(required=True, validate=validate.Length(min=1, max=255))
+    description = fields.String(load_default="", allow_none=True, validate=validate.Length(max=1000))
+    parentId = fields.String(allow_none=True, validate=validate.Length(max=36))
+
+    @validates_schema
+    def validate_parent(self, data: dict, **_: object) -> None:
+        if "parentId" not in data:
+            return
+        parent_id = data.get("parentId")
+        if parent_id is None or str(parent_id).strip() == "":
+            data["parentId"] = None
+            return
+        parent_id = str(parent_id).strip()
+        _validate_uuid(parent_id)
+        data["parentId"] = parent_id
+
+
+class DatasetCollectionUpdateSchema(Schema):
+    name = fields.String(validate=validate.Length(min=1, max=255))
+    description = fields.String(allow_none=True, validate=validate.Length(max=1000))
+    parentId = fields.String(allow_none=True, validate=validate.Length(max=36))
+    position = fields.Integer(validate=validate.Range(min=0))
+
+    @validates_schema
+    def validate_parent(self, data: dict, **_: object) -> None:
+        if "parentId" not in data:
+            return
+        parent_id = data.get("parentId")
+        if parent_id is None or str(parent_id).strip() == "":
+            data["parentId"] = None
+            return
+        parent_id = str(parent_id).strip()
+        _validate_uuid(parent_id)
+        data["parentId"] = parent_id
 
 
 class GenerationTaskSchema(PromptPreviewSchema):

@@ -18,6 +18,7 @@ async function mockAppShellApi(page: Page) {
         contentType: "application/json",
         body: JSON.stringify({
           datasets: [],
+          collections: [],
           summary: {
             totalDatasets: 0,
             activeDatasets: 0,

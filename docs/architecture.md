@@ -43,6 +43,7 @@ API 在同一个 PostgreSQL 事务内写入业务状态和 `outbox_events`。独
 ## 核心数据模型
 
 - `datasets` / `dataset_categories`：数据集和稳定类别身份。
+- `dataset_collections`：用户私有的数据集分组树（邻接表 + path）。分组只用于列表导航；图片、标注、导出和训练仍只属于叶子 `datasets`。`datasets.collection_id` 可空，未分组的数据集出现在根列表。
 - `assets`：文件元数据、SHA-256、存储 key 和删除状态。
 - `dataset_images`：样本业务状态，关联 Asset，不再把文件路径当作唯一事实来源。
 - `annotation_revisions` / `detections`：可审计标注版本；JSON 文件仅作为旧数据兼容和导出缓存。

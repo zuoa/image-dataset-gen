@@ -47,6 +47,11 @@ from app.services.annotation_storage import (
 )
 from app.services.dataset_export_service import dataset_export_download_name, get_dataset_archive_path
 from app.services.file_delivery import deliver_local_file
+from app.services.collection_service import (
+    collections_by_id_for_user,
+    list_collection_payloads_for_user,
+    resolve_collection_id,
+)
 from app.services.dataset_service import (
     IMAGE_SOURCE_FILTER_TYPES,
     build_dataset_export_payload,
@@ -355,6 +360,7 @@ def list_datasets():
         if len(fetched) > limit and datasets:
             next_cursor = encode_dataset_cursor(datasets[-1])
     dataset_ids = [dataset.id for dataset in datasets]
+    collections_by_id = collections_by_id_for_user(user_id)
     latest_tasks_by_dataset_id: dict[str, DatasetTask] = {}
     if dataset_ids:
         ranked_tasks = (
@@ -378,13 +384,21 @@ def list_datasets():
         )
         latest_tasks_by_dataset_id = {task.dataset_id: task for task in latest_tasks}
 
+    collections = list_collection_payloads_for_user(user_id)
+    summary = build_dataset_summary_for_user(user_id)
+    summary["totalCollections"] = len(collections)
     return jsonify(
         {
             "datasets": [
-                build_dataset_list_payload(dataset, latest_tasks_by_dataset_id.get(dataset.id))
+                build_dataset_list_payload(
+                    dataset,
+                    latest_tasks_by_dataset_id.get(dataset.id),
+                    collections_by_id,
+                )
                 for dataset in datasets
             ],
-            "summary": build_dataset_summary_for_user(user_id),
+            "collections": collections,
+            "summary": summary,
             "nextCursor": next_cursor,
         }
     )
@@ -403,6 +417,7 @@ def create_dataset():
         name=payload["name"].strip(),
         description=(payload.get("description") or "").strip(),
         categories=[str(category).strip() for category in payload["categories"] if str(category).strip()],
+        collection_id=resolve_collection_id(payload.get("collectionId"), user_id),
     )
     db.session.add(dataset)
     sync_dataset_category_rows(dataset)
@@ -492,19 +507,14 @@ def update_dataset(dataset_id: str):
     if "categories" in payload:
         dataset.categories = [str(category).strip() for category in payload["categories"] if str(category).strip()]
         sync_dataset_category_rows(dataset)
+    if "collectionId" in payload:
+        dataset.collection_id = resolve_collection_id(payload.get("collectionId"), user_id)
 
     db.session.commit()
     return jsonify({"dataset": _sync_and_payload(dataset)})
 
 
-@datasets_bp.delete("/<dataset_id>")
-@jwt_required()
-def delete_dataset(dataset_id: str):
-    user_id = get_jwt_identity()
-    dataset = _dataset_for_user(dataset_id, user_id)
-    if _dataset_has_active_work(dataset):
-        return jsonify({"message": "数据集仍有运行中或排队中的任务，请等待任务结束后再删除。"}), 409
-
+def purge_dataset_row(dataset: Dataset) -> None:
     images = DatasetImage.query.filter_by(dataset_id=dataset.id).all()
     for image in images:
         _delete_dataset_image_assets(dataset, image)
@@ -515,8 +525,19 @@ def delete_dataset(dataset_id: str):
         asset.status = "deleted"
         asset.deleted_at = deleted_at
 
-    deleted_dataset_id = dataset.id
     db.session.delete(dataset)
+
+
+@datasets_bp.delete("/<dataset_id>")
+@jwt_required()
+def delete_dataset(dataset_id: str):
+    user_id = get_jwt_identity()
+    dataset = _dataset_for_user(dataset_id, user_id)
+    if _dataset_has_active_work(dataset):
+        return jsonify({"message": "数据集仍有运行中或排队中的任务，请等待任务结束后再删除。"}), 409
+
+    deleted_dataset_id = dataset.id
+    purge_dataset_row(dataset)
     db.session.commit()
     return jsonify({"deletedDatasetId": deleted_dataset_id})
 

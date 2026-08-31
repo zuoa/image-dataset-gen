@@ -4,6 +4,7 @@ import type {
   AugmentationMethod,
   AugmentationSettings,
   Dataset,
+  DatasetCollection,
   DatasetImage,
   DatasetListItem,
   DatasetSummary,
@@ -34,7 +35,11 @@ function idempotencyHeaders() {
 }
 
 export function listDatasets(token: string) {
-  return apiRequest<{ datasets: DatasetListItem[]; summary: DatasetSummary }>("/datasets", { token });
+  return apiRequest<{
+    datasets: DatasetListItem[];
+    collections?: DatasetCollection[];
+    summary: DatasetSummary;
+  }>("/datasets", { token });
 }
 
 export function createDataset(
@@ -42,6 +47,7 @@ export function createDataset(
     name: string;
     categories: string[];
     description?: string;
+    collectionId?: string | null;
   },
   token: string,
 ) {
@@ -85,6 +91,7 @@ export function updateDataset(
     name: string;
     categories: string[];
     description: string;
+    collectionId: string | null;
   }>,
   token: string,
 ) {

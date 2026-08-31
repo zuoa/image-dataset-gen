@@ -12,6 +12,7 @@ from sqlalchemy import and_, bindparam, func, or_, select, text
 
 from app.extensions import db
 from app.models import Dataset, DatasetCategory, DatasetExport, DatasetImage, DatasetTask
+from app.services.collection_service import dataset_collection_fields
 from app.services.annotation_storage import (
     infer_default_bbox_semantics,
     load_annotation_file_result,
@@ -311,7 +312,10 @@ def _sample_pool_split_for_selected_count(total: int, index: int) -> str:
     return "test"
 
 
-def _dataset_base_payload(dataset: Dataset) -> dict[str, Any]:
+def _dataset_base_payload(
+    dataset: Dataset,
+    collections_by_id: dict | None = None,
+) -> dict[str, Any]:
     return {
         "id": dataset.id,
         "name": dataset.name,
@@ -325,6 +329,7 @@ def _dataset_base_payload(dataset: Dataset) -> dict[str, Any]:
         "annotation": dataset.annotation_json or {},
         "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
         "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
+        **dataset_collection_fields(dataset, collections_by_id),
     }
 
 
@@ -656,18 +661,7 @@ def build_dataset_payload(
         page_images = filtered_images[start:end]
 
     return {
-        "id": dataset.id,
-        "name": dataset.name,
-        "description": dataset.description,
-        "categories": dataset.categories,
-        "status": dataset.status,
-        "imageCount": int(dataset.image_count or 0),
-        "selectedCount": int(dataset.selected_count or 0),
-        "taskCount": int(dataset.task_count or 0),
-        "spentCost": float(dataset.spent_cost or 0.0),
-        "annotation": dataset.annotation_json or {},
-        "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
-        "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
+        **_dataset_base_payload(dataset),
         "images": _build_dataset_image_payloads(dataset, page_images, split_map) if include_images else [],
         "imagesTotal": filtered_total,
         "imageClassCounts": class_counts,
@@ -817,20 +811,13 @@ def build_dataset_detail_payload(
     return payload
 
 
-def build_dataset_list_item_payload(dataset: Dataset, latest_task: DatasetTask | None = None) -> dict[str, Any]:
+def build_dataset_list_item_payload(
+    dataset: Dataset,
+    latest_task: DatasetTask | None = None,
+    collections_by_id: dict | None = None,
+) -> dict[str, Any]:
     return {
-        "id": dataset.id,
-        "name": dataset.name,
-        "description": dataset.description,
-        "categories": dataset.categories,
-        "status": dataset.status,
-        "imageCount": int(dataset.image_count or 0),
-        "selectedCount": int(dataset.selected_count or 0),
-        "taskCount": int(dataset.task_count or 0),
-        "spentCost": float(dataset.spent_cost or 0.0),
-        "annotation": dataset.annotation_json or {},
-        "createdAt": dataset.created_at.isoformat() if dataset.created_at else None,
-        "updatedAt": dataset.updated_at.isoformat() if dataset.updated_at else None,
+        **_dataset_base_payload(dataset, collections_by_id),
         "images": [],
         "imagesTotal": int(dataset.image_count or 0),
         "tasks": [],
@@ -839,8 +826,12 @@ def build_dataset_list_item_payload(dataset: Dataset, latest_task: DatasetTask |
     }
 
 
-def build_dataset_list_payload(dataset: Dataset, latest_task: DatasetTask | None = None) -> dict[str, Any]:
-    return build_dataset_list_item_payload(dataset, latest_task)
+def build_dataset_list_payload(
+    dataset: Dataset,
+    latest_task: DatasetTask | None = None,
+    collections_by_id: dict | None = None,
+) -> dict[str, Any]:
+    return build_dataset_list_item_payload(dataset, latest_task, collections_by_id)
 
 
 def _task_summary_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -1021,7 +1012,7 @@ def build_dataset_export_payload(
     }
 
 
-def build_dataset_summary(datasets: list[Dataset]) -> dict[str, Any]:
+def build_dataset_summary(datasets: list[Dataset], *, total_collections: int = 0) -> dict[str, Any]:
     total_tasks = sum(int(dataset.task_count or 0) for dataset in datasets)
     total_images = sum(int(dataset.image_count or 0) for dataset in datasets)
     selected_images = sum(int(dataset.selected_count or 0) for dataset in datasets)
@@ -1034,12 +1025,16 @@ def build_dataset_summary(datasets: list[Dataset]) -> dict[str, Any]:
         "totalImages": total_images,
         "selectedImages": selected_images,
         "costToDate": cost_to_date,
+        "totalCollections": int(total_collections),
     }
 
 
 def build_dataset_summary_for_user(user_id: str) -> dict[str, Any]:
+    from app.models import DatasetCollection
+
     datasets = Dataset.query.filter_by(user_id=user_id).all()
-    return build_dataset_summary(datasets)
+    total_collections = DatasetCollection.query.filter_by(user_id=user_id).count()
+    return build_dataset_summary(datasets, total_collections=total_collections)
 
 
 def dataset_has_selected_images(dataset_id: str) -> bool:

@@ -451,6 +451,32 @@ export type TrainingInferenceTest = {
 
 export type SamplePoolSource = "generation" | "imported" | "augmentation";
 
+export type DatasetCollectionPathItem = {
+  id: string;
+  name: string;
+};
+
+export type DatasetCollectionStats = {
+  datasetCount: number;
+  imageCount: number;
+  spentCost: number;
+  directDatasetCount: number;
+  childCollectionCount: number;
+};
+
+export type DatasetCollection = {
+  id: string;
+  parentId: string | null;
+  name: string;
+  description: string;
+  path: string;
+  depth: number;
+  position: number;
+  stats: DatasetCollectionStats;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
 export type Dataset = {
   id: string;
   name: string;
@@ -462,6 +488,8 @@ export type Dataset = {
   taskCount: number;
   spentCost: number;
   annotation: Record<string, unknown>;
+  collectionId?: string | null;
+  collectionPath?: DatasetCollectionPathItem[];
   segmentAssistAvailable?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -520,6 +548,7 @@ export type DatasetSummary = {
   totalImages: number;
   selectedImages: number;
   costToDate: number;
+  totalCollections?: number;
 };
 
 export type User = {

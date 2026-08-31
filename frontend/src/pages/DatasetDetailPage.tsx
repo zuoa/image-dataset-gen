@@ -35,6 +35,7 @@ import {
   importDatasetImagesArchive,
   importDatasetVideo,
   retryDatasetTask,
+  updateDataset,
   updateDatasetImageAnnotations,
   updateDatasetSelection,
 } from "../api/datasets";
@@ -46,6 +47,7 @@ import { DatasetHeader } from "../components/dataset/DatasetHeader";
 import { DatasetMetrics } from "../components/dataset/DatasetMetrics";
 import { DatasetActions } from "../components/dataset/DatasetActions";
 import { DeleteDatasetModal } from "../components/dataset/DeleteDatasetModal";
+import { MoveToCollectionModal } from "../components/dataset/MoveToCollectionModal";
 import {
   SamplePoolFilters,
   SamplePoolGrid,
@@ -59,6 +61,7 @@ import { ImagePreviewModal } from "../components/dataset/ImagePreviewModal";
 import { TrainingPanel } from "../components/dataset/TrainingPanel";
 import { DatasetQualityPanel } from "../components/DatasetQualityPanel";
 import { useConfirm } from "../hooks/useConfirm";
+import { useDatasets } from "../hooks/useDatasets";
 import { useDatasetImages } from "../hooks/useDatasetImages";
 import { useDatasetTasks } from "../hooks/useDatasetTasks";
 import { useTrainingJobs } from "../hooks/useTrainingJobs";
@@ -202,6 +205,7 @@ export function DatasetDetailPage() {
     ],
   );
 
+  const datasetsQuery = useDatasets();
   const datasetTasksQuery = useDatasetTasks(datasetId!, filter);
   const imagesQuery = useDatasetImages(
     datasetId!,
@@ -274,6 +278,9 @@ export function DatasetDetailPage() {
   const [isDeleteDatasetOpen, setIsDeleteDatasetOpen] = useState(false);
   const [isDeletingDataset, setIsDeletingDataset] = useState(false);
   const [deleteDatasetError, setDeleteDatasetError] = useState<string | null>(null);
+  const [isMoveDatasetOpen, setIsMoveDatasetOpen] = useState(false);
+  const [isMovingDataset, setIsMovingDataset] = useState(false);
+  const [moveDatasetError, setMoveDatasetError] = useState<string | null>(null);
 
   const [multiplier, setMultiplier] = useState(3);
   const [trainingModel, setTrainingModel] = useState("yolov8n.pt");
@@ -394,6 +401,9 @@ export function DatasetDetailPage() {
   const latestTrainingJob = trainingJobs[0];
   async function invalidateDatasetData() {
     await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["datasets", token],
+      }),
       queryClient.invalidateQueries({
         queryKey: ["dataset-tasks", datasetId, token],
       }),
@@ -999,6 +1009,10 @@ export function DatasetDetailPage() {
             <DatasetActions
               dataset={dataset}
               latestTrainingJob={latestTrainingJob}
+              onMove={() => {
+                setMoveDatasetError(null);
+                setIsMoveDatasetOpen(true);
+              }}
               onAugment={() => setIsAugmentationModalOpen(true)}
               onAnnotate={() => setIsAnnotationModalOpen(true)}
               onExport={() => setIsExportModalOpen(true)}
@@ -1386,6 +1400,31 @@ export function DatasetDetailPage() {
           if (!isDeletingDataset) setIsDeleteDatasetOpen(false);
         }}
         onConfirm={removeCurrentDataset}
+      />
+      <MoveToCollectionModal
+        open={isMoveDatasetOpen}
+        title="移动到分组"
+        collections={datasetsQuery.data?.collections ?? []}
+        currentCollectionId={dataset.collectionId ?? null}
+        loading={isMovingDataset}
+        error={moveDatasetError}
+        onClose={() => {
+          if (!isMovingDataset) setIsMoveDatasetOpen(false);
+        }}
+        onConfirm={async (collectionId) => {
+          if (!token || !datasetId) return;
+          setIsMovingDataset(true);
+          setMoveDatasetError(null);
+          try {
+            await updateDataset(datasetId, { collectionId }, token);
+            setIsMoveDatasetOpen(false);
+            await invalidateDatasetData();
+          } catch (error) {
+            setMoveDatasetError((error as Error).message);
+          } finally {
+            setIsMovingDataset(false);
+          }
+        }}
       />
     </PageContainer>
   );

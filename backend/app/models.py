@@ -4,7 +4,7 @@ import uuid
 from decimal import Decimal
 from datetime import UTC, datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.extensions import db
@@ -59,6 +59,12 @@ class User(TimestampMixin, db.Model):
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="Dataset.created_at.desc()",
+    )
+    collections = db.relationship(
+        "DatasetCollection",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="DatasetCollection.path.asc()",
     )
     assets = db.relationship("Asset", back_populates="user")
     external_connections = db.relationship(
@@ -115,6 +121,64 @@ class ExternalConnection(TimestampMixin, db.Model):
     user = db.relationship("User", back_populates="external_connections")
 
 
+class DatasetCollection(TimestampMixin, db.Model):
+    __tablename__ = "dataset_collections"
+    __table_args__ = (
+        db.CheckConstraint(
+            "depth >= 1 AND depth <= 4", name="ck_dataset_collections_depth_range"
+        ),
+        db.CheckConstraint("position >= 0", name="ck_dataset_collections_position_nonnegative"),
+        db.Index("ix_dataset_collections_user_parent_position", "user_id", "parent_id", "position"),
+        db.Index("ix_dataset_collections_user_path", "user_id", "path"),
+        db.Index(
+            "uq_dataset_collections_user_root_name",
+            "user_id",
+            "name",
+            unique=True,
+            sqlite_where=text("parent_id IS NULL"),
+            postgresql_where=text("parent_id IS NULL"),
+        ),
+        db.Index(
+            "uq_dataset_collections_user_parent_name",
+            "user_id",
+            "parent_id",
+            "name",
+            unique=True,
+            sqlite_where=text("parent_id IS NOT NULL"),
+            postgresql_where=text("parent_id IS NOT NULL"),
+        ),
+    )
+
+    id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
+    user_id = db.Column(
+        uuid_column_type(), db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    parent_id = db.Column(
+        uuid_column_type(),
+        db.ForeignKey("dataset_collections.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=False, default="")
+    path = db.Column(db.String(1024), nullable=False)
+    depth = db.Column(db.Integer, nullable=False, default=1, server_default="1")
+    position = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+
+    user = db.relationship("User", back_populates="collections")
+    parent = db.relationship(
+        "DatasetCollection",
+        remote_side=[id],
+        back_populates="children",
+    )
+    children = db.relationship(
+        "DatasetCollection",
+        back_populates="parent",
+        order_by="DatasetCollection.position.asc()",
+    )
+    datasets = db.relationship("Dataset", back_populates="collection")
+
+
 class Dataset(TimestampMixin, db.Model):
     __tablename__ = "datasets"
 
@@ -123,11 +187,18 @@ class Dataset(TimestampMixin, db.Model):
         db.CheckConstraint("selected_count >= 0", name="ck_datasets_selected_count_nonnegative"),
         db.CheckConstraint("task_count >= 0", name="ck_datasets_task_count_nonnegative"),
         db.CheckConstraint("spent_cost >= 0", name="ck_datasets_spent_cost_nonnegative"),
+        db.Index("ix_datasets_user_collection_id", "user_id", "collection_id"),
     )
 
     id = db.Column(uuid_column_type(), primary_key=True, default=generate_uuid)
     user_id = db.Column(
         uuid_column_type(), db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    collection_id = db.Column(
+        uuid_column_type(),
+        db.ForeignKey("dataset_collections.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=False, default="")
@@ -142,6 +213,7 @@ class Dataset(TimestampMixin, db.Model):
     annotation_json = db.Column(json_column_type(), nullable=False, default=dict)
 
     user = db.relationship("User", back_populates="datasets")
+    collection = db.relationship("DatasetCollection", back_populates="datasets")
     tasks = db.relationship(
         "DatasetTask",
         back_populates="dataset",

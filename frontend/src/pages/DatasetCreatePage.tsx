@@ -1,6 +1,6 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, FolderPlus, Tags, WandSparkles } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   Card,
@@ -21,6 +21,8 @@ import { useModelProfiles } from "../hooks/useModelProfiles";
 import { filterModelProfilesByType, resolveLlmProfile } from "../lib/modelProfiles";
 import { useAuthStore } from "../store/auth";
 import { assistDatasetSubject, createDataset } from "../api/datasets";
+import { useDatasets } from "../hooks/useDatasets";
+import { collectionPathLabel } from "../lib/collections";
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -34,7 +36,12 @@ function normalizeCategories(input: string) {
 
 export function DatasetCreatePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const token = useAuthStore((state) => state.token);
+  const { data: datasetList } = useDatasets();
+  const collections = datasetList?.collections ?? [];
+  const defaultCollectionId = searchParams.get("collection");
+  const [collectionId, setCollectionId] = useState<string | null>(defaultCollectionId);
   const { data: profiles, isLoading: profilesLoading } = useModelProfiles();
   const [name, setName] = useState("雨天城市道路行人检测");
   const [categories, setCategories] = useState("pedestrian, umbrella");
@@ -68,6 +75,7 @@ export function DatasetCreatePage() {
           name: name.trim(),
           categories: normalizeCategories(categories),
           description: description.trim(),
+          collectionId,
         },
         token,
       );
@@ -153,6 +161,26 @@ export function DatasetCreatePage() {
                 />
                 <Text className="mt-2 block text-xs text-neutral-500">
                   用英文逗号分隔。这些类别将用于后续生成和标注。
+                </Text>
+              </Form.Item>
+
+              <Form.Item label="所属分组" className="!mb-0">
+                <Select
+                  allowClear
+                  value={collectionId ?? ""}
+                  onChange={(value) => setCollectionId(value || null)}
+                  placeholder="不分组，放在根目录"
+                  className="w-full"
+                  options={[
+                    { value: "", label: "未分组 / 根目录" },
+                    ...collections.map((collection) => ({
+                      value: collection.id,
+                      label: collectionPathLabel(collection, collections),
+                    })),
+                  ]}
+                />
+                <Text className="mt-2 block text-xs text-neutral-500">
+                  分组只用于列表导航，不会改变这个数据集的类别和训练流程。
                 </Text>
               </Form.Item>
 

@@ -1,6 +1,6 @@
 # Dataset Forge
 
-面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer/segmenter 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。
+面向小团队单机生产部署的图片数据集平台。主链路由 React、Flask、PostgreSQL、Redis/Celery 和可独立部署的 GPU trainer/segmenter 组成，支持图片生成、导入、增强、版本化标注、导出、训练与推理测试。数据集列表支持分组树（例如「安全生产 / 人员劳动防护 / 安全帽」）；分组只用于组织导航，生成、标注和训练仍在叶子数据集上完成。
 
 ## Supervision 质量闭环
 

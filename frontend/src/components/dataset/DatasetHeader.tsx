@@ -2,6 +2,7 @@ import { Database, Layers3 } from "lucide-react";
 import { Tag, Typography } from "antd";
 
 import { StatusBadge } from "../common/StatusBadge";
+import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import type { Dataset } from "../../lib/types";
 
 interface DatasetHeaderProps {
@@ -11,6 +12,9 @@ interface DatasetHeaderProps {
 export function DatasetHeader({ dataset }: DatasetHeaderProps) {
   return (
     <div className="relative">
+      <div className="mb-4">
+        <CollectionBreadcrumb items={dataset.collectionPath ?? []} currentLabel={dataset.name} />
+      </div>
       <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
         <span className="inline-flex items-center gap-2 uppercase tracking-[0.18em]">
           <Database className="h-4 w-4 text-[var(--df-color-primary)]" />
